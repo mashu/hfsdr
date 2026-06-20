@@ -74,4 +74,48 @@ pub trait IqSource {
 
     /// Whether the source is currently streaming.
     fn is_streaming(&self) -> bool;
+
+    /// Latest S-meter in dBm when the backend reports one (KiwiSDR).
+    fn rssi_dbm(&self) -> Option<f32> {
+        None
+    }
+
+    /// Whether [`IqSource::set_passband`] can retune the remote filter.
+    fn supports_passband(&self) -> bool {
+        false
+    }
+
+    /// IQ passband edges in Hz relative to center (KiwiSDR). Ignored on local SDRs.
+    fn set_passband(&mut self, low_hz: i32, high_hz: i32) -> Result<()> {
+        let _ = (low_hz, high_hz);
+        Ok(())
+    }
+
+    /// Toggle AGC when supported (KiwiSDR).
+    fn set_agc(&mut self, on: bool) -> Result<()> {
+        let _ = on;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_error_display() {
+        assert_eq!(SourceError::NotFound.to_string(), "no device found");
+        assert_eq!(
+            SourceError::Backend { op: "open", code: 42 }.to_string(),
+            "open failed (code 42)"
+        );
+        assert_eq!(
+            SourceError::Unsupported("bad rate".into()).to_string(),
+            "unsupported: bad rate"
+        );
+        assert_eq!(
+            SourceError::InvalidState("streaming").to_string(),
+            "invalid state: streaming"
+        );
+    }
 }

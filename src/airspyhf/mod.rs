@@ -37,10 +37,12 @@ extern "C" fn stream_cb(transfer: *mut sys::airspyhf_transfer_t) -> c_int {
     if to_write > 0 {
         if let Ok(mut chunk) = ctx.prod.write_chunk_uninit(to_write) {
             let (first, second) = chunk.as_mut_slices();
-            let mut src = iq.iter().copied();
-            for slot in first.iter_mut().chain(second.iter_mut()) {
-                // `chain` yields exactly `to_write` slots and `iq` has >= that.
-                slot.write(src.next().unwrap());
+            for (slot, &sample) in first
+                .iter_mut()
+                .chain(second.iter_mut())
+                .zip(iq.iter().take(to_write))
+            {
+                slot.write(sample);
             }
             // SAFETY: every one of the `to_write` slots was initialized above.
             unsafe { chunk.commit_all() };

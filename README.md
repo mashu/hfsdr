@@ -12,9 +12,20 @@ src/
 ├─ airspyhf/
 │  ├─ sys.rs         raw libairspyhf FFI (the only unsafe)
 │  └─ mod.rs         safe AirspyHf wrapper (impl IqSource + device-specific knobs)
-├─ kiwi/mod.rs       KiwiSDR WebSocket source (impl IqSource, ~12 kHz IQ)
-├─ dsp.rs            SpectrumAnalyzer: windowed complex FFT -> fftshifted dB rows
-└─ bin/waterfall.rs  egui/wgpu waterfall + spectrum UI
+├─ kiwi/
+│  ├─ mod.rs         KiwiSource (impl IqSource)
+│  ├─ protocol.rs    SND frame parsing + IQ decode
+│  └─ reader.rs      WebSocket reader thread
+├─ dsp/
+│  ├─ mod.rs         module exports
+│  └─ spectrum.rs    SpectrumAnalyzer (windowed FFT → dB rows)
+└─ bin/waterfall/
+   ├─ main.rs        egui entry point
+   ├─ app.rs         waterfall UI + state
+   ├─ colormap.rs    dB → colour ramp
+   └─ source.rs      CLI source builder
+tests/
+└─ integration.rs    public API integration tests
 ```
 
 ## Build
@@ -26,6 +37,7 @@ stable toolchain:
 sudo apt install libairspyhf-dev          # Airspy FFI links against this
 cargo build --release
 cargo run --release --bin hfsdr           # Airspy probe/demo
+cargo test                              # unit + integration tests
 ```
 
 The GUI is behind the `gui` feature (pulls eframe + wgpu + winit):
@@ -52,16 +64,10 @@ available there.
 
 Compiled and run against the latest crates: the libairspyhf FFI (linked against
 1.6.8), the lock-free USB-thread callback, the Kiwi SND/IQ frame parser
-(tungstenite 0.27 `Bytes`/`Utf8Bytes` API), and the FFT spectrum stage
+(tungstenite 0.29 `Bytes`/`Utf8Bytes` API), and the FFT spectrum stage
 (rustfft 6.4).
 
-`bin/waterfall.rs` targets the stable egui API. Two spots are the most likely to
-need a one-line tweak depending on your exact egui 0.34.x:
-
-- `eframe::App::update` is deprecated in 0.34 in favour of `App::ui`. `update`
-  still compiles (with a warning); rename if you want it gone.
-- `egui::ColorImage { size, pixels }` — if your egui version changed the struct,
-  switch to the `ColorImage::new([w, h], pixels)` constructor.
+`bin/waterfall` targets egui 0.34 (`App::ui`, `Panel::right`, `ColorImage::new`).
 
 ## Design notes
 

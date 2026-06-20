@@ -8,11 +8,12 @@ description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, Kiwi
 num-complex = "0.4"
 rtrb = "0.3"
 rustfft = "6"
-tungstenite = "0.27"
+tungstenite = "0.29"
+cpal = { version = "0.15", optional = true }
 eframe = { version = "0.34", optional = true, default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 
 [features]
-gui = ["dep:eframe"]
+gui = ["dep:eframe", "dep:cpal"]
 
 [[bin]]
 name = "hfsdr"
@@ -20,7 +21,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "waterfall"
-path = "src/bin/waterfall.rs"
+path = "src/bin/waterfall/main.rs"
 required-features = ["gui"]
 
 [profile.release]
