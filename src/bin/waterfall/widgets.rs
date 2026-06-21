@@ -12,7 +12,33 @@ use crate::interaction::{
 
 const EDGE_GRAB_PX: f32 = 12.0;
 use crate::smooth::spatial_smooth;
-use crate::theme::{ACCENT, CENTER_LINE, FILTER_EDGE, GRID, NOTCH_LINE, TRACE, TRACE_GLOW};
+use crate::theme::{ACCENT, CENTER_LINE, FILTER_EDGE, GRID, NOTCH_LINE, OK, TRACE, TRACE_GLOW, WARN};
+
+/// A decoded-signal label floated above its spectral peak.
+#[derive(Clone, Debug)]
+pub struct SpotLabel {
+    pub offset_hz: f32,
+    pub text: String,
+    pub cq: bool,
+}
+
+/// Shared rendering/interaction parameters for the RF plots.
+///
+/// Bundling these keeps the widget API small and is the natural seam for the
+/// future node-graph compositor (one struct describes what a plot shows).
+pub struct PlotParams<'a> {
+    pub sample_rate: f32,
+    pub passband_hz: f32,
+    pub filter_editable: bool,
+    pub listen_center_hz: f64,
+    pub tune_preview_offset_hz: f64,
+    pub notches: &'a [(f32, f32)],
+    pub labels: &'a [SpotLabel],
+    pub trace: &'a [f32],
+    pub ref_db: f32,
+    pub range_db: f32,
+    pub height: f32,
+}
 
 pub struct SpectrumWidget;
 
@@ -26,46 +52,28 @@ impl SpectrumWidget {
         ui: &mut Ui,
         interaction: &mut PlotInteraction,
         view: &mut PlotViewState,
-        sample_rate: f32,
-        height: f32,
-        trace: &[f32],
-        passband_hz: f32,
-        filter_editable: bool,
-        listen_center_hz: f64,
-        ref_db: f32,
-        range_db: f32,
-        tune_preview_offset_hz: f64,
-        notch_enabled: bool,
-        notch_offset_hz: f32,
-        notch_width_hz: f32,
+        p: &PlotParams,
         hover_out: &mut Option<f64>,
     ) -> (Response, Vec<PlotAction>) {
-        let view_span = view.view_span_hz(sample_rate);
+        let view_span = view.view_span_hz(p.sample_rate);
         let pan = view.pan_offset_hz;
         let (response, painter) =
-            ui.allocate_painter(Vec2::new(ui.available_width(), height), Sense::click_and_drag());
+            ui.allocate_painter(Vec2::new(ui.available_width(), p.height), Sense::click_and_drag());
         let rect = response.rect;
         draw_plot_background(&painter, rect);
 
-        if filter_editable {
-            draw_filter_band(&painter, rect, view_span, pan, listen_center_hz, passband_hz, true);
+        if p.filter_editable {
+            draw_filter_band(&painter, rect, view_span, pan, p.listen_center_hz, p.passband_hz, true);
         }
 
-        if notch_enabled {
-            draw_notch_marker(&painter, rect, view_span, pan, notch_offset_hz, notch_width_hz);
+        for &(offset, width) in p.notches {
+            draw_notch_marker(&painter, rect, view_span, pan, offset, width);
         }
 
         draw_grid(&painter, rect, view_span);
-        draw_trace(&painter, rect, trace, ref_db, range_db);
+        draw_trace(&painter, rect, p.trace, p.ref_db, p.range_db);
 
-        draw_center_line(
-            &painter,
-            rect,
-            view_span,
-            pan,
-            tune_preview_offset_hz,
-            true,
-        );
+        draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, true);
 
         if let Some(offset) = *hover_out {
             let x = offset_hz_to_x(offset, rect, view_span, pan);
@@ -81,6 +89,8 @@ impl SpectrumWidget {
                 ACCENT,
             );
         }
+
+        draw_spot_labels(&painter, rect, view_span, pan, p.labels);
 
         let left_hz = pan - view_span as f64 / 2.0;
         let right_hz = pan + view_span as f64 / 2.0;
@@ -104,13 +114,13 @@ impl SpectrumWidget {
             rect,
             &response,
             view,
-            sample_rate,
-            passband_hz,
+            p.sample_rate,
+            p.passband_hz,
             CW_PASSBAND_MIN_HZ,
             CW_PASSBAND_MAX_HZ,
-            filter_editable,
-            listen_center_hz,
-            tune_preview_offset_hz,
+            p.filter_editable,
+            p.listen_center_hz,
+            p.tune_preview_offset_hz,
         );
 
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
@@ -138,18 +148,11 @@ impl WaterfallWidget {
         ui: &mut Ui,
         interaction: &mut PlotInteraction,
         view: &mut PlotViewState,
-        sample_rate: f32,
         texture: &eframe::egui::TextureHandle,
-        passband_hz: f32,
-        filter_editable: bool,
-        listen_center_hz: f64,
-        tune_preview_offset_hz: f64,
-        notch_enabled: bool,
-        notch_offset_hz: f32,
-        notch_width_hz: f32,
+        p: &PlotParams,
         hover_out: &mut Option<f64>,
     ) -> Vec<PlotAction> {
-        let view_span = view.view_span_hz(sample_rate);
+        let view_span = view.view_span_hz(p.sample_rate);
         let pan = view.pan_offset_hz;
         let size = Vec2::new(ui.available_width(), ui.available_height());
         let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
@@ -169,35 +172,28 @@ impl WaterfallWidget {
             eframe::egui::StrokeKind::Outside,
         );
 
-        if filter_editable {
-            draw_filter_band(&painter, rect, view_span, pan, listen_center_hz, passband_hz, false);
+        if p.filter_editable {
+            draw_filter_band(&painter, rect, view_span, pan, p.listen_center_hz, p.passband_hz, false);
         }
 
-        if notch_enabled {
-            draw_notch_marker(&painter, rect, view_span, pan, notch_offset_hz, notch_width_hz);
+        for &(offset, width) in p.notches {
+            draw_notch_marker(&painter, rect, view_span, pan, offset, width);
         }
 
-        draw_center_line(
-            &painter,
-            rect,
-            view_span,
-            pan,
-            tune_preview_offset_hz,
-            false,
-        );
+        draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, false);
 
         let actions = interaction.handle(
             ui,
             rect,
             &response,
             view,
-            sample_rate,
-            passband_hz,
+            p.sample_rate,
+            p.passband_hz,
             CW_PASSBAND_MIN_HZ,
             CW_PASSBAND_MAX_HZ,
-            filter_editable,
-            listen_center_hz,
-            tune_preview_offset_hz,
+            p.filter_editable,
+            p.listen_center_hz,
+            p.tune_preview_offset_hz,
         );
 
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
@@ -315,6 +311,33 @@ fn draw_filter_band(
             );
             painter.rect_filled(handle, 3.0, Color32::from_rgba_unmultiplied(125, 211, 252, 60));
         }
+    }
+}
+
+fn draw_spot_labels(
+    painter: &Painter,
+    rect: Rect,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    labels: &[SpotLabel],
+) {
+    for label in labels {
+        let x = offset_hz_to_x(label.offset_hz as f64, rect, view_span_hz, pan_offset_hz);
+        if x < rect.left() || x > rect.right() {
+            continue;
+        }
+        let color = if label.cq { WARN } else { OK };
+        painter.line_segment(
+            [Pos2::new(x, rect.top()), Pos2::new(x, rect.top() + 10.0)],
+            Stroke::new(1.5, color),
+        );
+        painter.text(
+            Pos2::new(x, rect.top() + 11.0),
+            Align2::CENTER_TOP,
+            &label.text,
+            FontId::proportional(11.0),
+            color,
+        );
     }
 }
 

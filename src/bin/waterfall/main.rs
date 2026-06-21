@@ -10,6 +10,7 @@ mod colormap;
 mod controls;
 mod display_levels;
 mod interaction;
+mod skimmer;
 mod smooth;
 mod source;
 mod theme;

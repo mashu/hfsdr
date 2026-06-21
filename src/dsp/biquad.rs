@@ -76,48 +76,6 @@ impl Biquad {
         self.a2 = (1.0 - alpha) / a0;
     }
 
-    pub fn set_lowpass(&mut self, sample_rate: f32, fc: f32) {
-        self.reset_state();
-        if sample_rate <= 0.0 || fc <= 0.0 {
-            return;
-        }
-        let fc = fc.clamp(80.0, sample_rate * 0.45);
-        let omega = 2.0 * PI * fc / sample_rate;
-        let sin = omega.sin();
-        let cos = omega.cos();
-        let alpha = sin / (2.0 * 0.707);
-        let a0 = 1.0 + alpha;
-        self.b0 = ((1.0 - cos) / 2.0) / a0;
-        self.b1 = (1.0 - cos) / a0;
-        self.b2 = ((1.0 - cos) / 2.0) / a0;
-        self.a1 = (-2.0 * cos) / a0;
-        self.a2 = (1.0 - alpha) / a0;
-    }
-}
-
-/// Two bandpass stages for sharper skirts.
-#[derive(Clone, Debug)]
-pub struct BandpassChain {
-    stages: [Biquad; 2],
-}
-
-impl BandpassChain {
-    pub fn new() -> Self {
-        Self {
-            stages: [Biquad::new(), Biquad::new()],
-        }
-    }
-
-    pub fn set(&mut self, sample_rate: f32, fc: f32, bandwidth: f32) {
-        for stage in &mut self.stages {
-            stage.set_bandpass(sample_rate, fc, bandwidth);
-        }
-    }
-
-    pub fn process(&mut self, x: f32) -> f32 {
-        let a = self.stages[0].process(x);
-        self.stages[1].process(a)
-    }
 }
 
 #[cfg(test)]
@@ -129,8 +87,8 @@ mod tests {
     fn bandpass_passes_tone_at_center() {
         let sample_rate = 12_000.0;
         let fc = 650.0;
-        let mut bp = BandpassChain::new();
-        bp.set(sample_rate, fc, 200.0);
+        let mut bp = Biquad::new();
+        bp.set_bandpass(sample_rate, fc, 200.0);
 
         let mut peak_in = 0.0f32;
         let mut peak_out = 0.0f32;
@@ -146,10 +104,10 @@ mod tests {
     #[test]
     fn bandpass_rejects_far_off_tone() {
         let sample_rate = 12_000.0;
-        let mut bp_near = BandpassChain::new();
-        bp_near.set(sample_rate, 650.0, 200.0);
-        let mut bp_far = BandpassChain::new();
-        bp_far.set(sample_rate, 650.0, 200.0);
+        let mut bp_near = Biquad::new();
+        bp_near.set_bandpass(sample_rate, 650.0, 200.0);
+        let mut bp_far = Biquad::new();
+        bp_far.set_bandpass(sample_rate, 650.0, 200.0);
 
         let mut peak_near = 0.0f32;
         let mut peak_far = 0.0f32;
