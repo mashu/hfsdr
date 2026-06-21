@@ -11,10 +11,13 @@ mod controls;
 mod display_levels;
 mod engine;
 mod interaction;
+mod log;
+mod scp_fetch;
 mod settings;
 mod skimmer;
 mod smooth;
 mod source;
+mod spot_filter;
 mod theme;
 mod widgets;
 
@@ -22,6 +25,8 @@ use app::WaterfallApp;
 use eframe::egui;
 
 fn main() -> eframe::Result {
+    log::init();
+    log::info("hfsdr starting");
     // The source is no longer built here: the GUI opens immediately and the
     // engine thread connects (auto-connecting if CLI args were supplied), so a
     // missing or slow front end never blocks or crashes the app.

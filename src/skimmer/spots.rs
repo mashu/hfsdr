@@ -110,6 +110,10 @@ impl SpotStore {
         self.spots.retain(|_, s| s.age() <= max_age);
     }
 
+    pub fn clear(&mut self) {
+        self.spots.clear();
+    }
+
     pub fn len(&self) -> usize {
         self.spots.len()
     }

@@ -64,6 +64,20 @@ pub fn decimation_factor(input_rate: f32) -> usize {
     factor.clamp(1, 256)
 }
 
+/// Effective integer decimation for CW audio (manual override or auto).
+pub fn effective_decimation(iq_rate: f32, manual: u32) -> usize {
+    if manual == 0 {
+        decimation_factor(iq_rate)
+    } else {
+        manual as usize
+    }
+    .clamp(1, 256)
+}
+
+pub fn audio_sample_rate(iq_rate: f32, manual_decimation: u32) -> f32 {
+    iq_rate / effective_decimation(iq_rate, manual_decimation) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

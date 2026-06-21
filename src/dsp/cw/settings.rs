@@ -160,6 +160,6 @@ impl Default for CwChannelSettings {
 
 impl CwChannelSettings {
     pub fn channel_bandwidth_hz(&self) -> f32 {
-        self.passband_hz.clamp(50.0, 500.0)
+        self.passband_hz.clamp(50.0, 2_000.0)
     }
 }

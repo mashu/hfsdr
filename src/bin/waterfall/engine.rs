@@ -18,11 +18,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hfsdr::{Complex32, CwChannelSettings, IqAudioDemod, SpectrumAnalyzer, Spot};
+use hfsdr::{Complex32, CwChannelSettings, IqAudioDemod, SpectrumAnalyzer, SpectrumFrontEnd, Spot, spectrum_plan};
 
 use crate::audio::AudioOutput;
-use crate::skimmer::SkimmerHandle;
+use crate::skimmer::{ScpStatus, SkimmerHandle};
 use crate::source::{connect, Connection, ConnectRequest};
+use hfsdr::SkimmerConfig;
 
 pub const FFT_SIZE: usize = 2048;
 pub const FFT_HOP: usize = FFT_SIZE / 2;
@@ -59,6 +60,11 @@ pub struct EngineStats {
     pub slow: bool,
     pub is_kiwi: bool,
     pub skimmer_channels: usize,
+    pub spectrum_rate: f32,
+    pub spectrum_fft: usize,
+    pub spectrum_decim: usize,
+    pub spectrum_zoomed: bool,
+    pub scp: ScpStatus,
 }
 
 impl Default for EngineStats {
@@ -75,6 +81,11 @@ impl Default for EngineStats {
             slow: false,
             is_kiwi: false,
             skimmer_channels: 0,
+            spectrum_rate: 12_000.0,
+            spectrum_fft: FFT_SIZE,
+            spectrum_decim: 1,
+            spectrum_zoomed: false,
+            scp: ScpStatus::default(),
         }
     }
 }
@@ -86,7 +97,15 @@ pub struct EngineParams {
     pub audio_enabled: bool,
     pub volume: f32,
     pub skimmer_enabled: bool,
+    pub skimmer_min_snr_db: f32,
+    pub skimmer_max_channels: usize,
+    pub skimmer_bucket_hz: f32,
+    pub skimmer_min_separation_bins: usize,
+    pub scp_require: bool,
     pub fft_size: usize,
+    pub fft_auto: bool,
+    pub view_span_hz: f32,
+    pub view_pan_offset_hz: f64,
 }
 
 impl Default for EngineParams {
@@ -96,7 +115,15 @@ impl Default for EngineParams {
             audio_enabled: true,
             volume: 1.0,
             skimmer_enabled: false,
+            skimmer_min_snr_db: 14.0,
+            skimmer_max_channels: 24,
+            skimmer_bucket_hz: 80.0,
+            skimmer_min_separation_bins: 6,
+            scp_require: true,
             fft_size: FFT_SIZE,
+            fft_auto: true,
+            view_span_hz: 12_000.0,
+            view_pan_offset_hz: 0.0,
         }
     }
 }
@@ -134,7 +161,20 @@ pub enum EngineCommand {
     Tune(f64),
     SetRfAgc(bool),
     SetAudioDevice(Option<String>),
+    ClearSkimmerSpots,
+    ReloadScp,
     Shutdown,
+}
+
+/// Snapshot from one engine poll (non-blocking).
+#[derive(Clone, Debug)]
+pub struct EnginePoll {
+    pub state: ConnState,
+    pub stats: EngineStats,
+    pub spots: Vec<hfsdr::Spot>,
+    pub rows: Vec<Vec<f32>>,
+    pub latest: Vec<f32>,
+    pub last_error: Option<String>,
 }
 
 /// UI-side handle to the engine thread.
@@ -179,10 +219,19 @@ impl EngineHandle {
         }
     }
 
-    pub fn with_shared<R>(&self, f: impl FnOnce(&mut EngineShared) -> R) -> R {
-        let mut guard = self.shared.lock().expect("engine shared poisoned");
-        f(&mut guard)
+    pub fn try_poll(&self) -> Option<EnginePoll> {
+        let mut guard = self.shared.try_lock().ok()?;
+        let rows: Vec<Vec<f32>> = guard.new_rows.drain(..).collect();
+        Some(EnginePoll {
+            state: guard.state.clone(),
+            stats: guard.stats.clone(),
+            spots: guard.spots.clone(),
+            rows,
+            latest: guard.latest.clone(),
+            last_error: guard.last_error.clone(),
+        })
     }
+
 }
 
 impl Drop for EngineHandle {
@@ -207,11 +256,16 @@ struct Engine {
     audio_device: Option<String>,
     demod: IqAudioDemod,
     analyzer: SpectrumAnalyzer,
+    spectrum_front: SpectrumFrontEnd,
+    spectrum_scratch: Vec<Complex32>,
 
     drain: Vec<Complex32>,
     audio_scratch: Vec<f32>,
     latest: Vec<f32>,
     fft_size: usize,
+    spectrum_rate: f32,
+    spectrum_decim: usize,
+    spectrum_pan_hz: f32,
 
     last_data: Instant,
     reconnect_attempt: u32,
@@ -240,10 +294,15 @@ impl Engine {
             audio_device: None,
             demod: IqAudioDemod::new(),
             analyzer: SpectrumAnalyzer::new(FFT_SIZE, FFT_HOP),
+            spectrum_front: SpectrumFrontEnd::new(12_000.0, 1, 0.0),
+            spectrum_scratch: Vec::new(),
             drain: Vec::with_capacity(MAX_DRAIN),
             audio_scratch: Vec::new(),
             latest: vec![-120.0; FFT_SIZE],
             fft_size: FFT_SIZE,
+            spectrum_rate: 12_000.0,
+            spectrum_decim: 1,
+            spectrum_pan_hz: 0.0,
             last_data: Instant::now(),
             reconnect_attempt: 0,
             retry_at: None,
@@ -327,6 +386,12 @@ impl Engine {
                 self.audio_device = name;
                 self.reopen_audio();
             }
+            EngineCommand::ClearSkimmerSpots => {
+                self.skimmer.clear();
+            }
+            EngineCommand::ReloadScp => {
+                self.skimmer.reload_scp();
+            }
             EngineCommand::Shutdown => {
                 self.teardown();
                 self.running = false;
@@ -392,12 +457,6 @@ impl Engine {
     fn pump_stream(&mut self) -> usize {
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
 
-        if params.fft_size >= 256 && params.fft_size != self.fft_size {
-            self.fft_size = params.fft_size;
-            self.analyzer = SpectrumAnalyzer::new(self.fft_size, self.fft_size / 2);
-            self.latest = vec![-120.0; self.fft_size];
-        }
-
         self.drain.clear();
         if let Some(conn) = &mut self.conn {
             while self.drain.len() < MAX_DRAIN {
@@ -418,27 +477,51 @@ impl Engine {
         let sample_rate = self.conn.as_ref().map(|c| c.sample_rate).unwrap_or(12_000.0);
         let center_hz = self.conn.as_ref().map(|c| c.center_hz).unwrap_or(0.0);
 
+        self.sync_spectrum_chain(sample_rate, &params);
+
         if params.audio_enabled {
             self.demod
                 .process(&self.drain, sample_rate, &params.cw, &mut self.audio_scratch);
             if let Some(audio) = &mut self.audio {
-                audio.push(&self.audio_scratch, sample_rate as u32, params.volume);
+                let audio_rate = hfsdr::audio_sample_rate(sample_rate, params.cw.decimation);
+                audio.push(&self.audio_scratch, audio_rate as u32, params.volume);
             }
         }
 
-        // FFT -> publish rows.
+        // FFT at full IQ rate, optionally decimated/mix-down when zoomed in.
+        let fft_input = if self.spectrum_decim > 1 {
+            self.spectrum_front.process(&self.drain, &mut self.spectrum_scratch);
+            &self.spectrum_scratch
+        } else {
+            &self.drain
+        };
         let analyzer = &mut self.analyzer;
         let latest = &mut self.latest;
         let mut produced: Vec<Vec<f32>> = Vec::new();
-        analyzer.process(&self.drain, |row| {
+        analyzer.process(fft_input, |row| {
             latest.copy_from_slice(row);
             produced.push(row.to_vec());
         });
 
         self.skimmer.set_enabled(params.skimmer_enabled);
         if params.skimmer_enabled {
-            self.skimmer
-                .submit(&self.drain, &self.latest, sample_rate, center_hz);
+            self.skimmer.set_config(SkimmerConfig {
+                bucket_hz: params.skimmer_bucket_hz,
+                min_snr_db: params.skimmer_min_snr_db,
+                min_separation_bins: params.skimmer_min_separation_bins,
+                max_channels: params.skimmer_max_channels,
+                require_scp: params.scp_require,
+                source_label: "rx".to_string(),
+                ..SkimmerConfig::default()
+            });
+            self.skimmer.submit(
+                &self.drain,
+                &self.latest,
+                sample_rate,
+                self.spectrum_rate,
+                self.spectrum_pan_hz,
+                center_hz,
+            );
         }
 
         let snr = self.demod.snr_db();
@@ -446,8 +529,32 @@ impl Engine {
         got
     }
 
+    fn sync_spectrum_chain(&mut self, iq_rate: f32, params: &EngineParams) {
+        let view_span = if params.view_span_hz > 0.0 {
+            params.view_span_hz
+        } else {
+            iq_rate
+        };
+        let (decim, fft, eff) = spectrum_plan(iq_rate, params.fft_size, params.fft_auto, view_span);
+        self.spectrum_rate = eff;
+        self.spectrum_decim = decim;
+        self.spectrum_pan_hz = if decim > 1 {
+            params.view_pan_offset_hz as f32
+        } else {
+            0.0
+        };
+        self.spectrum_front
+            .sync(iq_rate, decim, self.spectrum_pan_hz);
+        if fft != self.fft_size {
+            self.fft_size = fft;
+            self.analyzer = SpectrumAnalyzer::new(fft, fft / 2);
+            self.latest = vec![-120.0; fft];
+        }
+    }
+
     fn publish_rows(&mut self, rows: Vec<Vec<f32>>, snr: f32, got: usize) {
         let spots = self.skimmer.spots();
+        let scp = self.skimmer.scp_status();
         let channels = self.skimmer.active_channels();
         let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
@@ -490,11 +597,17 @@ impl Engine {
                 slow,
                 is_kiwi,
                 skimmer_channels: channels,
+                spectrum_rate: self.spectrum_rate,
+                spectrum_fft: self.fft_size,
+                spectrum_decim: self.spectrum_decim,
+                spectrum_zoomed: self.spectrum_decim > 1,
+                scp,
             };
         }
     }
 
     fn publish_stats(&mut self, got: usize) {
+        let scp = self.skimmer.scp_status();
         let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
         let (sample_rate, is_kiwi) = self
@@ -522,6 +635,11 @@ impl Engine {
                 slow,
                 is_kiwi,
                 skimmer_channels: self.skimmer.active_channels(),
+                spectrum_rate: self.spectrum_rate,
+                spectrum_fft: self.fft_size,
+                spectrum_decim: self.spectrum_decim,
+                spectrum_zoomed: self.spectrum_decim > 1,
+                scp,
             };
         }
     }

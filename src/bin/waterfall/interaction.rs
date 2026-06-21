@@ -8,7 +8,9 @@ const MIN_ZOOM: f32 = 0.04;
 const DRAG_TUNE_THRESHOLD_PX: f32 = 4.0;
 
 pub const CW_PASSBAND_MIN_HZ: f32 = 50.0;
-pub const CW_PASSBAND_MAX_HZ: f32 = 500.0;
+/// CW contest filters top out around 500 Hz; wide mode allows RTTY-adjacent widths.
+pub const CW_PASSBAND_MAX_HZ: f32 = 2_000.0;
+pub const CW_PASSBAND_NARROW_MAX_HZ: f32 = 500.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DragMode {
@@ -91,12 +93,12 @@ impl PlotInteraction {
         passband_max_hz: f32,
         filter_editable: bool,
         listen_center_hz: f64,
-        tune_preview_offset_hz: f64,
+        _tune_preview_offset_hz: f64,
     ) -> Vec<PlotAction> {
         let mut actions = Vec::new();
         let view_span = view.view_span_hz(sample_rate);
         let pan = view.pan_offset_hz;
-        let center_x = offset_hz_to_x(tune_preview_offset_hz, rect, view_span, pan);
+        let center_x = offset_hz_to_x(listen_center_hz, rect, view_span, pan);
         let shift = ui.input(|i| i.modifiers.shift);
         let ctrl = ui.input(|i| i.modifiers.ctrl);
 
@@ -180,8 +182,12 @@ impl PlotInteraction {
                 DragMode::ResizeLeft | DragMode::ResizeRight => {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        let half = offset.abs() as f32;
-                        let bw = (half * 2.0).clamp(passband_min_hz, passband_max_hz);
+                        let bw = passband_from_edge(
+                            listen_center_hz,
+                            offset,
+                            passband_min_hz,
+                            passband_max_hz,
+                        );
                         actions.push(PlotAction::SetPassbandHz(bw));
                     }
                 }
@@ -242,6 +248,30 @@ pub fn format_offset_label(offset_hz: f64) -> String {
     }
 }
 
+/// Passband width from dragging a filter edge at `edge_offset_hz` relative to tuned center.
+pub fn passband_from_edge(
+    listen_center_hz: f64,
+    edge_offset_hz: f64,
+    passband_min_hz: f32,
+    passband_max_hz: f32,
+) -> f32 {
+    let half = (edge_offset_hz - listen_center_hz).abs() as f32;
+    (half * 2.0).clamp(passband_min_hz, passband_max_hz)
+}
+
 pub fn center_grab_px() -> f32 {
     CENTER_GRAB_PX
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_resize_uses_listen_center() {
+        let bw = passband_from_edge(200.0, 50.0, 50.0, 500.0);
+        assert!((bw - 300.0).abs() < 1.0);
+        let bw = passband_from_edge(-100.0, 150.0, 50.0, 500.0);
+        assert!((bw - 500.0).abs() < 1.0);
+    }
 }

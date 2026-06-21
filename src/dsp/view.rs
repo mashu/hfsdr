@@ -44,9 +44,54 @@ pub fn extract_passband_view(row: &[f32], sample_rate: f32, span_hz: f32) -> &[f
     extract_view_window(row, sample_rate, span_hz, 0.0)
 }
 
+/// Row rate / pan used when drawing a spectrum or waterfall row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpectrumViewMapping {
+    pub row_rate_hz: f32,
+    pub view_span_hz: f32,
+    pub pan_offset_hz: f64,
+}
+
+/// Map UI zoom/pan to FFT row coordinates (zoom-decimated rows are already centered on pan).
+pub fn spectrum_view_mapping(
+    iq_rate: f32,
+    spectrum_rate: f32,
+    spectrum_zoomed: bool,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+) -> SpectrumViewMapping {
+    if spectrum_zoomed && spectrum_rate > 0.0 {
+        SpectrumViewMapping {
+            row_rate_hz: spectrum_rate,
+            view_span_hz,
+            pan_offset_hz: 0.0,
+        }
+    } else {
+        SpectrumViewMapping {
+            row_rate_hz: iq_rate,
+            view_span_hz,
+            pan_offset_hz,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoomed_mapping_uses_spectrum_rate() {
+        let m = spectrum_view_mapping(768_000.0, 48_000.0, true, 30_000.0, 12_000.0);
+        assert_eq!(m.row_rate_hz, 48_000.0);
+        assert_eq!(m.pan_offset_hz, 0.0);
+    }
+
+    #[test]
+    fn full_span_mapping_keeps_pan() {
+        let m = spectrum_view_mapping(12_000.0, 12_000.0, false, 12_000.0, 500.0);
+        assert_eq!(m.row_rate_hz, 12_000.0);
+        assert_eq!(m.pan_offset_hz, 500.0);
+    }
 
     #[test]
     fn narrow_span_is_subset_of_full_row() {

@@ -7,14 +7,16 @@
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui::Color32;
 use egui_extras::{Column, TableBuilder};
 use hfsdr::{
-    decimation_factor, extract_view_window, strongest_offset_hz, Continent, ContinentResolver,
-    CwChannelSettings, RowFold, SlowWaterfall, Spot, SpotKind, SpotSort, WindowKind, MAX_NOTCHES,
+    decimation_factor, extract_view_window, spectrum_view_mapping, strongest_offset_hz, Continent,
+    ContinentResolver, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
+    SpotKind, SpotSort, WindowKind, MAX_NOTCHES,
 };
 
 use crate::audio::AudioOutput;
@@ -25,9 +27,13 @@ use crate::engine::{
     ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
 };
 use crate::interaction::{PlotAction, PlotInteraction, PlotViewState};
-use crate::interaction::{CW_PASSBAND_MAX_HZ, CW_PASSBAND_MIN_HZ};
+use crate::interaction::{CW_PASSBAND_MAX_HZ, CW_PASSBAND_MIN_HZ, CW_PASSBAND_NARROW_MAX_HZ};
+use crate::log;
 use crate::settings::{AppSettings, NotchData};
 use crate::source::{ConnectRequest, SourceKind};
+use crate::spot_filter::{
+    build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
+};
 use crate::theme::{
     apply, badge, collapsible_section, section_card, section_heading, section_hint, stat_row,
     toggle, MUTED, OK, WARN,
@@ -52,7 +58,14 @@ const BAND_PRESETS: [(&str, f64); 11] = [
 ];
 
 const BFO_PRESETS: [(&str, f32); 4] = [("500", 500.0), ("600", 600.0), ("700", 700.0), ("800", 800.0)];
-const FILTER_PRESETS: [(&str, f32); 4] = [("50", 50.0), ("100", 100.0), ("250", 250.0), ("500", 500.0)];
+const FILTER_PRESETS: [(&str, f32); 6] = [
+    ("50", 50.0),
+    ("100", 100.0),
+    ("250", 250.0),
+    ("500", 500.0),
+    ("1k", 1_000.0),
+    ("2k", 2_000.0),
+];
 
 pub struct WaterfallApp {
     engine: EngineHandle,
@@ -87,6 +100,7 @@ pub struct WaterfallApp {
     textures_dirty: bool,
     last_tex_span: f32,
     last_tex_pan: f64,
+    last_tex_row_rate: f32,
 
     ref_db: f32,
     range_db: f32,
@@ -95,6 +109,7 @@ pub struct WaterfallApp {
     waterfall_rows: usize,
     target_fps: u32,
     fft_size: usize,
+    fft_auto: bool,
 
     audio_devices: Vec<String>,
     selected_audio_device: usize,
@@ -103,12 +118,27 @@ pub struct WaterfallApp {
     volume: f32,
 
     skimmer_enabled: bool,
+    skimmer_min_snr_db: f32,
+    skimmer_max_channels: usize,
+    skimmer_bucket_hz: f32,
+    skimmer_min_separation_bins: usize,
     skimmer_channels: usize,
     skimmer_spots: Vec<Spot>,
     spot_sort: SpotSort,
     continent_filter: bool,
     show_continents: [bool; 7],
     min_spot_snr: f32,
+    spot_cq_only: bool,
+    spot_hide_heard_labels: bool,
+    spot_max_age_secs: f32,
+    spot_callsign_filter: String,
+    spot_label_limit: usize,
+    scp_require: bool,
+    scp_notice: Option<String>,
+    scp_download_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
+    filter_wide: bool,
+    show_console: bool,
+    frame_visible_spots: Vec<Spot>,
     resolver: ContinentResolver,
     annotated: HashSet<String>,
     slow: SlowWaterfall,
@@ -162,6 +192,7 @@ impl WaterfallApp {
             textures_dirty: false,
             last_tex_span: 0.0,
             last_tex_pan: 0.0,
+            last_tex_row_rate: 0.0,
             ref_db: -70.0,
             range_db: 55.0,
             display_levels_initialized: false,
@@ -169,18 +200,34 @@ impl WaterfallApp {
             waterfall_rows: 0,
             target_fps: 30,
             fft_size: FFT_SIZE,
+            fft_auto: true,
             audio_devices,
             selected_audio_device: 0,
             last_audio_device: 0,
             audio_enabled: true,
             volume: 1.0,
             skimmer_enabled: false,
+            skimmer_min_snr_db: 14.0,
+            skimmer_max_channels: 24,
+            skimmer_bucket_hz: 80.0,
+            skimmer_min_separation_bins: 6,
             skimmer_channels: 0,
             skimmer_spots: Vec::new(),
             spot_sort: SpotSort::SnrDesc,
             continent_filter: false,
             show_continents: [true; 7],
-            min_spot_snr: 0.0,
+            min_spot_snr: 12.0,
+            spot_cq_only: false,
+            spot_hide_heard_labels: true,
+            spot_max_age_secs: 90.0,
+            spot_callsign_filter: String::new(),
+            spot_label_limit: 40,
+            scp_require: true,
+            scp_notice: None,
+            scp_download_rx: None,
+            filter_wide: false,
+            show_console: false,
+            frame_visible_spots: Vec::new(),
             resolver: ContinentResolver::new(),
             annotated: HashSet::new(),
             slow: SlowWaterfall::new(2.0, 600.0, RowFold::Peak),
@@ -263,13 +310,32 @@ impl WaterfallApp {
         self.range_db = s.range_db;
         self.smooth_alpha = s.smooth_alpha;
         self.target_fps = s.target_fps.clamp(10, 60);
-        self.fft_size = s.fft_size.clamp(256, 16_384);
+        self.fft_size = s.fft_size.clamp(1024, 65_536);
+        self.fft_auto = s.fft_auto;
 
         self.audio_enabled = s.audio_enabled;
         self.volume = s.volume;
 
         self.skimmer_enabled = s.skimmer_enabled;
+        self.skimmer_min_snr_db = s.skimmer_min_snr_db;
+        self.skimmer_max_channels = s.skimmer_max_channels.max(1);
+        self.skimmer_bucket_hz = s.skimmer_bucket_hz.clamp(20.0, 200.0);
+        self.skimmer_min_separation_bins = s.skimmer_min_separation_bins.clamp(1, 32);
         self.min_spot_snr = s.min_spot_snr;
+        self.spot_cq_only = s.spot_cq_only;
+        self.spot_hide_heard_labels = s.spot_hide_heard_labels;
+        self.spot_max_age_secs = s.spot_max_age_secs.max(0.0);
+        self.spot_callsign_filter = s.spot_callsign_filter.clone();
+        self.spot_label_limit = s.spot_label_limit.clamp(8, 80);
+        self.scp_require = s.scp_require;
+        self.spot_sort = spot_sort_from_u8(s.spot_sort);
+        self.continent_filter = s.continent_filter;
+        self.show_continents = s.show_continents;
+        self.show_console = s.show_console;
+        self.filter_wide = s.filter_wide;
+        if !self.filter_wide && self.cw.passband_hz > CW_PASSBAND_NARROW_MAX_HZ {
+            self.cw.passband_hz = CW_PASSBAND_NARROW_MAX_HZ;
+        }
         self.show_history = s.show_history;
         self.show_left = s.show_left;
         self.show_right = s.show_right;
@@ -320,10 +386,26 @@ impl WaterfallApp {
             smooth_alpha: self.smooth_alpha,
             target_fps: self.target_fps,
             fft_size: self.fft_size,
+            fft_auto: self.fft_auto,
             audio_enabled: self.audio_enabled,
             volume: self.volume,
             skimmer_enabled: self.skimmer_enabled,
+            skimmer_min_snr_db: self.skimmer_min_snr_db,
+            skimmer_max_channels: self.skimmer_max_channels,
+            skimmer_bucket_hz: self.skimmer_bucket_hz,
+            skimmer_min_separation_bins: self.skimmer_min_separation_bins,
             min_spot_snr: self.min_spot_snr,
+            spot_cq_only: self.spot_cq_only,
+            spot_hide_heard_labels: self.spot_hide_heard_labels,
+            spot_max_age_secs: self.spot_max_age_secs,
+            spot_callsign_filter: self.spot_callsign_filter.clone(),
+            spot_label_limit: self.spot_label_limit,
+            scp_require: self.scp_require,
+            spot_sort: spot_sort_to_u8(self.spot_sort),
+            continent_filter: self.continent_filter,
+            show_continents: self.show_continents,
+            show_console: self.show_console,
+            filter_wide: self.filter_wide,
             show_history: self.show_history,
             show_left: self.show_left,
             show_right: self.show_right,
@@ -350,30 +432,42 @@ impl WaterfallApp {
     /// Push UI settings to the engine and pull its published rows/status/spots.
     fn pump_engine(&mut self) {
         self.cw.listen_offset_hz = self.listen_offset_hz() as f32;
+        self.plot_view.clamp_pan(self.sample_rate);
+        let view = self.spectrum_view();
         self.engine.set_params(EngineParams {
             cw: self.cw.clone(),
             audio_enabled: self.audio_enabled,
             volume: self.volume,
             skimmer_enabled: self.skimmer_enabled,
+            skimmer_min_snr_db: self.skimmer_min_snr_db,
+            skimmer_max_channels: self.skimmer_max_channels,
+            skimmer_bucket_hz: self.skimmer_bucket_hz,
+            skimmer_min_separation_bins: self.skimmer_min_separation_bins,
+            scp_require: self.scp_require,
             fft_size: self.fft_size,
+            fft_auto: self.fft_auto,
+            view_span_hz: view.view_span_hz,
+            view_pan_offset_hz: self.plot_view.pan_offset_hz,
         });
 
-        let (state, stats, spots, new_rows, latest, last_error) = self.engine.with_shared(|s| {
-            let rows: Vec<Vec<f32>> = s.new_rows.drain(..).collect();
-            (
-                s.state.clone(),
-                s.stats.clone(),
-                s.spots.clone(),
-                rows,
-                s.latest.clone(),
-                s.last_error.clone(),
-            )
-        });
+        let Some(poll) = self.engine.try_poll() else {
+            return;
+        };
 
-        self.conn_state = state;
-        self.stats = stats;
-        self.last_error = last_error;
-        self.skimmer_spots = spots;
+        if poll.stats.slow && !self.stats.slow {
+            log::warn("link slow or unstable");
+        }
+        self.conn_state = poll.state;
+        self.stats = poll.stats;
+        if poll.last_error.as_deref() != self.last_error.as_deref() {
+            if let Some(ref err) = poll.last_error {
+                log::error(err);
+            }
+        }
+        self.last_error = poll.last_error;
+        self.skimmer_spots = poll.spots;
+        let latest = poll.latest;
+        let new_rows = poll.rows;
         if latest.len() != self.latest.len() {
             // FFT size changed under us: adopt the new width and reset buffers.
             self.latest = latest;
@@ -387,6 +481,9 @@ impl WaterfallApp {
         self.is_kiwi = self.stats.is_kiwi;
         self.last_snr_db = self.stats.snr_db;
         self.skimmer_channels = self.stats.skimmer_channels;
+        if self.fft_auto {
+            self.fft_size = self.stats.spectrum_fft.max(1024);
+        }
 
         if !new_rows.is_empty() {
             for row in new_rows {
@@ -441,7 +538,8 @@ impl WaterfallApp {
                     self.plot_view.zoom_by(factor, self.sample_rate);
                 }
                 PlotAction::SetPassbandHz(bw) => {
-                    self.cw.passband_hz = bw.clamp(CW_PASSBAND_MIN_HZ, CW_PASSBAND_MAX_HZ);
+                    self.cw.passband_hz =
+                        bw.clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
                 }
             }
         }
@@ -475,11 +573,34 @@ impl WaterfallApp {
         self.display_levels_initialized = true;
     }
 
+    fn spectrum_view(&self) -> SpectrumViewMapping {
+        let span = self.plot_view.view_span_hz(self.sample_rate);
+        spectrum_view_mapping(
+            self.sample_rate,
+            self.stats.spectrum_rate,
+            self.stats.spectrum_zoomed,
+            span,
+            self.plot_view.pan_offset_hz,
+        )
+    }
+
     /// Snap tuning so the strongest signal near the cursor lands at the BFO pitch.
     fn zero_beat(&mut self) {
         let listen = self.listen_offset_hz() as f32;
-        if let Some(peak) = strongest_offset_hz(&self.latest, self.sample_rate, listen, 400.0) {
-            self.center_khz += (peak - listen) as f64 / 1000.0;
+        let pan = self.plot_view.pan_offset_hz as f32;
+        let view = self.spectrum_view();
+        let search = if self.stats.spectrum_zoomed {
+            listen - pan
+        } else {
+            listen
+        };
+        if let Some(peak) = strongest_offset_hz(&self.latest, view.row_rate_hz, search, 400.0) {
+            let from_center = if self.stats.spectrum_zoomed {
+                peak + pan
+            } else {
+                peak
+            };
+            self.center_khz += (from_center - listen) as f64 / 1000.0;
             self.rit_hz = 0.0;
             self.tune_preview_offset_hz = None;
         }
@@ -491,9 +612,21 @@ impl WaterfallApp {
             return;
         }
         let listen = self.listen_offset_hz() as f32;
-        if let Some(peak) = strongest_offset_hz(&self.latest, self.sample_rate, listen, 250.0) {
+        let pan = self.plot_view.pan_offset_hz as f32;
+        let view = self.spectrum_view();
+        let search = if self.stats.spectrum_zoomed {
+            listen - pan
+        } else {
+            listen
+        };
+        if let Some(peak) = strongest_offset_hz(&self.latest, view.row_rate_hz, search, 250.0) {
+            let from_center = if self.stats.spectrum_zoomed {
+                peak + pan
+            } else {
+                peak
+            };
             let preview = self.tune_preview_offset_hz.unwrap_or(0.0) as f32;
-            let target = (peak - preview).clamp(-800.0, 800.0);
+            let target = (from_center - preview).clamp(-800.0, 800.0);
             self.rit_hz = 0.85 * self.rit_hz + 0.15 * target;
         }
     }
@@ -520,47 +653,108 @@ impl WaterfallApp {
             .collect()
     }
 
-    fn continent_allowed(&self, spot: &Spot) -> bool {
-        if !self.continent_filter {
-            return true;
-        }
-        let Some(call) = &spot.callsign else {
-            return true;
-        };
-        match self.resolver.continent_of(call) {
-            Some(c) => self.show_continents[continent_index(c)],
-            None => true,
+    fn spot_filter_config(&self) -> SpotFilterConfig {
+        SpotFilterConfig {
+            min_snr_db: self.min_spot_snr,
+            cq_only: self.spot_cq_only,
+            max_age_secs: self.spot_max_age_secs,
+            callsign_prefix: self.spot_callsign_filter.clone(),
+            continent_filter: self.continent_filter,
+            show_continents: self.show_continents,
+            sort: self.spot_sort,
         }
     }
 
     fn visible_spots(&self) -> Vec<Spot> {
-        let mut spots: Vec<Spot> = self
-            .skimmer_spots
-            .iter()
-            .filter(|s| s.snr_db >= self.min_spot_snr && self.continent_allowed(s))
-            .cloned()
-            .collect();
-        match self.spot_sort {
-            SpotSort::SnrDesc => spots.sort_by(|a, b| b.snr_db.total_cmp(&a.snr_db)),
-            SpotSort::Frequency => spots.sort_by(|a, b| a.frequency_hz.total_cmp(&b.frequency_hz)),
-            SpotSort::LastHeard => spots.sort_by_key(|s| s.last_heard),
-            SpotSort::Callsign => spots.sort_by(|a, b| a.callsign.cmp(&b.callsign)),
-        }
-        spots
+        filter_spots(
+            &self.skimmer_spots,
+            &self.spot_filter_config(),
+            &self.resolver,
+        )
     }
 
     fn spot_labels(&self, center_hz: f64) -> Vec<SpotLabel> {
-        self.visible_spots()
-            .iter()
-            .filter_map(|s| {
-                let text = s.callsign.clone()?;
-                Some(SpotLabel {
-                    offset_hz: (s.frequency_hz - center_hz) as f32,
-                    text,
-                    cq: s.kind == SpotKind::CallingCq,
-                })
-            })
-            .collect()
+        build_spot_labels(
+            &self.frame_visible_spots,
+            center_hz,
+            &SpotLabelConfig {
+                hide_heard: self.spot_hide_heard_labels,
+                bucket_hz: self.skimmer_bucket_hz,
+                label_limit: self.spot_label_limit,
+            },
+        )
+    }
+
+    fn clear_spots(&mut self) {
+        self.engine.send(EngineCommand::ClearSkimmerSpots);
+        self.skimmer_spots.clear();
+        self.frame_visible_spots.clear();
+        self.annotated.clear();
+        log::info("spots cleared");
+    }
+
+    fn poll_scp_download(&mut self) {
+        let Some(rx) = self.scp_download_rx.as_ref() else {
+            return;
+        };
+        let Ok(result) = rx.try_recv() else {
+            return;
+        };
+        self.scp_download_rx = None;
+        match result {
+            Ok(path) => {
+                log::info(format!("MASTER.SCP saved to {}", path.display()));
+                self.engine.send(EngineCommand::ReloadScp);
+                self.scp_notice = Some(format!("Downloaded to {} — reloading", path.display()));
+            }
+            Err(e) => {
+                log::error(format!("MASTER.SCP download failed: {e}"));
+                self.scp_notice = Some(format!("Download failed: {e}"));
+            }
+        }
+    }
+
+    fn scp_section(&mut self, ui: &mut egui::Ui) {
+        let scp = &self.stats.scp;
+        let downloading = self.scp_download_rx.is_some();
+        collapsible_section(ui, "scp", "MASTER.SCP", false, |ui| {
+            if scp.loaded {
+                let ver = scp.version.as_deref().unwrap_or("unknown version");
+                stat_row(ui, "Database", format!("{} calls ({ver})", scp.calls));
+                if let Some(path) = &scp.path {
+                    stat_row(ui, "Path", path.clone());
+                }
+            } else {
+                ui.colored_label(
+                    WARN,
+                    "Not loaded — using heuristic callsign check (more false positives)",
+                );
+                section_hint(ui, "Install N1MM+ MASTER.SCP or click Download below.");
+            }
+            if let Some(msg) = &self.scp_notice {
+                ui.colored_label(OK, msg);
+            }
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!downloading, |ui| {
+                    if ui.button("Download").clicked() {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        self.scp_download_rx = Some(rx);
+                        self.scp_notice = Some("Downloading MASTER.SCP…".into());
+                        std::thread::spawn(move || {
+                            let _ = tx.send(crate::scp_fetch::download_master_scp());
+                        });
+                    }
+                });
+                if downloading {
+                    ui.spinner();
+                }
+                if ui.button("Reload").clicked() {
+                    self.engine.send(EngineCommand::ReloadScp);
+                    self.scp_notice = Some("Reloading MASTER.SCP…".into());
+                    log::info("MASTER.SCP reload requested");
+                }
+            });
+        });
     }
 
     fn tune_to_hz(&mut self, frequency_hz: f64) {
@@ -593,6 +787,7 @@ impl WaterfallApp {
         self.center_khz = req.center_hz / 1000.0;
         self.last_center_khz = self.center_khz;
         self.remember_host(&req);
+        log::info(format!("connecting to {}", req.label()));
         self.engine.send(EngineCommand::Connect(req));
     }
 
@@ -606,7 +801,7 @@ impl WaterfallApp {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (zero, lock, notch, blank, nr, agc, narrow, widen, rit_dn, rit_up, full, mute) =
+        let (zero, lock, notch, blank, nr, agc, narrow, widen, rit_dn, rit_up, full, mute, console) =
             ctx.input(|i| {
                 use egui::Key;
                 (
@@ -622,6 +817,7 @@ impl WaterfallApp {
                     i.key_pressed(Key::Period),
                     i.key_pressed(Key::F),
                     i.key_pressed(Key::Space),
+                    i.key_pressed(Key::Backtick),
                 )
             });
 
@@ -644,10 +840,12 @@ impl WaterfallApp {
             self.cw.agc.enabled = !self.cw.agc.enabled;
         }
         if narrow {
-            self.cw.passband_hz = (self.cw.passband_hz - 25.0).clamp(CW_PASSBAND_MIN_HZ, CW_PASSBAND_MAX_HZ);
+            self.cw.passband_hz =
+                (self.cw.passband_hz - 25.0).clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
         }
         if widen {
-            self.cw.passband_hz = (self.cw.passband_hz + 25.0).clamp(CW_PASSBAND_MIN_HZ, CW_PASSBAND_MAX_HZ);
+            self.cw.passband_hz =
+                (self.cw.passband_hz + 25.0).clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
         }
         if rit_dn {
             self.rit_hz = (self.rit_hz - 10.0).clamp(-800.0, 800.0);
@@ -662,17 +860,51 @@ impl WaterfallApp {
         if mute {
             self.audio_enabled = !self.audio_enabled;
         }
+        if console {
+            self.show_console = !self.show_console;
+        }
+    }
+
+    fn console_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Log").strong());
+            if ui.button("Clear").clicked() {
+                log::clear();
+            }
+        });
+        egui::ScrollArea::vertical()
+            .max_height(140.0)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for line in log::entries() {
+                    ui.label(
+                        egui::RichText::new(line)
+                            .monospace()
+                            .size(11.0)
+                            .color(MUTED),
+                    );
+                }
+            });
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
-        let span = self.plot_view.view_span_hz(self.sample_rate);
-        let pan = self.plot_view.pan_offset_hz;
-        let view = extract_view_window(&self.latest, self.sample_rate, span, pan);
-        let w = view.len().max(1);
+        let view = self.spectrum_view();
+        let row = extract_view_window(
+            &self.latest,
+            view.row_rate_hz,
+            view.view_span_hz,
+            view.pan_offset_hz,
+        );
+        let w = row.len().max(1);
         let h = WATERFALL_ROWS;
         let mut pixels = vec![Color32::BLACK; w * h];
-        for (y, row) in self.rows.iter().enumerate() {
-            let row_view = extract_view_window(row, self.sample_rate, span, pan);
+        for (y, row_data) in self.rows.iter().enumerate() {
+            let row_view = extract_view_window(
+                row_data,
+                view.row_rate_hz,
+                view.view_span_hz,
+                view.pan_offset_hz,
+            );
             let base = y * w;
             for (x, &db) in row_view.iter().enumerate() {
                 if x < w {
@@ -694,15 +926,24 @@ impl WaterfallApp {
         if rows.is_empty() {
             return;
         }
-        let span = self.plot_view.view_span_hz(self.sample_rate);
-        let pan = self.plot_view.pan_offset_hz;
-        let w = extract_view_window(&self.latest, self.sample_rate, span, pan)
-            .len()
-            .max(1);
+        let view = self.spectrum_view();
+        let w = extract_view_window(
+            &self.latest,
+            view.row_rate_hz,
+            view.view_span_hz,
+            view.pan_offset_hz,
+        )
+        .len()
+        .max(1);
         let h = rows.len();
         let mut pixels = vec![Color32::BLACK; w * h];
-        for (y, row) in rows.iter().enumerate() {
-            let row_view = extract_view_window(row, self.sample_rate, span, pan);
+        for (y, row_data) in rows.iter().enumerate() {
+            let row_view = extract_view_window(
+                row_data,
+                view.row_rate_hz,
+                view.view_span_hz,
+                view.pan_offset_hz,
+            );
             let base = y * w;
             for (x, &db) in row_view.iter().enumerate() {
                 if x < w {
@@ -918,6 +1159,7 @@ impl WaterfallApp {
                 ui.toggle_value(&mut self.show_right, "Right");
                 ui.toggle_value(&mut self.show_history, "History");
                 ui.toggle_value(&mut self.show_left, "Left");
+                ui.toggle_value(&mut self.show_console, "Log (`)");
                 if self.stats.slow {
                     ui.separator();
                     ui.colored_label(WARN, "connection unstable");
@@ -1001,16 +1243,44 @@ impl WaterfallApp {
         });
     }
 
+    fn passband_max_hz(&self) -> f32 {
+        if self.filter_wide {
+            CW_PASSBAND_MAX_HZ
+        } else {
+            CW_PASSBAND_NARROW_MAX_HZ
+        }
+    }
+
     fn performance_section(&mut self, ui: &mut egui::Ui) {
         collapsible_section(ui, "perf", "Performance", false, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("FFT").small().color(MUTED));
-                for n in [1024usize, 2048, 4096, 8192] {
-                    if ui.selectable_label(self.fft_size == n, n.to_string()).clicked() {
-                        self.fft_size = n;
+            ui.checkbox(&mut self.fft_auto, "Auto FFT size (wideband)");
+            if self.fft_auto {
+                let rate = self.stats.spectrum_rate;
+                let bin = rate / self.stats.spectrum_fft.max(1) as f32;
+                let zoom_note = if self.stats.spectrum_zoomed {
+                    format!(" ×{} zoom", self.stats.spectrum_decim)
+                } else {
+                    String::new()
+                };
+                stat_row(
+                    ui,
+                    "FFT",
+                    format!(
+                        "{} @ {:.1} kS/s (~{bin:.1} Hz/bin){zoom_note}",
+                        self.stats.spectrum_fft,
+                        rate / 1000.0
+                    ),
+                );
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("FFT").small().color(MUTED));
+                    for n in [2048usize, 4096, 8192, 16_384, 32_768, 65_536] {
+                        if ui.selectable_label(self.fft_size == n, n.to_string()).clicked() {
+                            self.fft_size = n;
+                        }
                     }
-                }
-            });
+                });
+            }
 
             let mut dec = self.cw.decimation as i32;
             ui.horizontal(|ui| {
@@ -1047,7 +1317,12 @@ impl WaterfallApp {
             stat_row(ui, "RX center", format!("{:.3} MHz", self.center_khz / 1000.0));
             stat_row(ui, "Listen", format!("{:.0} Hz", self.listen_offset_hz()));
             stat_row(ui, "SNR", format!("{:.0} dB", self.last_snr_db));
-            stat_row(ui, "IQ", format!("{:.1} kS/s", self.sample_rate / 1000.0));
+            stat_row(ui, "IQ rate", format!("{:.1} kS/s", self.sample_rate / 1000.0));
+            stat_row(
+                ui,
+                "Spectrum FFT",
+                format!("{} @ {:.1} kS/s", self.stats.spectrum_fft, self.stats.spectrum_rate / 1000.0),
+            );
         });
     }
 
@@ -1085,9 +1360,20 @@ impl WaterfallApp {
                 }
             });
             scroll_slider_f32(ui, &mut self.cw.bfo_hz, 300.0..=1_200.0, "BFO tone");
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.filter_wide, false, "CW (≤500 Hz)");
+                ui.selectable_value(&mut self.filter_wide, true, "Wide (≤2 kHz)");
+            });
+            let bw_max = self.passband_max_hz();
+            if self.cw.passband_hz > bw_max {
+                self.cw.passband_hz = bw_max;
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("BW").small().color(MUTED));
                 for (label, hz) in FILTER_PRESETS {
+                    if hz > bw_max {
+                        continue;
+                    }
                     if ui.selectable_label(self.cw.passband_hz.round() == hz, label).clicked() {
                         self.cw.passband_hz = hz;
                     }
@@ -1096,7 +1382,7 @@ impl WaterfallApp {
             scroll_slider_log_f32(
                 ui,
                 &mut self.cw.passband_hz,
-                CW_PASSBAND_MIN_HZ..=CW_PASSBAND_MAX_HZ,
+                CW_PASSBAND_MIN_HZ..=bw_max,
                 "Audio BW",
             );
             ui.horizontal(|ui| {
@@ -1105,6 +1391,10 @@ impl WaterfallApp {
                 window_choice(ui, &mut self.cw.window, WindowKind::RaisedCosine, "RaisedCos");
                 window_choice(ui, &mut self.cw.window, WindowKind::Blackman, "Blackman");
             });
+            section_hint(
+                ui,
+                "Gauss: purest tone · RaisedCos: sharper · Blackman: narrowest (less bleed)",
+            );
             section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan edges");
         });
     }
@@ -1197,12 +1487,62 @@ impl WaterfallApp {
             }
         });
 
+        self.scp_section(ui);
+
         if !self.skimmer_enabled {
             return;
         }
 
         collapsible_section(ui, "spots", "Spots", true, |ui| {
-            scroll_slider_f32(ui, &mut self.min_spot_snr, 0.0..=40.0, "Min SNR");
+            ui.horizontal(|ui| {
+                if ui.button("Clear spots").clicked() {
+                    self.clear_spots();
+                }
+                let n = self.frame_visible_spots.len();
+                ui.label(
+                    egui::RichText::new(format!("{n} shown"))
+                        .small()
+                        .color(MUTED),
+                );
+            });
+            scroll_slider_f32(ui, &mut self.skimmer_min_snr_db, 6.0..=30.0, "Peak min SNR");
+            scroll_slider_f32(ui, &mut self.skimmer_bucket_hz, 20.0..=200.0, "Bucket Hz");
+            let mut sep = self.skimmer_min_separation_bins as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Peak separation").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut sep).range(1..=32).speed(1));
+                ui.label(egui::RichText::new("bins").small().color(MUTED));
+            });
+            self.skimmer_min_separation_bins = sep as usize;
+            let mut max_ch = self.skimmer_max_channels as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Max decoders").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut max_ch).range(4..=64).speed(1));
+            });
+            self.skimmer_max_channels = max_ch as usize;
+            scroll_slider_f32(ui, &mut self.min_spot_snr, 0.0..=40.0, "Table min SNR");
+            scroll_slider_f32(ui, &mut self.spot_max_age_secs, 0.0..=300.0, "Max age (s, 0=all)");
+            let mut label_lim = self.spot_label_limit as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Plot labels").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut label_lim).range(8..=80).speed(1));
+            });
+            self.spot_label_limit = label_lim as usize;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Call filter").small().color(MUTED));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.spot_callsign_filter)
+                        .desired_width(100.0)
+                        .hint_text("e.g. G or DL"),
+                );
+            });
+            toggle(ui, &mut self.spot_cq_only, "CQ only");
+            toggle(ui, &mut self.spot_hide_heard_labels, "Hide unconfirmed on plot");
+            toggle(
+                ui,
+                &mut self.scp_require,
+                "Require MASTER.SCP match",
+            );
             ui.checkbox(&mut self.continent_filter, "Filter by continent");
             if self.continent_filter {
                 ui.horizontal_wrapped(|ui| {
@@ -1215,13 +1555,16 @@ impl WaterfallApp {
                     }
                 });
             }
+            if self.continent_filter && !self.show_continents.iter().any(|&on| on) {
+                ui.colored_label(WARN, "All continents off — no spots will match");
+            }
             ui.separator();
             self.spot_table(ui);
         });
     }
 
     fn spot_table(&mut self, ui: &mut egui::Ui) {
-        let spots = self.visible_spots();
+        let spots = &self.frame_visible_spots;
         let sort = &mut self.spot_sort;
         let mut tune_to: Option<f64> = None;
         TableBuilder::new(ui)
@@ -1233,6 +1576,7 @@ impl WaterfallApp {
             .column(Column::exact(72.0))
             .column(Column::exact(40.0))
             .column(Column::exact(40.0))
+            .column(Column::exact(36.0))
             .header(18.0, |mut header| {
                 header.col(|_| {});
                 header.col(|ui| {
@@ -1253,9 +1597,14 @@ impl WaterfallApp {
                 header.col(|ui| {
                     ui.label(egui::RichText::new("wpm").small().color(MUTED));
                 });
+                header.col(|ui| {
+                    if ui.button("Age").clicked() {
+                        *sort = SpotSort::LastHeard;
+                    }
+                });
             })
             .body(|mut body| {
-                for spot in &spots {
+                for spot in spots {
                     body.row(18.0, |mut row| {
                         let (glyph, color) = match spot.kind {
                             SpotKind::CallingCq => ("CQ", WARN),
@@ -1277,6 +1626,18 @@ impl WaterfallApp {
                         });
                         row.col(|ui| {
                             ui.label(format!("{:.0}", spot.wpm));
+                        });
+                        row.col(|ui| {
+                            let secs = spot.age().as_secs();
+                            ui.label(
+                                egui::RichText::new(if secs < 60 {
+                                    format!("{secs}s")
+                                } else {
+                                    format!("{}m", secs / 60)
+                                })
+                                .small()
+                                .color(MUTED),
+                            );
                         });
                         if row.response().clicked() {
                             tune_to = Some(spot.frequency_hz);
@@ -1328,14 +1689,13 @@ impl WaterfallApp {
 
     fn central_panel(&mut self, ui: &mut egui::Ui) {
         self.plot_view.clamp_pan(self.sample_rate);
-        let span = self.plot_view.view_span_hz(self.sample_rate);
-        let pan = self.plot_view.pan_offset_hz;
+        let view = self.spectrum_view();
         let trace = display_trace(
             &self.latest,
             &mut self.smoothed_trace,
-            self.sample_rate,
-            span,
-            pan,
+            view.row_rate_hz,
+            view.view_span_hz,
+            view.pan_offset_hz,
             self.smooth_alpha,
         );
 
@@ -1349,9 +1709,12 @@ impl WaterfallApp {
             Vec::new()
         };
 
+        let bw_max = self.passband_max_hz();
         let mut params = crate::widgets::PlotParams {
             sample_rate: self.sample_rate,
             passband_hz: self.cw.passband_hz,
+            passband_min_hz: CW_PASSBAND_MIN_HZ,
+            passband_max_hz: bw_max,
             filter_editable: true,
             listen_center_hz,
             tune_preview_offset_hz,
@@ -1419,9 +1782,24 @@ fn window_from_u8(v: u8) -> WindowKind {
     }
 }
 
-fn continent_index(c: Continent) -> usize {
-    Continent::ALL.iter().position(|&x| x == c).unwrap_or(0)
+fn spot_sort_to_u8(s: SpotSort) -> u8 {
+    match s {
+        SpotSort::SnrDesc => 0,
+        SpotSort::Frequency => 1,
+        SpotSort::LastHeard => 2,
+        SpotSort::Callsign => 3,
+    }
 }
+
+fn spot_sort_from_u8(v: u8) -> SpotSort {
+    match v {
+        1 => SpotSort::Frequency,
+        2 => SpotSort::LastHeard,
+        3 => SpotSort::Callsign,
+        _ => SpotSort::SnrDesc,
+    }
+}
+
 
 impl eframe::App for WaterfallApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1436,11 +1814,14 @@ impl eframe::App for WaterfallApp {
             self.form_host = req.host.clone();
             self.form_port = req.port;
             self.form_center_mhz = req.center_hz / 1e6;
+            log::info(format!("connecting to {}", req.label()));
             self.engine.send(EngineCommand::Connect(req));
         }
 
+        self.poll_scp_download();
         self.handle_shortcuts(&ctx);
         self.pump_engine();
+        self.frame_visible_spots = self.visible_spots();
 
         let has_data = !self.rows.is_empty();
         let show_main = matches!(self.conn_state, ConnState::Streaming)
@@ -1458,17 +1839,19 @@ impl eframe::App for WaterfallApp {
         }
 
         // Lazy texture rebuild: only when new rows arrived or the view changed.
-        let span = self.plot_view.view_span_hz(self.sample_rate);
-        let pan = self.plot_view.pan_offset_hz;
-        let view_changed = span != self.last_tex_span || pan != self.last_tex_pan;
+        let view = self.spectrum_view();
+        let view_changed = (view.view_span_hz - self.last_tex_span).abs() > 1.0
+            || (view.pan_offset_hz - self.last_tex_pan).abs() > 1.0
+            || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
         if self.textures_dirty || view_changed {
             self.update_texture(&ctx);
             if self.show_history {
                 self.update_history_texture(&ctx);
             }
             self.textures_dirty = false;
-            self.last_tex_span = span;
-            self.last_tex_pan = pan;
+            self.last_tex_span = view.view_span_hz;
+            self.last_tex_pan = view.pan_offset_hz;
+            self.last_tex_row_rate = view.row_rate_hz;
         }
 
         egui::Panel::top("status").show_inside(ui, |ui| self.status_banner(ui));
@@ -1492,6 +1875,13 @@ impl eframe::App for WaterfallApp {
                 .resizable(true)
                 .default_size(150.0)
                 .show_inside(ui, |ui| self.history_panel(ui));
+        }
+
+        if self.show_console {
+            egui::Panel::bottom("console")
+                .resizable(true)
+                .default_size(160.0)
+                .show_inside(ui, |ui| self.console_panel(ui));
         }
 
         egui::CentralPanel::default()

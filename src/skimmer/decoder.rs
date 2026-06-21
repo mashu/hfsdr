@@ -1,12 +1,9 @@
 //! CW decoder interface for the skimmer's decoder bank.
 //!
 //! Each detected peak gets its own narrowband demod feeding a [`CwDecoder`].
-//! The trait keeps the decode algorithm pluggable: a simple envelope/threshold
-//! decoder today, a beam-search + bigram decoder later, all behind one boundary.
-//!
-//! This is the seam for build-order item 3 (skimmer). The full implementation
-//! (adaptive WPM tracking, supercheck-partial callsign validation against
-//! MASTER.SCP, CQ/run detection) is not wired yet.
+//! The trait keeps the decode algorithm pluggable: [`super::adaptive::AdaptiveCwDecoder`]
+//! for a lightweight baseline, [`super::bigram::BigramCwDecoder`] for beam-search
+//! with a callsign-biased bigram model.
 
 /// A decoder consuming one channel's audio and emitting decoded text.
 pub trait CwDecoder: Send {

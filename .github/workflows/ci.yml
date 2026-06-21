@@ -25,7 +25,10 @@ jobs:
               sudo apt-get install -y libairspyhf-dev
           - os: macos-latest
             features: airspy
-            install: brew install airspyhf
+            install: |
+              brew install airspyhf pkg-config
+              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
             features: ""
             install: echo "Kiwi-only (no libairspyhf on Windows runner)"
@@ -49,7 +52,7 @@ jobs:
         shell: bash
 
   build-gui:
-    name: Build waterfall (${{ matrix.label }})
+    name: Build hfsdr GUI (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -71,7 +74,10 @@ jobs:
           - os: macos-latest
             label: macos-universal
             features: gui
-            install: brew install airspyhf
+            install: |
+              brew install airspyhf pkg-config
+              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
             label: windows-x86_64-kiwi
             features: gui
@@ -103,10 +109,10 @@ jobs:
         run: |
           case "${{ matrix.label }}" in
             windows-*)
-              test -f target/release/waterfall.exe
+              test -f target/release/hfsdr.exe
               ;;
             *)
-              test -f target/release/waterfall
+              test -f target/release/hfsdr
               ;;
           esac
         shell: bash

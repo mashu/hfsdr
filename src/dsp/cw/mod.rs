@@ -28,7 +28,7 @@ pub use agc::CwAgc;
 pub use apf::AudioPeakFilter;
 pub use autonotch::AutoNotch;
 pub use channel::CwChannel;
-pub use decimator::{decimation_factor, Decimator};
+pub use decimator::{audio_sample_rate, decimation_factor, effective_decimation, Decimator};
 pub use detector::ProductDetector;
 pub use fir::{design_gaussian_lowpass, design_lowpass, FirFilter, WindowKind};
 pub use lms::{LmsPredictor, LmsStep};

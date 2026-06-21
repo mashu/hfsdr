@@ -4,6 +4,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleRate, Stream, SupportedStreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::log;
+
 const RING_CAPACITY: usize = 48_000;
 
 pub struct AudioOutput {
@@ -44,11 +46,11 @@ impl AudioOutput {
         let config = pick_output_config(device, source_rate)?;
         let output_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
-        eprintln!("audio: {device_name} @ {output_rate} Hz, {channels} ch");
+        log::info(format!("audio: {device_name} @ {output_rate} Hz, {channels} ch"));
 
         let (producer, consumer) = RingBuffer::<f32>::new(RING_CAPACITY);
         let mut cons = consumer;
-        let err_fn = |e| eprintln!("audio stream error: {e}");
+        let err_fn = |e| log::error(format!("audio stream error: {e}"));
 
         let stream = device
             .build_output_stream(
@@ -57,10 +59,18 @@ impl AudioOutput {
                 err_fn,
                 None,
             )
-            .map_err(|e| eprintln!("audio stream build: {e}"))
+            .map_err(|e| {
+                log::error(format!("audio stream build: {e}"));
+                e
+            })
             .ok()?;
 
-        stream.play().map_err(|e| eprintln!("audio stream play: {e}")).ok()?;
+        stream.play()
+            .map_err(|e| {
+                log::error(format!("audio stream play: {e}"));
+                e
+            })
+            .ok()?;
 
         Some(Self {
             producer,
@@ -126,7 +136,10 @@ fn fill_output(data: &mut [f32], channels: usize, consumer: &mut Consumer<f32>) 
 fn pick_output_config(device: &Device, source_rate: u32) -> Option<SupportedStreamConfig> {
     let configs: Vec<_> = device
         .supported_output_configs()
-        .map_err(|e| eprintln!("audio configs: {e}"))
+        .map_err(|e| {
+            log::error(format!("audio configs: {e}"));
+            e
+        })
         .ok()?
         .filter(|c| c.sample_format() == cpal::SampleFormat::F32)
         .collect();
@@ -147,7 +160,10 @@ fn pick_output_config(device: &Device, source_rate: u32) -> Option<SupportedStre
 
     device
         .default_output_config()
-        .map_err(|e| eprintln!("audio default config: {e}"))
+        .map_err(|e| {
+            log::error(format!("audio default config: {e}"));
+            e
+        })
         .ok()
         .filter(|c| c.sample_format() == cpal::SampleFormat::F32)
 }

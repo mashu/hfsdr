@@ -66,6 +66,7 @@ pub struct AppSettings {
     pub smooth_alpha: f32,
     pub target_fps: u32,
     pub fft_size: usize,
+    pub fft_auto: bool,
 
     // Audio.
     pub audio_enabled: bool,
@@ -73,7 +74,22 @@ pub struct AppSettings {
 
     // Skimmer / panels.
     pub skimmer_enabled: bool,
+    pub skimmer_min_snr_db: f32,
+    pub skimmer_max_channels: usize,
+    pub skimmer_bucket_hz: f32,
+    pub skimmer_min_separation_bins: usize,
     pub min_spot_snr: f32,
+    pub spot_cq_only: bool,
+    pub spot_hide_heard_labels: bool,
+    pub spot_max_age_secs: f32,
+    pub spot_callsign_filter: String,
+    pub spot_label_limit: usize,
+    pub scp_require: bool,
+    pub spot_sort: u8,
+    pub continent_filter: bool,
+    pub show_continents: [bool; 7],
+    pub show_console: bool,
+    pub filter_wide: bool,
     pub show_history: bool,
     pub show_left: bool,
     pub show_right: bool,
@@ -116,10 +132,26 @@ impl Default for AppSettings {
             smooth_alpha: 0.09,
             target_fps: 30,
             fft_size: 2048,
+            fft_auto: true,
             audio_enabled: true,
             volume: 1.0,
             skimmer_enabled: false,
-            min_spot_snr: 0.0,
+            skimmer_min_snr_db: 14.0,
+            skimmer_max_channels: 24,
+            skimmer_bucket_hz: 80.0,
+            skimmer_min_separation_bins: 6,
+            min_spot_snr: 12.0,
+            spot_cq_only: false,
+            spot_hide_heard_labels: true,
+            spot_max_age_secs: 90.0,
+            spot_callsign_filter: String::new(),
+            spot_label_limit: 40,
+            scp_require: true,
+            spot_sort: 0,
+            continent_filter: false,
+            show_continents: [true; 7],
+            show_console: false,
+            filter_wide: false,
             show_history: false,
             show_left: true,
             show_right: true,
@@ -158,5 +190,21 @@ impl AppSettings {
         if let Ok(text) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(&path, text);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_roundtrip_json() {
+        let s = AppSettings::default();
+        let json = serde_json::to_string(&s).expect("serialize");
+        let back: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.spot_sort, s.spot_sort);
+        assert_eq!(back.continent_filter, s.continent_filter);
+        assert_eq!(back.show_continents, s.show_continents);
+        assert!(!back.show_console);
     }
 }

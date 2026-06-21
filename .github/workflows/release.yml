@@ -20,7 +20,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: waterfall-linux-x86_64
+            artifact_name: hfsdr-linux-x86_64
             archive: tar.gz
             features: gui
             airspy: true
@@ -35,13 +35,16 @@ jobs:
                 libxcb-shape0-dev \
                 libxcb-xfixes0-dev
           - os: macos-latest
-            artifact_name: waterfall-macos-aarch64
+            artifact_name: hfsdr-macos-aarch64
             archive: tar.gz
             features: gui
             airspy: true
-            install: brew install airspyhf
+            install: |
+              brew install airspyhf pkg-config
+              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
-            artifact_name: waterfall-windows-x86_64-kiwi
+            artifact_name: hfsdr-windows-x86_64-kiwi
             archive: zip
             features: gui
             airspy: false
@@ -70,19 +73,19 @@ jobs:
         if: matrix.archive == 'tar.gz'
         run: |
           mkdir -p dist
-          cp target/release/waterfall dist/
+          cp target/release/hfsdr dist/
           cp README.md dist/
           tar -czf "${{ matrix.artifact_name }}.tar.gz" -C dist .
         shell: bash
 
       - name: Package (Windows)
         if: matrix.archive == 'zip'
+        shell: pwsh
         run: |
-          mkdir dist
-          cp target/release/waterfall.exe dist/
-          cp README.md dist/
-          powershell Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact_name }}.zip"
-        shell: bash
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/hfsdr.exe dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
@@ -90,8 +93,8 @@ jobs:
           files: ${{ matrix.artifact_name }}.${{ matrix.archive }}
           generate_release_notes: true
 
-  build-hfsdr-linux:
-    name: hfsdr-linux-x86_64 (Airspy probe)
+  build-airspy-probe-linux:
+    name: airspy-probe-linux-x86_64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,15 +103,15 @@ jobs:
       - name: Install libairspyhf
         run: sudo apt-get update && sudo apt-get install -y libairspyhf-dev
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --bin airspy-probe
       - name: Package
         run: |
           mkdir -p dist
-          cp target/release/hfsdr dist/
+          cp target/release/airspy-probe dist/
           cp README.md dist/
-          tar -czf hfsdr-linux-x86_64.tar.gz -C dist .
+          tar -czf airspy-probe-linux-x86_64.tar.gz -C dist .
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: hfsdr-linux-x86_64.tar.gz
+          files: airspy-probe-linux-x86_64.tar.gz
           generate_release_notes: true

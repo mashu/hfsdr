@@ -1,7 +1,5 @@
-//! Demo driver for the hfsdr core. With an Airspy HF+ attached it opens the
-//! device, lists sample rates, tunes to 40 m CW, streams for one second, and
-//! reports throughput and dropped samples. With no hardware it still exercises
-//! and links the full FFI path.
+//! Airspy HF+ link probe. Opens the device when present, streams briefly, and
+//! reports throughput. Useful for verifying libairspyhf is installed.
 
 use hfsdr::{AirspyHf, IqSource};
 use std::time::{Duration, Instant};

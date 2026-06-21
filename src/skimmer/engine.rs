@@ -15,10 +15,11 @@ use std::time::{Duration, Instant};
 
 use crate::source::Complex32;
 
-use super::adaptive::AdaptiveCwDecoder;
+use super::bigram::BigramCwDecoder;
 use super::decoder::CwDecoder;
 use super::patterns::analyze;
 use super::peaks::detect_peaks;
+use super::scp::MasterScp;
 use super::spots::{SpotKind, SpotStore};
 
 const MAX_TEXT: usize = 64;
@@ -33,6 +34,8 @@ pub struct SkimmerConfig {
     pub channel_timeout: Duration,
     pub spot_max_age: Duration,
     pub source_label: String,
+    /// When true and SCP is loaded, only MASTER.SCP-validated calls become spots.
+    pub require_scp: bool,
 }
 
 impl Default for SkimmerConfig {
@@ -45,6 +48,7 @@ impl Default for SkimmerConfig {
             channel_timeout: Duration::from_secs(8),
             spot_max_age: Duration::from_secs(120),
             source_label: "rx".to_string(),
+            require_scp: true,
         }
     }
 }
@@ -83,7 +87,7 @@ struct DecoderChannel {
     decim_counter: usize,
     filter: ComplexLowpass,
     audio_rate: f32,
-    decoder: AdaptiveCwDecoder,
+    decoder: BigramCwDecoder,
     audio: Vec<f32>,
     text: String,
     last_seen: Instant,
@@ -101,7 +105,7 @@ impl DecoderChannel {
             decim_counter: 0,
             filter: ComplexLowpass::new(audio_rate, 150.0),
             audio_rate,
-            decoder: AdaptiveCwDecoder::new(audio_rate),
+            decoder: BigramCwDecoder::new(audio_rate),
             audio: Vec::new(),
             text: String::new(),
             last_seen: Instant::now(),
@@ -137,6 +141,7 @@ impl DecoderChannel {
 /// Peak-driven bank of CW decoders feeding a spot store.
 pub struct Skimmer {
     config: SkimmerConfig,
+    scp: MasterScp,
     channels: HashMap<i64, DecoderChannel>,
     store: SpotStore,
     center_hz: f64,
@@ -147,6 +152,7 @@ impl Skimmer {
     pub fn new(config: SkimmerConfig) -> Self {
         Self {
             config,
+            scp: MasterScp::discover(),
             channels: HashMap::new(),
             store: SpotStore::new(),
             center_hz: 0.0,
@@ -162,16 +168,59 @@ impl Skimmer {
         self.channels.len()
     }
 
+    pub fn set_config(&mut self, config: SkimmerConfig) {
+        self.config = config;
+    }
+
+    pub fn clear(&mut self) {
+        self.channels.clear();
+        self.store.clear();
+    }
+
+    pub fn scp(&self) -> &MasterScp {
+        &self.scp
+    }
+
+    pub fn reload_scp_from(&mut self, path: &std::path::Path) -> bool {
+        match MasterScp::from_file(path) {
+            Ok(scp) if scp.is_loaded() => {
+                self.scp = scp;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn reload_scp_discover(&mut self) -> bool {
+        let scp = MasterScp::discover();
+        if scp.is_loaded() {
+            self.scp = scp;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(test)]
+    pub fn replace_scp(&mut self, scp: MasterScp) {
+        self.scp = scp;
+    }
+
     fn bucket(&self, offset_hz: f32) -> i64 {
         (offset_hz / self.config.bucket_hz).round() as i64
     }
 
     /// Run one block: `spectrum` (fftshifted dB) finds peaks, `iq` feeds decoders.
+    ///
+    /// `spectrum_rate` is the FFT row's sample rate (may differ from `iq_rate` when zoom-decimated).
+    /// `spectrum_pan_hz` is the mix-down offset applied before that FFT (0 when full-span).
     pub fn process(
         &mut self,
         iq: &[Complex32],
         iq_rate: f32,
         spectrum: &[f32],
+        spectrum_rate: f32,
+        spectrum_pan_hz: f32,
         center_hz: f64,
     ) {
         if iq.is_empty() || iq_rate <= 0.0 {
@@ -185,18 +234,19 @@ impl Skimmer {
 
         let peaks = detect_peaks(
             spectrum,
-            iq_rate,
+            spectrum_rate,
             self.config.min_snr_db,
             self.config.min_separation_bins,
         );
         for p in &peaks {
-            let key = self.bucket(p.offset_hz);
+            let offset_hz = p.offset_hz + spectrum_pan_hz;
+            let key = self.bucket(offset_hz);
             if let Some(ch) = self.channels.get_mut(&key) {
                 ch.last_seen = Instant::now();
                 ch.snr_db = p.snr_db;
             } else if self.channels.len() < self.config.max_channels {
                 self.channels
-                    .insert(key, DecoderChannel::new(p.offset_hz, iq_rate, p.snr_db));
+                    .insert(key, DecoderChannel::new(offset_hz, iq_rate, p.snr_db));
             }
         }
 
@@ -212,7 +262,11 @@ impl Skimmer {
                 let cut = ch.text.len() - MAX_TEXT;
                 ch.text.drain(..cut);
             }
-            if let Some(m) = analyze(&ch.text) {
+            if let Some(m) = analyze(
+                &ch.text,
+                Some(&self.scp),
+                self.config.require_scp && self.scp.is_loaded(),
+            ) {
                 let freq = center + ch.offset_hz as f64;
                 let wpm = ch.decoder.wpm();
                 self.store
@@ -235,6 +289,8 @@ mod tests {
     use super::*;
     use crate::skimmer::morse::encode_char;
     use std::f32::consts::TAU;
+
+    const SAMPLE_SCP: &str = "VER20260202\nOH2BH\n";
 
     fn keyed_iq(text: &str, wpm: f32, rate: f32, offset: f32) -> Vec<Complex32> {
         let dot = (1.2 / wpm * rate) as usize;
@@ -280,10 +336,14 @@ mod tests {
         let offset = 1_000.0;
         let iq = keyed_iq("CQ", 25.0, rate, offset);
         let spectrum = spectrum_with_peak(offset, rate, 2048);
-        let mut sk = Skimmer::new(SkimmerConfig::default());
-        // Feed in chunks so peaks register and decoders run continuously.
+        let scp = MasterScp::from_text(SAMPLE_SCP);
+        let mut sk = Skimmer::new(SkimmerConfig {
+            require_scp: false,
+            ..SkimmerConfig::default()
+        });
+        sk.replace_scp(scp);
         for chunk in iq.chunks(1024) {
-            sk.process(chunk, rate, &spectrum, 7_030_000.0);
+            sk.process(chunk, rate, &spectrum, rate, 0.0, 7_030_000.0);
         }
         assert!(!sk.store().is_empty(), "no spot produced");
     }

@@ -88,7 +88,7 @@ impl FirFilter {
 pub fn design_lowpass(sample_rate: f32, bandwidth_hz: f32, window: WindowKind) -> FirFilter {
     let cutoff = (bandwidth_hz * 0.5).max(10.0);
     let mut num_taps = ((sample_rate / cutoff) * 4.0).round() as usize;
-    num_taps = num_taps.clamp(31, 511);
+    num_taps = num_taps.clamp(31, 2047);
     if num_taps.is_multiple_of(2) {
         num_taps += 1;
     }
@@ -191,8 +191,8 @@ mod tests {
     }
 
     #[test]
-    fn raised_cosine_strong_stopband() {
-        let db = stopband_db(WindowKind::RaisedCosine, 200.0, 600.0);
-        assert!(db < -40.0, "stopband only {db} dB");
+    fn blackman_narrow_rejects_close_adjacent() {
+        let db = stopband_db(WindowKind::Blackman, 100.0, 250.0);
+        assert!(db < -35.0, "250 Hz tone with 100 Hz BW: {db} dB");
     }
 }
