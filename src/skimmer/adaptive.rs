@@ -195,7 +195,7 @@ mod tests {
         let dot = (1.2 / wpm * sample_rate) as usize;
         let mut samples = Vec::new();
         let mut phase = 0.0f32;
-        let mut push = |on: bool, len: usize, phase: &mut f32, out: &mut Vec<f32>| {
+        let push = |on: bool, len: usize, phase: &mut f32, out: &mut Vec<f32>| {
             for _ in 0..len {
                 *phase += TAU * pitch / sample_rate;
                 out.push(if on { phase.sin() } else { 0.0 });

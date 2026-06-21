@@ -61,10 +61,6 @@ impl SkimmerHandle {
         }
     }
 
-    pub fn enabled(&self) -> bool {
-        self.enabled
-    }
-
     pub fn set_enabled(&mut self, on: bool) {
         self.enabled = on;
     }

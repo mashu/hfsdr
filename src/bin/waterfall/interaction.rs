@@ -78,6 +78,7 @@ impl PlotInteraction {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn handle(
         &mut self,
         ui: &mut Ui,

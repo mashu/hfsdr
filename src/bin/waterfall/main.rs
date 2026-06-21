@@ -9,7 +9,9 @@ mod audio;
 mod colormap;
 mod controls;
 mod display_levels;
+mod engine;
 mod interaction;
+mod settings;
 mod skimmer;
 mod smooth;
 mod source;
@@ -20,27 +22,22 @@ use app::WaterfallApp;
 use eframe::egui;
 
 fn main() -> eframe::Result {
-    let (source, iq, sample_rate, center_hz, is_kiwi) = match source::build_source() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("could not start source: {e}");
-            std::process::exit(1);
-        }
-    };
+    // The source is no longer built here: the GUI opens immediately and the
+    // engine thread connects (auto-connecting if CLI args were supplied), so a
+    // missing or slow front end never blocks or crashes the app.
+    let autoconnect = source::request_from_args();
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1580.0, 960.0])
-            .with_min_inner_size([1420.0, 900.0])
+            .with_min_inner_size([1100.0, 720.0])
             .with_title("hfsdr"),
         ..Default::default()
     };
     eframe::run_native(
         "hfsdr",
         options,
-        Box::new(move |_cc| {
-            Ok(Box::new(WaterfallApp::new(source, iq, sample_rate, center_hz, is_kiwi)))
-        }),
+        Box::new(move |_cc| Ok(Box::new(WaterfallApp::new(autoconnect)))),
     )
 }

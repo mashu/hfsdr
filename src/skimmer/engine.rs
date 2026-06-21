@@ -240,7 +240,7 @@ mod tests {
         let dot = (1.2 / wpm * rate) as usize;
         let mut out = Vec::new();
         let mut phase = 0.0f32;
-        let mut push = |on: bool, len: usize, phase: &mut f32, out: &mut Vec<Complex32>| {
+        let push = |on: bool, len: usize, phase: &mut f32, out: &mut Vec<Complex32>| {
             for _ in 0..len {
                 *phase += TAU * offset / rate;
                 let (s, c) = phase.sin_cos();
@@ -285,6 +285,6 @@ mod tests {
         for chunk in iq.chunks(1024) {
             sk.process(chunk, rate, &spectrum, 7_030_000.0);
         }
-        assert!(sk.store().len() >= 1, "no spot produced");
+        assert!(!sk.store().is_empty(), "no spot produced");
     }
 }

@@ -117,13 +117,11 @@ pub fn push_iq_samples(iq: &[u8], prod: &mut Producer<Complex32>, dropped: &Atom
     if to_write > 0 {
         if let Ok(mut chunk) = prod.write_chunk_uninit(to_write) {
             let (first, second) = chunk.as_mut_slices();
-            let mut pair_idx = 0;
-            for slot in first.iter_mut().chain(second.iter_mut()) {
+            for (pair_idx, slot) in first.iter_mut().chain(second.iter_mut()).enumerate() {
                 let base = pair_idx * 4;
                 let i = i16::from_be_bytes([iq[base], iq[base + 1]]) as f32 / 32768.0;
                 let q = i16::from_be_bytes([iq[base + 2], iq[base + 3]]) as f32 / 32768.0;
                 slot.write(Complex32::new(i, q));
-                pair_idx += 1;
             }
             // SAFETY: every slot in the chunk was initialized above.
             unsafe { chunk.commit_all() };

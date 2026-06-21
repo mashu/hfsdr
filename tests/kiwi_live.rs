@@ -21,7 +21,7 @@ fn kiwi_receives_iq_samples() {
     let mut got = 0usize;
     for _ in 0..80 {
         thread::sleep(Duration::from_millis(100));
-        while let Ok(_) = iq.pop() {
+        while iq.pop().is_ok() {
             got += 1;
         }
         if got > 512 {

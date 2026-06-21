@@ -39,6 +39,7 @@ pub struct CwChannel {
     snr_peak: f32,
     snr_floor: f32,
     last_iq_rate: f32,
+    last_decimation: u32,
     last_bandwidth: f32,
     last_window: WindowKind,
 }
@@ -62,6 +63,7 @@ impl CwChannel {
             snr_peak: 1e-6,
             snr_floor: 1e-6,
             last_iq_rate: iq_sample_rate,
+            last_decimation: 0,
             last_bandwidth: 200.0,
             last_window: WindowKind::Gaussian,
         }
@@ -187,14 +189,19 @@ impl CwChannel {
     }
 
     fn sync_chain(&mut self, iq_rate: f32, settings: &CwChannelSettings) {
-        if iq_rate != self.last_iq_rate {
-            self.decimator = Decimator::for_sample_rate(iq_rate);
+        if iq_rate != self.last_iq_rate || settings.decimation != self.last_decimation {
+            self.decimator = if settings.decimation == 0 {
+                Decimator::for_sample_rate(iq_rate)
+            } else {
+                Decimator::with_factor(iq_rate, settings.decimation as usize)
+            };
             self.shift_nco.reset();
             self.detector.reset_state();
             for notch in &mut self.notches {
                 notch.reset_state();
             }
             self.last_iq_rate = iq_rate;
+            self.last_decimation = settings.decimation;
             self.last_bandwidth = 0.0;
         }
 

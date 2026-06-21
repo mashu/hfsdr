@@ -16,7 +16,12 @@ pub struct Decimator {
 
 impl Decimator {
     pub fn for_sample_rate(input_rate: f32) -> Self {
-        let factor = decimation_factor(input_rate);
+        Self::with_factor(input_rate, decimation_factor(input_rate))
+    }
+
+    /// Build a decimator with an explicit integer factor (clamped to 1..=256).
+    pub fn with_factor(input_rate: f32, factor: usize) -> Self {
+        let factor = factor.clamp(1, 256);
         let cutoff = (input_rate / factor as f32 * 0.45).max(100.0);
         let fir = design_gaussian_lowpass(input_rate, cutoff * 2.0);
         Self {

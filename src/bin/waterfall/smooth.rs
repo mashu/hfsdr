@@ -30,5 +30,5 @@ pub fn spatial_smooth(row: &[f32]) -> Vec<f32> {
             + SPATIAL[3] * row[i + 1]
             + SPATIAL[4] * row[i + 2];
     }
-    return out;
+    out
 }

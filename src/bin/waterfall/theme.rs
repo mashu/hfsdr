@@ -90,6 +90,34 @@ pub fn badge(ui: &mut Ui, text: &str, color: Color32) {
     });
 }
 
+/// A compact on/off pill toggle (a nicer checkbox). Returns true if toggled.
+pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> bool {
+    let desired = eframe::egui::vec2(34.0, 18.0);
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let (rect, resp) = ui.allocate_exact_size(desired, eframe::egui::Sense::click());
+        if resp.clicked() {
+            *on = !*on;
+            changed = true;
+        }
+        let how_on = ui.ctx().animate_bool(resp.id, *on);
+        let track = if *on { ACCENT_DIM } else { Color32::from_rgb(48, 54, 70) };
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(9),
+            track,
+            Stroke::NONE,
+            eframe::egui::StrokeKind::Inside,
+        );
+        let cx = eframe::egui::lerp((rect.left() + 9.0)..=(rect.right() - 9.0), how_on);
+        let knob = if *on { ACCENT } else { MUTED };
+        ui.painter()
+            .circle(eframe::egui::pos2(cx, rect.center().y), 7.0, knob, Stroke::NONE);
+        ui.label(label);
+    });
+    changed
+}
+
 pub fn collapsible_section(
     ui: &mut Ui,
     id: &str,

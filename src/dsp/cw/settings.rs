@@ -128,6 +128,8 @@ pub struct CwChannelSettings {
     pub bfo_hz: f32,
     pub passband_hz: f32,
     pub window: WindowKind,
+    /// Integer decimation factor override; `0` auto-selects from the IQ rate.
+    pub decimation: u32,
     pub noise_blanker: NoiseBlankerSettings,
     pub notches: [NotchSpec; MAX_NOTCHES],
     pub auto_notch: AutoNotchSettings,
@@ -144,6 +146,7 @@ impl Default for CwChannelSettings {
             bfo_hz: 650.0,
             passband_hz: 200.0,
             window: WindowKind::Gaussian,
+            decimation: 0,
             noise_blanker: NoiseBlankerSettings::default(),
             notches: [NotchSpec::default(); MAX_NOTCHES],
             auto_notch: AutoNotchSettings::default(),

@@ -72,10 +72,8 @@ fn handle_msg_text(
         }
     }
 
-    if has_sample_rate(text) && !*iq_configured {
-        if configure_iq(ws, rx_setup) {
-            *iq_configured = true;
-        }
+    if has_sample_rate(text) && !*iq_configured && configure_iq(ws, rx_setup) {
+        *iq_configured = true;
     }
     if let Some(rate) = audio_rate(text) {
         let _ = send_text(ws, &format!("SET AR OK in={rate} out=44100"));
@@ -92,6 +90,7 @@ fn flush_pending(ws: &mut Ws, pending: &mut Vec<String>) {
 
 /// Owns the socket for the life of the stream: pumps outgoing commands, sends
 /// keepalives, and parses inbound SND frames into the ring.
+#[allow(clippy::too_many_arguments)]
 pub fn reader_loop(
     mut ws: Ws,
     mut prod: Producer<Complex32>,
