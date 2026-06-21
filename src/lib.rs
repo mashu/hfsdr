@@ -3,10 +3,11 @@
 //! Core of an HF SDR / CW client. Every front end implements [`IqSource`], so
 //! the DSP, decoder, and UI layers never know which radio they are talking to.
 //!
-//! - [`airspyhf::AirspyHf`] — direct libairspyhf binding (no SoapySDR layer).
+//! - [`airspyhf::AirspyHf`] — direct libairspyhf binding (no SoapySDR layer), `airspy` feature.
 //! - [`kiwi::KiwiSource`] — KiwiSDR over WebSocket, same trait, ~12 kHz IQ.
 //! - [`dsp::SpectrumAnalyzer`] — windowed complex FFT for the panadapter.
 
+#[cfg(feature = "airspy")]
 pub mod airspyhf;
 pub mod cty;
 pub mod dsp;
@@ -16,6 +17,7 @@ pub mod multisource;
 pub mod skimmer;
 pub mod source;
 
+#[cfg(feature = "airspy")]
 pub use airspyhf::AirspyHf;
 pub use cty::{Continent, ContinentResolver};
 pub use history::{Annotation, RowFold, SlowWaterfall};

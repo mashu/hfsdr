@@ -7,12 +7,15 @@
 
 use std::fmt;
 
-use hfsdr::{AirspyHf, Complex32, Consumer, IqSource, KiwiSource, KIWI_IQ_HALF_HZ};
+use hfsdr::{Complex32, Consumer, IqSource, KiwiSource, KIWI_IQ_HALF_HZ};
+#[cfg(feature = "airspy")]
+use hfsdr::AirspyHf;
 use serde::{Deserialize, Serialize};
 
 /// Which front end to bring up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
+    #[cfg(feature = "airspy")]
     Airspy,
     Kiwi,
 }
@@ -20,6 +23,7 @@ pub enum SourceKind {
 impl fmt::Display for SourceKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "airspy")]
             SourceKind::Airspy => write!(f, "Airspy HF+"),
             SourceKind::Kiwi => write!(f, "KiwiSDR"),
         }
@@ -55,6 +59,7 @@ impl ConnectRequest {
     /// A short label for the recent-hosts list / status bar.
     pub fn label(&self) -> String {
         match self.kind {
+            #[cfg(feature = "airspy")]
             SourceKind::Airspy => format!("Airspy @ {:.3} MHz", self.center_hz / 1e6),
             SourceKind::Kiwi => format!("{}:{}", self.host, self.port),
         }
@@ -75,6 +80,7 @@ pub struct Connection {
 pub fn connect(req: &ConnectRequest) -> Result<Connection, String> {
     match req.kind {
         SourceKind::Kiwi => connect_kiwi(req),
+        #[cfg(feature = "airspy")]
         SourceKind::Airspy => connect_airspy(req),
     }
 }
@@ -97,6 +103,7 @@ fn connect_kiwi(req: &ConnectRequest) -> Result<Connection, String> {
     })
 }
 
+#[cfg(feature = "airspy")]
 fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
     let mut src = AirspyHf::open().map_err(|e| e.to_string())?;
     let sr = if req.sample_rate != 0 {
@@ -120,7 +127,7 @@ fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
 /// Parse CLI args into a connect request for auto-connect on launch.
 ///
 /// `waterfall kiwi <host> [port] [center_hz]` or
-/// `waterfall airspy [sample_rate_hz] [center_hz]`.
+/// `waterfall airspy [sample_rate_hz] [center_hz]` (requires `airspy` feature).
 pub fn request_from_args() -> Option<ConnectRequest> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -136,6 +143,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 sample_rate: 0,
             })
         }
+        #[cfg(feature = "airspy")]
         Some("airspy") => {
             let sample_rate = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             let center_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(7_030_000.0);
@@ -148,5 +156,34 @@ pub fn request_from_args() -> Option<ConnectRequest> {
             })
         }
         _ => None,
+    }
+}
+
+/// Deserialize a persisted [`SourceKind`]; unknown variants fall back to Kiwi.
+impl<'de> Deserialize<'de> for SourceKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            #[cfg(feature = "airspy")]
+            "Airspy" => SourceKind::Airspy,
+            _ => SourceKind::Kiwi,
+        })
+    }
+}
+
+impl Serialize for SourceKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let name = match self {
+            #[cfg(feature = "airspy")]
+            SourceKind::Airspy => "Airspy",
+            SourceKind::Kiwi => "Kiwi",
+        };
+        serializer.serialize_str(name)
     }
 }

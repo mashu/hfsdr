@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+# eframe 0.34 / wgpu pull edition-2024 crates; keep CI and releases on a recent stable.
+min-version = "1.85"

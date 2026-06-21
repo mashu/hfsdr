@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: waterfall-linux-x86_64
+            archive: tar.gz
+            features: gui
+            airspy: true
+            install: |
+              sudo apt-get update
+              sudo apt-get install -y \
+                libairspyhf-dev \
+                libasound2-dev \
+                libxkbcommon-dev \
+                libwayland-dev \
+                libxcb-render0-dev \
+                libxcb-shape0-dev \
+                libxcb-xfixes0-dev
+          - os: macos-latest
+            artifact_name: waterfall-macos-aarch64
+            archive: tar.gz
+            features: gui
+            airspy: true
+            install: brew install airspyhf
+          - os: windows-latest
+            artifact_name: waterfall-windows-x86_64-kiwi
+            archive: zip
+            features: gui
+            airspy: false
+            install: echo "Kiwi-only build"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: ${{ matrix.install }}
+        shell: bash
+
+      - name: Build release binary
+        run: |
+          if [ "${{ matrix.airspy }}" = "true" ]; then
+            cargo build --release --features "${{ matrix.features }}"
+          else
+            cargo build --release --no-default-features --features "${{ matrix.features }}"
+          fi
+        shell: bash
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          cp target/release/waterfall dist/
+          cp README.md dist/
+          tar -czf "${{ matrix.artifact_name }}.tar.gz" -C dist .
+        shell: bash
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        run: |
+          mkdir dist
+          cp target/release/waterfall.exe dist/
+          cp README.md dist/
+          powershell Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact_name }}.zip"
+        shell: bash
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_name }}.${{ matrix.archive }}
+          generate_release_notes: true
+
+  build-hfsdr-linux:
+    name: hfsdr-linux-x86_64 (Airspy probe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libairspyhf
+        run: sudo apt-get update && sudo apt-get install -y libairspyhf-dev
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/hfsdr dist/
+          cp README.md dist/
+          tar -czf hfsdr-linux-x86_64.tar.gz -C dist .
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: hfsdr-linux-x86_64.tar.gz
+          generate_release_notes: true

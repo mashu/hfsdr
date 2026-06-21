@@ -780,6 +780,7 @@ impl WaterfallApp {
                         ui.label("Source");
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut self.form_kind, SourceKind::Kiwi, "KiwiSDR");
+                            #[cfg(feature = "airspy")]
                             ui.selectable_value(&mut self.form_kind, SourceKind::Airspy, "Airspy");
                         });
                         ui.end_row();
@@ -815,8 +816,16 @@ impl WaterfallApp {
                     ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
                 );
                 ui.horizontal(|ui| {
-                    let can_connect =
-                        self.form_kind == SourceKind::Airspy || !self.form_host.trim().is_empty();
+                    let can_connect = {
+                        #[cfg(feature = "airspy")]
+                        {
+                            self.form_kind == SourceKind::Airspy || !self.form_host.trim().is_empty()
+                        }
+                        #[cfg(not(feature = "airspy"))]
+                        {
+                            !self.form_host.trim().is_empty()
+                        }
+                    };
                     if ui
                         .add_enabled(can_connect && !connecting, egui::Button::new("Connect"))
                         .clicked()

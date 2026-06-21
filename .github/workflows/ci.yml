@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-lib:
+    name: Test library (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            features: airspy
+            install: |
+              sudo apt-get update
+              sudo apt-get install -y libairspyhf-dev
+          - os: macos-latest
+            features: airspy
+            install: brew install airspyhf
+          - os: windows-latest
+            features: ""
+            install: echo "Kiwi-only (no libairspyhf on Windows runner)"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: ${{ matrix.install }}
+
+      - name: cargo test
+        run: |
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo test --features "${{ matrix.features }}"
+          else
+            cargo test --no-default-features
+          fi
+        shell: bash
+
+  build-gui:
+    name: Build waterfall (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+            features: gui
+            install: |
+              sudo apt-get update
+              sudo apt-get install -y \
+                libairspyhf-dev \
+                libasound2-dev \
+                libxkbcommon-dev \
+                libwayland-dev \
+                libxcb-render0-dev \
+                libxcb-shape0-dev \
+                libxcb-xfixes0-dev
+          - os: macos-latest
+            label: macos-universal
+            features: gui
+            install: brew install airspyhf
+          - os: windows-latest
+            label: windows-x86_64-kiwi
+            features: gui
+            install: echo "Kiwi-only GUI build (no Airspy FFI on Windows CI)"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: ${{ matrix.install }}
+        shell: bash
+
+      - name: cargo build --release
+        run: |
+          case "${{ matrix.label }}" in
+            windows-*)
+              cargo build --release --no-default-features --features "${{ matrix.features }}"
+              ;;
+            *)
+              cargo build --release --features "${{ matrix.features }}"
+              ;;
+          esac
+        shell: bash
+
+      - name: Smoke-check binary exists
+        run: |
+          case "${{ matrix.label }}" in
+            windows-*)
+              test -f target/release/waterfall.exe
+              ;;
+            *)
+              test -f target/release/waterfall
+              ;;
+          esac
+        shell: bash

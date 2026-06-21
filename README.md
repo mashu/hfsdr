@@ -31,7 +31,7 @@ tests/
 ## Build
 
 The library, the Airspy source, the Kiwi source, and the DSP build on any recent
-stable toolchain:
+stable toolchain (Rust **>= 1.85**, see `rust-toolchain.toml`):
 
 ```sh
 sudo apt install libairspyhf-dev          # Airspy FFI links against this
@@ -40,12 +40,20 @@ cargo run --release --bin hfsdr           # Airspy probe/demo
 cargo test                              # unit + integration tests
 ```
 
+The `airspy` feature (on by default) links `libairspyhf`. For Kiwi-only builds
+without the native library (e.g. Windows CI artifacts):
+
+```sh
+cargo build --release --no-default-features --features gui --bin waterfall
+```
+
 The GUI is behind the `gui` feature (pulls eframe + wgpu + winit):
 
 ```sh
 # Linux build deps for winit/wgpu:
 sudo apt install libxkbcommon-dev libwayland-dev \
-                 libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+                 libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+                 libasound2-dev
 
 cargo run --release --features gui --bin waterfall airspy
 cargo run --release --features gui --bin waterfall airspy 768000 7030000
@@ -59,6 +67,55 @@ feature needs **Rust >= 1.85** (`rustup update stable`). The non-GUI crates buil
 on older toolchains (verified on 1.75). This is the one reason the GUI was not
 compiled in the environment it was authored in — only an old packaged Cargo was
 available there.
+
+## GitHub deployment & CI
+
+Remote: `git@github.com:mashu/hfsdr.git`
+
+### Supported platforms
+
+| Platform | `waterfall` GUI | Airspy HF+ | KiwiSDR | Notes |
+|----------|-----------------|------------|---------|-------|
+| **Linux x86_64** | Yes | Yes | Yes | Primary target; `libairspyhf-dev` + ALSA/X11/Wayland dev packages |
+| **macOS** (Apple Silicon / Intel) | Yes | Yes | Yes | `brew install airspyhf` |
+| **Windows x86_64** | Yes | No* | Yes | CI/release builds are **Kiwi-only** (no `libairspyhf` on the runner) |
+| **Android** | No | No | No | Desktop `eframe`/`wgpu` app; needs a separate mobile UI |
+
+\* Windows can use Airspy if you build `libairspyhf` locally and link with
+`RUSTFLAGS=-L native=...`; not automated in CI yet.
+
+### CI (`.github/workflows/ci.yml`)
+
+On every push/PR to `main`/`master`:
+
+- **test-lib** — `cargo test` on Linux/macOS (with Airspy) and Windows (Kiwi-only)
+- **build-gui** — release build of `waterfall` on all three OS runners
+
+### Release binaries (`.github/workflows/release.yml`)
+
+Push a version tag to publish GitHub Release assets:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Artifacts: `waterfall-linux-x86_64`, `waterfall-macos-aarch64`,
+`waterfall-windows-x86_64-kiwi`, and `hfsdr-linux-x86_64` (Airspy CLI probe).
+
+**Runtime deps:** Linux/macOS Airspy builds need `libairspyhf` installed at
+runtime; Linux also needs ALSA/PulseAudio for audio.
+
+### First-time push to GitHub
+
+```sh
+git remote add origin git@github.com:mashu/hfsdr.git   # if not already set
+git add Cargo.lock .github/ rust-toolchain.toml
+git commit -m "Add cross-platform CI and release workflows"
+git push -u origin main
+```
+
+Commit `Cargo.lock` so CI builds are reproducible.
 
 ## What is verified vs. what to watch locally
 
