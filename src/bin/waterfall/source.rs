@@ -1,6 +1,6 @@
 //! CLI parsing and source construction for the waterfall binary.
 
-use hfsdr::{AirspyHf, Complex32, Consumer, IqSource, KiwiSource};
+use hfsdr::{AirspyHf, Complex32, Consumer, IqSource, KiwiSource, KIWI_IQ_HALF_HZ};
 
 /// Build the requested source, tune it, and start streaming.
 pub fn build_source() -> Result<(Box<dyn IqSource>, Consumer<Complex32>, f32, f64, bool), String> {
@@ -22,7 +22,8 @@ fn build_kiwi(
         .get(4)
         .and_then(|s| s.parse().ok())
         .unwrap_or(7_030_000.0);
-    let mut src = KiwiSource::new(host, port).with_passband(-500, 500);
+    let mut src = KiwiSource::new(host, port)
+        .with_passband(-KIWI_IQ_HALF_HZ, KIWI_IQ_HALF_HZ);
     src.tune(center).map_err(|e| e.to_string())?;
     let sr = src.sample_rate() as f32;
     let iq = src.start().map_err(|e| e.to_string())?;

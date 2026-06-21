@@ -96,6 +96,16 @@ pub trait IqSource {
         let _ = on;
         Ok(())
     }
+
+    /// Front end finished handshake and is delivering IQ (KiwiSDR).
+    fn link_ready(&self) -> bool {
+        true
+    }
+
+    /// Human-readable connection error from the remote front end.
+    fn link_error(&self) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]

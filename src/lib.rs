@@ -13,6 +13,7 @@ pub mod kiwi;
 pub mod source;
 
 pub use airspyhf::AirspyHf;
-pub use dsp::{extract_passband_view, iq_to_audio, SpectrumAnalyzer};
+pub use dsp::{extract_passband_view, extract_view_window, DemodSettings, iq_to_audio, IqAudioDemod, SpectrumAnalyzer};
+pub use kiwi::protocol::KIWI_IQ_HALF_HZ;
 pub use kiwi::KiwiSource;
 pub use source::{Complex32, Consumer, IqSource, Result, SourceError};

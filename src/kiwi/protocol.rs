@@ -7,11 +7,24 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 /// Nominal Kiwi IQ sample rate (the server reports ~12001 Hz).
 pub const KIWI_IQ_RATE: u32 = 12_000;
 
-/// Pull `audio_rate=<n>` out of a server MSG line, if present.
+/// Default Kiwi IQ passband half-width (Hz) — full ~10 kHz panadapter view.
+pub const KIWI_IQ_HALF_HZ: i32 = 5_000;
+
+/// Pull `audio_rate=<n>` out of a Kiwi status line (float or integer Hz).
 pub fn audio_rate(text: &str) -> Option<u32> {
-    text.split_whitespace()
-        .find_map(|tok| tok.strip_prefix("audio_rate="))
-        .and_then(|v| v.parse::<u32>().ok())
+    parse_kiwi_hz_param(text, "audio_rate=")
+}
+
+fn parse_kiwi_hz_param(text: &str, key: &str) -> Option<u32> {
+    kiwi_msg_params(text)
+        .split_whitespace()
+        .find_map(|tok| {
+            tok.strip_prefix(key).and_then(|v| {
+                v.parse::<f32>()
+                    .ok()
+                    .map(|hz| hz.round().clamp(1.0, 2_000_000.0) as u32)
+            })
+        })
 }
 
 /// Text payload of a binary `MSG` WebSocket frame (`MSG` tag + 1 flag byte).
@@ -20,6 +33,16 @@ pub fn msg_body_text(buf: &[u8]) -> Option<&str> {
         return None;
     }
     std::str::from_utf8(&buf[4..]).ok()
+}
+
+/// Strip the optional `MSG ` prefix Kiwi puts on status lines.
+pub fn kiwi_msg_params(text: &str) -> &str {
+    text.strip_prefix("MSG ").unwrap_or(text).trim()
+}
+
+/// Whether a Kiwi status line announces the IQ sample rate.
+pub fn has_sample_rate(text: &str) -> bool {
+    kiwi_msg_params(text).contains("sample_rate=")
 }
 
 /// Commands sent after the server reports `sample_rate=…` (kiwiclient handshake).
@@ -33,16 +56,17 @@ pub struct KiwiRxSetup {
 
 impl KiwiRxSetup {
     pub fn setup_commands(&self) -> Vec<String> {
+        // Match kiwiclient order after `sample_rate=…`: squelch, gen, mod=iq, keepalive.
         vec![
+            "SET squelch=0 max=0".to_string(),
+            "SET genattn=0".to_string(),
+            "SET gen=0 mix=-1".to_string(),
             mod_iq_command(self.low_cut, self.high_cut, self.freq_hz),
             format!(
                 "SET agc={} hang=0 thresh=-100 slope=6 decay=1000 manGain=50",
                 self.agc_on as u8
             ),
-            "SET squelch=0 max=0".to_string(),
             format!("SET compression={}", self.compression as u8),
-            "SET lms_autonotch=0".to_string(),
-            "SET gen=0 mix=-1".to_string(),
             "SET keepalive".to_string(),
         ]
     }
@@ -149,6 +173,22 @@ mod tests {
     }
 
     #[test]
+    fn has_sample_rate_accepts_msg_prefix() {
+        assert!(has_sample_rate("MSG sample_rate=12000"));
+        assert!(has_sample_rate("sample_rate=12000"));
+        assert!(!has_sample_rate("MSG squelch=0"));
+    }
+
+    #[test]
+    fn audio_rate_parses_float_sample_rate() {
+        assert_eq!(
+            parse_kiwi_hz_param("sample_rate=11998.914787", "sample_rate="),
+            Some(11_999)
+        );
+        assert_eq!(audio_rate("audio_rate=11998.914787"), Some(11_999));
+    }
+
+    #[test]
     fn rx_setup_includes_compression_off_by_default() {
         let setup = KiwiRxSetup {
             low_cut: -500,
@@ -160,6 +200,7 @@ mod tests {
         let cmds = setup.setup_commands();
         assert!(cmds.iter().any(|c| c.contains("mod=iq")));
         assert!(cmds.iter().any(|c| c == "SET compression=0"));
+        assert!(cmds.iter().any(|c| c.starts_with("SET squelch")));
     }
 
     #[test]

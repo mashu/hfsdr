@@ -2,7 +2,7 @@
 //! ~12 kHz baseband IQ through the same [`IqSource`] interface as the Airspy.
 //! Wire format reverse-checked against the reference client (jks-prv/kiwiclient).
 
-mod protocol;
+pub mod protocol;
 mod reader;
 
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
@@ -12,7 +12,7 @@ use rtrb::RingBuffer;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tungstenite::client::IntoClientRequest;
@@ -34,11 +34,27 @@ pub struct KiwiSource {
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     rssi_cdbm: Arc<AtomicI32>,
+    iq_streaming: Arc<AtomicBool>,
+    link_error: Arc<Mutex<Option<String>>>,
     cmd_tx: Option<Sender<String>>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl KiwiSource {
+    /// IQ stream is configured and SND frames are arriving.
+    pub fn iq_ready(&self) -> bool {
+        self.iq_streaming.load(Ordering::Relaxed)
+    }
+
+    /// Reader thread is still running.
+    pub fn link_alive(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
+    pub fn link_error(&self) -> Option<String> {
+        self.link_error.lock().ok().and_then(|e| e.clone())
+    }
+
     /// Create a source for `ws://host:port` (the standard Kiwi port is 8073).
     pub fn new(host: impl Into<String>, port: u16) -> Self {
         Self {
@@ -53,6 +69,8 @@ impl KiwiSource {
             stop: Arc::new(AtomicBool::new(false)),
             dropped: Arc::new(AtomicU64::new(0)),
             rssi_cdbm: Arc::new(AtomicI32::new(0)),
+            iq_streaming: Arc::new(AtomicBool::new(false)),
+            link_error: Arc::new(Mutex::new(None)),
             cmd_tx: None,
             handle: None,
         }
@@ -186,10 +204,22 @@ impl IqSource for KiwiSource {
 
         let dropped = Arc::clone(&self.dropped);
         let rssi = Arc::clone(&self.rssi_cdbm);
+        let iq_streaming = Arc::clone(&self.iq_streaming);
+        let link_error = Arc::clone(&self.link_error);
         let stop_thread = Arc::clone(&stop);
         let rx_setup = self.rx_setup();
         let handle = thread::spawn(move || {
-            reader_loop(ws, prod, cmd_rx, stop_thread, dropped, rssi, rx_setup);
+            reader_loop(
+                ws,
+                prod,
+                cmd_rx,
+                stop_thread,
+                dropped,
+                rssi,
+                iq_streaming,
+                link_error,
+                rx_setup,
+            );
         });
 
         self.stop = stop;
@@ -247,6 +277,14 @@ impl IqSource for KiwiSource {
             let _ = tx.send(cmd);
         }
         Ok(())
+    }
+
+    fn link_ready(&self) -> bool {
+        self.iq_ready()
+    }
+
+    fn link_error(&self) -> Option<String> {
+        KiwiSource::link_error(self)
     }
 }
 

@@ -7,7 +7,13 @@
 mod app;
 mod audio;
 mod colormap;
+mod controls;
+mod display_levels;
+mod interaction;
+mod smooth;
 mod source;
+mod theme;
+mod widgets;
 
 use app::WaterfallApp;
 use eframe::egui;
@@ -23,11 +29,14 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 720.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1580.0, 960.0])
+            .with_min_inner_size([1420.0, 900.0])
+            .with_title("hfsdr"),
         ..Default::default()
     };
     eframe::run_native(
-        "hfsdr waterfall",
+        "hfsdr",
         options,
         Box::new(move |_cc| {
             Ok(Box::new(WaterfallApp::new(source, iq, sample_rate, center_hz, is_kiwi)))
