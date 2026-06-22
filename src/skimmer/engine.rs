@@ -360,7 +360,11 @@ mod tests {
         let spectrum = spectrum_with_peak(offset, rate, 2048);
         let scp = MasterScp::from_text(SAMPLE_SCP);
         let mut sk = Skimmer::new(SkimmerConfig {
+            decoder: SkimmerDecoderKind::Bigram,
             require_scp: false,
+            min_snr_db: 10.0,
+            min_decode_snr_db: 10.0,
+            decode_gate_ms: 25.0,
             ..SkimmerConfig::default()
         });
         sk.replace_scp(scp);

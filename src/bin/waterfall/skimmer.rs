@@ -5,7 +5,7 @@
 //! latest spectrum row to a worker thread. The worker runs the [`Skimmer`]
 //! decoder bank off the UI thread and publishes a sorted spot snapshot back.
 
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -58,9 +58,102 @@ fn publish_scp(skimmer: &Skimmer, status: &Arc<Mutex<ScpStatus>>) {
     }
 }
 
+fn process_frame(
+    skimmer: &mut Skimmer,
+    input: &SkimmerInput,
+    config_thread: &Arc<Mutex<SkimmerConfig>>,
+    spots_thread: &Arc<Mutex<Vec<Spot>>>,
+    channels_thread: &Arc<Mutex<usize>>,
+    scp_thread: &Arc<Mutex<ScpStatus>>,
+) {
+    if let Ok(cfg) = config_thread.lock() {
+        skimmer.set_config(cfg.clone());
+    }
+    skimmer.process(
+        &input.iq,
+        input.iq_rate,
+        &input.spectrum,
+        input.spectrum_rate,
+        input.spectrum_pan_hz,
+        input.center_hz,
+    );
+    if let Ok(mut guard) = spots_thread.lock() {
+        *guard = skimmer.store().sorted(SpotSort::SnrDesc);
+    }
+    if let Ok(mut guard) = channels_thread.lock() {
+        *guard = skimmer.active_channels();
+    }
+    publish_scp(skimmer, scp_thread);
+}
+
+fn coalesce_frame(rx: &Receiver<SkimmerMsg>, mut input: SkimmerInput) -> (SkimmerInput, Vec<SkimmerMsg>) {
+    let mut deferred = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(SkimmerMsg::Frame(next)) => input = next,
+            Ok(other) => deferred.push(other),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => break,
+        }
+    }
+    (input, deferred)
+}
+
+fn dispatch_msg(
+    rx: &Receiver<SkimmerMsg>,
+    msg: SkimmerMsg,
+    skimmer: &mut Skimmer,
+    config_thread: &Arc<Mutex<SkimmerConfig>>,
+    spots_thread: &Arc<Mutex<Vec<Spot>>>,
+    channels_thread: &Arc<Mutex<usize>>,
+    scp_thread: &Arc<Mutex<ScpStatus>>,
+) {
+    match msg {
+        SkimmerMsg::Clear => {
+            skimmer.clear();
+            if let Ok(mut guard) = spots_thread.lock() {
+                guard.clear();
+            }
+            if let Ok(mut guard) = channels_thread.lock() {
+                *guard = 0;
+            }
+        }
+        SkimmerMsg::ReloadScp => {
+            skimmer.reload_scp_discover();
+            publish_scp(skimmer, scp_thread);
+        }
+        SkimmerMsg::ReloadScpPath(path) => {
+            skimmer.reload_scp_from(&path);
+            publish_scp(skimmer, scp_thread);
+        }
+        SkimmerMsg::Frame(input) => {
+            let (input, deferred) = coalesce_frame(rx, input);
+            process_frame(
+                skimmer,
+                &input,
+                config_thread,
+                spots_thread,
+                channels_thread,
+                scp_thread,
+            );
+            for pending in deferred {
+                dispatch_msg(
+                    rx,
+                    pending,
+                    skimmer,
+                    config_thread,
+                    spots_thread,
+                    channels_thread,
+                    scp_thread,
+                );
+            }
+        }
+    }
+}
+
 impl SkimmerHandle {
     pub fn spawn(label: String) -> Self {
-        let (tx, rx) = sync_channel::<SkimmerMsg>(8);
+        let (tx, rx) = sync_channel::<SkimmerMsg>(32);
         let spots = Arc::new(Mutex::new(Vec::new()));
         let channels = Arc::new(Mutex::new(0usize));
         let scp_status = Arc::new(Mutex::new(ScpStatus::default()));
@@ -80,45 +173,15 @@ impl SkimmerHandle {
                     Skimmer::new(config_thread.lock().map(|g| g.clone()).unwrap_or_default());
                 publish_scp(&skimmer, &scp_thread);
                 while let Ok(msg) = rx.recv() {
-                    match msg {
-                        SkimmerMsg::Clear => {
-                            skimmer.clear();
-                            if let Ok(mut guard) = spots_thread.lock() {
-                                guard.clear();
-                            }
-                            if let Ok(mut guard) = channels_thread.lock() {
-                                *guard = 0;
-                            }
-                        }
-                        SkimmerMsg::ReloadScp => {
-                            skimmer.reload_scp_discover();
-                            publish_scp(&skimmer, &scp_thread);
-                        }
-                        SkimmerMsg::ReloadScpPath(path) => {
-                            skimmer.reload_scp_from(&path);
-                            publish_scp(&skimmer, &scp_thread);
-                        }
-                        SkimmerMsg::Frame(input) => {
-                            if let Ok(cfg) = config_thread.lock() {
-                                skimmer.set_config(cfg.clone());
-                            }
-                            skimmer.process(
-                                &input.iq,
-                                input.iq_rate,
-                                &input.spectrum,
-                                input.spectrum_rate,
-                                input.spectrum_pan_hz,
-                                input.center_hz,
-                            );
-                            if let Ok(mut guard) = spots_thread.lock() {
-                                *guard = skimmer.store().sorted(SpotSort::SnrDesc);
-                            }
-                            if let Ok(mut guard) = channels_thread.lock() {
-                                *guard = skimmer.active_channels();
-                            }
-                            publish_scp(&skimmer, &scp_thread);
-                        }
-                    }
+                    dispatch_msg(
+                        &rx,
+                        msg,
+                        &mut skimmer,
+                        &config_thread,
+                        &spots_thread,
+                        &channels_thread,
+                        &scp_thread,
+                    );
                 }
             })
             .expect("spawn skimmer thread");

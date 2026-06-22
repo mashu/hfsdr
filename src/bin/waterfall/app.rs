@@ -22,7 +22,7 @@ use hfsdr::{
 use crate::audio::AudioOutput;
 use crate::colormap::db_to_colour;
 use crate::controls::{scroll_drag_f64, scroll_slider_f32, scroll_slider_log_f32};
-use crate::display_levels::estimate_levels;
+use crate::display_levels::{estimate_levels, estimate_levels_from_rows};
 use crate::engine::{
     ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
 };
@@ -106,6 +106,7 @@ pub struct WaterfallApp {
     ref_db: f32,
     range_db: f32,
     display_levels_initialized: bool,
+    display_auto_track: bool,
     smooth_alpha: f32,
     waterfall_rows: usize,
     target_fps: u32,
@@ -198,9 +199,10 @@ impl WaterfallApp {
             last_tex_span: 0.0,
             last_tex_pan: 0.0,
             last_tex_row_rate: 0.0,
-            ref_db: -70.0,
-            range_db: 55.0,
+            ref_db: -65.0,
+            range_db: crate::display_levels::DEFAULT_RANGE_DB,
             display_levels_initialized: false,
+            display_auto_track: false,
             smooth_alpha: SMOOTH_ALPHA,
             waterfall_rows: 0,
             target_fps: 30,
@@ -211,7 +213,7 @@ impl WaterfallApp {
             last_audio_device: 0,
             audio_enabled: true,
             volume: 1.0,
-            skimmer_enabled: false,
+            skimmer_enabled: true,
             skimmer: SkimmerConfig::default(),
             skimmer_channels: 0,
             skimmer_spots: Vec::new(),
@@ -368,6 +370,10 @@ impl WaterfallApp {
 
         self.ref_db = s.ref_db;
         self.range_db = s.range_db;
+        self.display_auto_track = s.display_auto_track;
+        if !self.display_auto_track {
+            self.display_levels_initialized = false;
+        }
         self.smooth_alpha = s.smooth_alpha;
         self.target_fps = s.target_fps.clamp(10, 60);
         self.fft_size = s.fft_size.clamp(1024, 65_536);
@@ -439,6 +445,7 @@ impl WaterfallApp {
             agc_rf_on: self.agc_rf_on,
             ref_db: self.ref_db,
             range_db: self.range_db,
+            display_auto_track: self.display_auto_track,
             smooth_alpha: self.smooth_alpha,
             target_fps: self.target_fps,
             fft_size: self.fft_size,
@@ -579,7 +586,7 @@ impl WaterfallApp {
             }
             self.waterfall_rows = self.rows.len();
             self.textures_dirty = true;
-            self.maybe_init_display_levels();
+            self.update_display_levels();
         }
 
         self.apply_pitch_lock();
@@ -643,16 +650,38 @@ impl WaterfallApp {
         }
     }
 
-    fn maybe_init_display_levels(&mut self) {
-        if self.display_levels_initialized {
+    fn update_display_levels(&mut self) {
+        if self.display_levels_initialized && !self.display_auto_track {
             return;
         }
-        let Some((ref_db, range_db)) = estimate_levels(&self.latest) else {
+        let target = self.estimate_display_levels();
+        let Some(target) = target else {
             return;
+        };
+        let (ref_db, range_db) = if self.display_auto_track && self.display_levels_initialized {
+            crate::display_levels::smooth_levels(
+                (self.ref_db, self.range_db),
+                target,
+                0.06,
+            )
+        } else {
+            target
         };
         self.ref_db = ref_db;
         self.range_db = range_db;
+        self.textures_dirty = true;
         self.display_levels_initialized = true;
+    }
+
+    fn estimate_display_levels(&self) -> Option<(f32, f32)> {
+        const ROWS_FOR_ESTIMATE: usize = 24;
+        if self.rows.len() >= 8 {
+            let n = self.rows.len().min(ROWS_FOR_ESTIMATE);
+            let refs: Vec<&[f32]> = self.rows.iter().take(n).map(Vec::as_slice).collect();
+            estimate_levels_from_rows(&refs).or_else(|| estimate_levels(&self.latest))
+        } else {
+            estimate_levels(&self.latest)
+        }
     }
 
     fn spectrum_view(&self) -> SpectrumViewMapping {
@@ -1496,8 +1525,38 @@ impl WaterfallApp {
                 self.plot_view.zoom = 1.0;
                 self.plot_view.pan_offset_hz = 0.0;
             }
-            scroll_slider_f32(ui, &mut self.ref_db, -120.0..=20.0, "Ref dB");
-            scroll_slider_f32(ui, &mut self.range_db, 20.0..=140.0, "Range dB");
+            let floor_db = self.ref_db - self.range_db;
+            ui.label(
+                egui::RichText::new(format!(
+                    "Floor {:.0} dB · Ref {:.0} dB · Range {:.0} dB",
+                    floor_db, self.ref_db, self.range_db
+                ))
+                .small()
+                .color(MUTED),
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Auto levels")
+                    .on_hover_text("Set Ref/Range once from the live spectrum")
+                    .clicked()
+                {
+                    self.display_levels_initialized = false;
+                    self.update_display_levels();
+                }
+                ui.toggle_value(
+                    &mut self.display_auto_track,
+                    "Track continuously",
+                )
+                .on_hover_text("Keep adjusting Ref/Range as the band changes");
+            });
+            if scroll_slider_f32(ui, &mut self.ref_db, -120.0..=20.0, "Ref dB").changed() {
+                self.display_levels_initialized = true;
+                self.display_auto_track = false;
+            }
+            if scroll_slider_f32(ui, &mut self.range_db, 12.0..=80.0, "Range dB").changed() {
+                self.display_levels_initialized = true;
+                self.display_auto_track = false;
+            }
             scroll_slider_f32(ui, &mut self.smooth_alpha, 0.05..=0.45, "Smoothing");
         });
     }
