@@ -102,6 +102,11 @@ pub trait IqSource {
         true
     }
 
+    /// Reader / device thread is still running (KiwiSDR).
+    fn link_alive(&self) -> bool {
+        true
+    }
+
     /// Human-readable connection error from the remote front end.
     fn link_error(&self) -> Option<String> {
         None

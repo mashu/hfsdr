@@ -22,7 +22,7 @@ use hfsdr::{Complex32, CwChannelSettings, IqAudioDemod, SpectrumAnalyzer, Spectr
 
 use crate::audio::AudioOutput;
 use crate::skimmer::{ScpStatus, SkimmerHandle};
-use crate::source::{connect, Connection, ConnectRequest};
+use crate::source::{connect, Connection, ConnectRequest, SourceKind};
 use hfsdr::SkimmerConfig;
 
 pub const FFT_SIZE: usize = 2048;
@@ -31,11 +31,14 @@ pub const WATERFALL_ROWS: usize = 360;
 
 /// Hard cap on samples processed per engine iteration (bounds latency spikes).
 const MAX_DRAIN: usize = 1 << 16;
-/// No IQ for this long while streaming triggers a reconnect.
-const STALL_TIMEOUT: Duration = Duration::from_secs(3);
+/// No IQ for this long after the first sample triggers a reconnect.
+const STALL_TIMEOUT_KIWI: Duration = Duration::from_secs(20);
+const STALL_TIMEOUT_LOCAL: Duration = Duration::from_secs(5);
+/// Wait this long for the first IQ sample before treating the link as stalled.
+const KIWI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(45);
 /// Effective rate below this fraction of nominal for `SLOW_HOLD` flags "slow".
 const SLOW_FRACTION: f32 = 0.7;
-const SLOW_HOLD: Duration = Duration::from_secs(2);
+const SLOW_HOLD: Duration = Duration::from_secs(5);
 
 /// Connection lifecycle, surfaced to the UI.
 #[derive(Clone, Debug, PartialEq)]
@@ -155,6 +158,7 @@ pub enum EngineCommand {
     SetAudioDevice(Option<String>),
     ClearSkimmerSpots,
     ReloadScp,
+    ReloadScpFrom(std::path::PathBuf),
     Shutdown,
 }
 
@@ -260,6 +264,8 @@ struct Engine {
     spectrum_pan_hz: f32,
 
     last_data: Instant,
+    connected_at: Instant,
+    first_iq_received: bool,
     reconnect_attempt: u32,
     retry_at: Option<Instant>,
     rate_window_start: Instant,
@@ -296,6 +302,8 @@ impl Engine {
             spectrum_decim: 1,
             spectrum_pan_hz: 0.0,
             last_data: Instant::now(),
+            connected_at: Instant::now(),
+            first_iq_received: false,
             reconnect_attempt: 0,
             retry_at: None,
             rate_window_start: Instant::now(),
@@ -315,6 +323,7 @@ impl Engine {
 
             let streaming = self.conn.is_some();
             if streaming {
+                self.poll_handshake();
                 let got = self.pump_stream();
                 self.maybe_reconnect_on_stall();
                 if got == 0 {
@@ -322,6 +331,7 @@ impl Engine {
                 }
             } else {
                 self.maybe_retry_reconnect();
+                self.publish_stats(0);
                 thread::sleep(Duration::from_millis(20));
             }
         }
@@ -383,6 +393,11 @@ impl Engine {
             }
             EngineCommand::ReloadScp => {
                 self.skimmer.reload_scp();
+                self.publish_stats(0);
+            }
+            EngineCommand::ReloadScpFrom(path) => {
+                self.skimmer.reload_scp_from(path);
+                self.publish_stats(0);
             }
             EngineCommand::Shutdown => {
                 self.teardown();
@@ -399,6 +414,8 @@ impl Engine {
                 self.demod = IqAudioDemod::new();
                 self.audio_device_open(conn.sample_rate as u32);
                 self.last_data = Instant::now();
+                self.connected_at = Instant::now();
+                self.first_iq_received = !conn.is_kiwi;
                 self.rate_window_start = Instant::now();
                 self.rate_window_count = 0;
                 self.reconnect_attempt = 0;
@@ -406,7 +423,13 @@ impl Engine {
                 self.slow_since = None;
                 self.conn = Some(conn);
                 self.set_error(None);
-                self.set_state(ConnState::Streaming);
+                if self.conn.as_ref().is_some_and(|c| c.is_kiwi) {
+                    self.set_state(ConnState::Connecting {
+                        label: req.label(),
+                    });
+                } else {
+                    self.set_state(ConnState::Streaming);
+                }
                 self.publish_stats(0);
             }
             Err(error) => {
@@ -462,6 +485,12 @@ impl Engine {
         if got == 0 {
             self.publish_stats(0);
             return 0;
+        }
+        if !self.first_iq_received {
+            self.first_iq_received = true;
+            self.rate_window_start = Instant::now();
+            self.rate_window_count = 0;
+            self.set_state(ConnState::Streaming);
         }
         self.last_data = Instant::now();
         self.rate_window_count += got as u64;
@@ -642,7 +671,7 @@ impl Engine {
     }
 
     fn update_slow_flag(&mut self, nominal: f32, effective: f32) -> bool {
-        if self.conn.is_none() {
+        if self.conn.is_none() || !self.first_iq_received {
             self.slow_since = None;
             return false;
         }
@@ -655,19 +684,86 @@ impl Engine {
         }
     }
 
+    fn poll_handshake(&mut self) {
+        if self.first_iq_received {
+            return;
+        }
+        let link_error = self
+            .conn
+            .as_ref()
+            .and_then(|c| c.source.link_error());
+        let alive = self
+            .conn
+            .as_ref()
+            .is_some_and(|c| c.source.link_alive());
+        if let Some(err) = link_error {
+            self.fail_connection(err);
+            return;
+        }
+        if !alive {
+            self.fail_connection("Kiwi disconnected during handshake".into());
+            return;
+        }
+        if self.connected_at.elapsed() > self.handshake_timeout() {
+            self.fail_connection("Kiwi handshake timed out (no IQ data)".into());
+        }
+    }
+
+    fn fail_connection(&mut self, reason: String) {
+        self.teardown();
+        self.set_error(Some(reason));
+        self.schedule_reconnect();
+        self.set_state(ConnState::Reconnecting {
+            attempt: self.reconnect_attempt,
+            retry_in_s: self.retry_secs(),
+        });
+    }
+
     fn maybe_reconnect_on_stall(&mut self) {
         let link_error = self.conn.as_ref().and_then(|c| c.source.link_error());
-        let stalled = self.last_data.elapsed() > STALL_TIMEOUT;
-        if link_error.is_some() || stalled {
-            let reason = link_error.unwrap_or_else(|| "connection stalled (no data)".to_string());
-            self.teardown();
-            self.set_error(Some(reason));
-            self.schedule_reconnect();
-            self.set_state(ConnState::Reconnecting {
-                attempt: self.reconnect_attempt,
-                retry_in_s: self.retry_secs(),
+        let reader_dead = self.conn.as_ref().is_some_and(|c| {
+            c.is_kiwi && c.source.is_streaming() && !c.source.link_alive()
+        });
+        let stalled = if self.first_iq_received {
+            self.last_data.elapsed() > self.stall_timeout()
+        } else {
+            self.connected_at.elapsed() > self.handshake_timeout()
+        };
+        if link_error.is_some() || reader_dead || stalled {
+            let reason = link_error.unwrap_or_else(|| {
+                if reader_dead {
+                    "Kiwi reader stopped unexpectedly".to_string()
+                } else if self.first_iq_received {
+                    "connection stalled (no data)".to_string()
+                } else {
+                    "Kiwi handshake timed out (no IQ data)".to_string()
+                }
             });
+            self.fail_connection(reason);
         }
+    }
+
+    fn handshake_timeout(&self) -> Duration {
+        if self.conn.as_ref().is_some_and(|c| c.is_kiwi) {
+            KIWI_HANDSHAKE_TIMEOUT
+        } else {
+            STALL_TIMEOUT_LOCAL
+        }
+    }
+
+    fn stall_timeout(&self) -> Duration {
+        let is_kiwi = self.conn.as_ref().is_some_and(|c| c.is_kiwi);
+        if is_kiwi {
+            STALL_TIMEOUT_KIWI
+        } else {
+            STALL_TIMEOUT_LOCAL
+        }
+    }
+
+    fn is_kiwi_request(&self) -> bool {
+        self.request
+            .as_ref()
+            .is_some_and(|r| r.kind == SourceKind::Kiwi)
     }
 
     fn maybe_retry_reconnect(&mut self) {
@@ -690,13 +786,25 @@ impl Engine {
 
     fn schedule_reconnect(&mut self) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
-        let secs = self.retry_secs();
+        let busy = self
+            .shared
+            .lock()
+            .ok()
+            .and_then(|g| g.last_error.clone())
+            .is_some_and(|e| e.to_ascii_lowercase().contains("busy"));
+        let secs = if busy {
+            15.0
+        } else {
+            self.retry_secs()
+        };
         self.retry_at = Some(Instant::now() + Duration::from_secs_f32(secs));
     }
 
     fn retry_secs(&self) -> f32 {
-        let exp = self.reconnect_attempt.saturating_sub(1).min(5);
-        (2u32.pow(exp) as f32).min(30.0)
+        let base = if self.is_kiwi_request() { 3.0 } else { 2.0 };
+        let exp = self.reconnect_attempt.saturating_sub(1).min(6);
+        let max = if self.is_kiwi_request() { 60.0 } else { 30.0 };
+        (base * 2u32.pow(exp) as f32).min(max)
     }
 
     fn set_state(&self, state: ConnState) {

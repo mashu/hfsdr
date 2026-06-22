@@ -1,8 +1,8 @@
-//! Shared envelope tracker for skimmer decoders.
+//! Shared envelope tracker and decode gate for skimmer decoders.
 
 use super::config::EnvelopeSettings;
 
-/// Smoothed magnitude envelope with adaptive key-down/key-up thresholds.
+/// Smoothed magnitude envelope with Schmitt (hysteresis) keying thresholds.
 #[derive(Clone, Debug)]
 pub struct KeyingEnvelope {
     env: f32,
@@ -36,7 +36,8 @@ impl KeyingEnvelope {
             self.noise += 0.0002 * (self.env - self.noise);
         }
         let span = self.peak - self.noise;
-        let signal_present = span > 0.02 * self.peak.max(1e-6) && self.peak > 1e-5;
+        let min_span = self.settings.min_span_fraction * self.peak.max(1e-6);
+        let signal_present = span > min_span && self.peak > 1e-5;
         let thr_high = self.noise + self.settings.thr_high * span;
         let thr_low = self.noise + self.settings.thr_low * span;
         EnvelopeStep {
@@ -46,6 +47,58 @@ impl KeyingEnvelope {
             thr_low,
             signal_present,
         }
+    }
+}
+
+/// Require sustained keyed energy before feeding the Morse decoder.
+#[derive(Clone, Debug)]
+pub struct DecodeGate {
+    armed: bool,
+    above: u32,
+    below: u32,
+    warmup: u32,
+    release: u32,
+}
+
+impl DecodeGate {
+    pub fn new(audio_rate: f32, gate_ms: f32) -> Self {
+        let warmup = (audio_rate * gate_ms / 1000.0).round() as u32;
+        let warmup = warmup.clamp(12, 2_000);
+        Self {
+            armed: false,
+            above: 0,
+            below: 0,
+            warmup,
+            release: (warmup * 10).clamp(80, 8_000),
+        }
+    }
+
+    pub fn feed(&mut self, step: &EnvelopeStep) -> bool {
+        let keyed = step.signal_present && step.env > step.thr_high;
+        if keyed {
+            self.above = self.above.saturating_add(1);
+            self.below = 0;
+            if self.above >= self.warmup {
+                self.armed = true;
+            }
+        } else {
+            self.below = self.below.saturating_add(1);
+            if self.below >= self.release {
+                self.armed = false;
+                self.above = 0;
+            }
+        }
+        self.armed
+    }
+
+    pub fn is_armed(&self) -> bool {
+        self.armed
+    }
+
+    pub fn reset(&mut self) {
+        self.armed = false;
+        self.above = 0;
+        self.below = 0;
     }
 }
 

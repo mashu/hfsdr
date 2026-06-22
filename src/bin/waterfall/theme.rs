@@ -76,18 +76,15 @@ pub fn stat_row(ui: &mut Ui, label: &str, value: impl Display) {
     });
 }
 
-pub fn badge(ui: &mut Ui, text: &str, color: Color32) {
-    let frame = eframe::egui::Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 40))
-        .corner_radius(CornerRadius::same(4))
-        .inner_margin(eframe::egui::vec2(6.0, 2.0))
-        .stroke(Stroke::new(
-            1.0,
-            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120),
-        ));
-    frame.show(ui, |ui| {
-        ui.label(RichText::new(text).small().color(color));
-    });
+pub fn clickable_badge(ui: &mut Ui, text: &str, color: Color32) -> eframe::egui::Response {
+    ui.add(
+        eframe::egui::Button::new(RichText::new(text).small().color(color))
+            .fill(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 40))
+            .stroke(Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120),
+            )),
+    )
 }
 
 /// A compact on/off pill toggle (a nicer checkbox). Returns true if toggled.

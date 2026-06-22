@@ -28,6 +28,7 @@ use crate::engine::{
 };
 use crate::interaction::{PlotAction, PlotInteraction, PlotViewState};
 use crate::interaction::{CW_PASSBAND_MAX_HZ, CW_PASSBAND_MIN_HZ, CW_PASSBAND_NARROW_MAX_HZ};
+use crate::kiwi_directory::{GeoLocation, KiwiReceiver};
 use crate::log;
 use crate::settings::{AppSettings, NotchData};
 use crate::source::{ConnectRequest, SourceKind};
@@ -35,8 +36,8 @@ use crate::spot_filter::{
     build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
 };
 use crate::theme::{
-    apply, badge, collapsible_section, section_card, section_heading, section_hint, stat_row,
-    toggle, MUTED, OK, WARN,
+    apply, clickable_badge, collapsible_section, section_card, section_heading, section_hint,
+    stat_row, toggle, MUTED, OK, WARN,
 };
 use crate::widgets::{display_trace, SpectrumWidget, SpotLabel, WaterfallWidget};
 
@@ -132,18 +133,26 @@ pub struct WaterfallApp {
     spot_label_limit: usize,
     scp_notice: Option<String>,
     scp_download_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
+    scp_reload_pending: bool,
+    scp_reload_deadline: Option<Instant>,
+    last_scp_loaded: bool,
     filter_wide: bool,
     show_console: bool,
     frame_visible_spots: Vec<Spot>,
     resolver: ContinentResolver,
     annotated: HashSet<String>,
     slow: SlowWaterfall,
-    slow_texture: Option<egui::TextureHandle>,
     show_history: bool,
     show_left: bool,
     show_right: bool,
 
     recent_hosts: Vec<ConnectRequest>,
+    kiwi_geo: Option<GeoLocation>,
+    kiwi_nearby: Vec<KiwiReceiver>,
+    kiwi_directory_rx: Option<Receiver<Result<(Option<GeoLocation>, Vec<KiwiReceiver>), String>>>,
+    kiwi_directory_error: Option<String>,
+    show_connection_drawer: bool,
+
     last_settings_json: String,
     settings_dirty_at: Option<std::time::Instant>,
 
@@ -217,17 +226,24 @@ impl WaterfallApp {
             spot_label_limit: 40,
             scp_notice: None,
             scp_download_rx: None,
+            scp_reload_pending: false,
+            scp_reload_deadline: None,
+            last_scp_loaded: false,
             filter_wide: false,
             show_console: false,
             frame_visible_spots: Vec::new(),
             resolver: ContinentResolver::new(),
             annotated: HashSet::new(),
             slow: SlowWaterfall::new(2.0, 600.0, RowFold::Peak),
-            slow_texture: None,
             show_history: false,
             show_left: true,
             show_right: true,
             recent_hosts: Vec::new(),
+            kiwi_geo: None,
+            kiwi_nearby: Vec::new(),
+            kiwi_directory_rx: None,
+            kiwi_directory_error: None,
+            show_connection_drawer: false,
             last_settings_json: String::new(),
             settings_dirty_at: None,
             spectrum_widget: SpectrumWidget::new(),
@@ -258,11 +274,63 @@ impl WaterfallApp {
             app.center_khz = req.center_hz / 1000.0;
             app.last_center_khz = app.center_khz;
             app.pending_connect = Some(req);
+            app.show_connection_drawer = false;
         }
 
         app.last_settings_json =
             serde_json::to_string(&app.current_settings()).unwrap_or_default();
+        if let Some((geo, receivers)) = crate::kiwi_directory::load_cached_receivers() {
+            app.kiwi_geo = geo;
+            app.kiwi_nearby = receivers;
+        }
+        app.start_kiwi_directory_fetch(false);
         app
+    }
+
+    fn start_kiwi_directory_fetch(&mut self, force_refresh: bool) {
+        if self.kiwi_directory_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.kiwi_directory_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = if force_refresh {
+                crate::kiwi_directory::refresh_nearby_receivers()
+            } else {
+                crate::kiwi_directory::load_nearby_receivers()
+            };
+            let _ = tx.send(result);
+        });
+    }
+
+    fn poll_kiwi_directory(&mut self) {
+        let Some(rx) = &self.kiwi_directory_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok((geo, receivers))) => {
+                self.kiwi_geo = geo;
+                self.kiwi_nearby = receivers;
+                self.kiwi_directory_error = None;
+                self.kiwi_directory_rx = None;
+            }
+            Ok(Err(err)) => {
+                self.kiwi_directory_error = Some(err);
+                self.kiwi_directory_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.kiwi_directory_rx = None;
+            }
+        }
+    }
+
+    fn connection_unstable(&self) -> bool {
+        self.stats.slow
+            || matches!(
+                self.conn_state,
+                ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
+            )
     }
 
     fn apply_settings(&mut self, s: &AppSettings) {
@@ -379,6 +447,8 @@ impl WaterfallApp {
             volume: self.volume,
             skimmer_enabled: self.skimmer_enabled,
             skimmer_min_snr_db: self.skimmer.min_snr_db,
+            skimmer_min_decode_snr_db: self.skimmer.min_decode_snr_db,
+            skimmer_decode_gate_ms: self.skimmer.decode_gate_ms,
             skimmer_max_channels: self.skimmer.max_channels,
             skimmer_bucket_hz: self.skimmer.bucket_hz,
             skimmer_min_separation_bins: self.skimmer.min_separation_bins,
@@ -454,6 +524,21 @@ impl WaterfallApp {
         }
         self.conn_state = poll.state;
         self.stats = poll.stats;
+        if self.scp_reload_pending {
+            if self.stats.scp.loaded {
+                let n = self.stats.scp.calls;
+                self.scp_notice = Some(format!("MASTER.SCP loaded ({n} calls)"));
+                self.scp_reload_pending = false;
+                self.scp_reload_deadline = None;
+            } else if self.scp_reload_deadline.is_some_and(|t| Instant::now() >= t) {
+                self.scp_notice = Some(
+                    "MASTER.SCP reload failed — file missing or empty (try Download)".into(),
+                );
+                self.scp_reload_pending = false;
+                self.scp_reload_deadline = None;
+            }
+        }
+        self.last_scp_loaded = self.stats.scp.loaded;
         if poll.last_error.as_deref() != self.last_error.as_deref() {
             if let Some(ref err) = poll.last_error {
                 log::error(err);
@@ -482,7 +567,6 @@ impl WaterfallApp {
 
         if !new_rows.is_empty() {
             for row in new_rows {
-                self.slow.push_row(&row);
                 let mut stored = if self.rows.len() >= WATERFALL_ROWS {
                     self.rows.pop_back().unwrap_or_else(|| vec![0.0; row.len()])
                 } else {
@@ -500,7 +584,7 @@ impl WaterfallApp {
 
         self.apply_pitch_lock();
         if self.skimmer_enabled {
-            self.annotate_new_cqs(self.center_khz * 1000.0);
+            self.annotate_new_spots(self.center_khz * 1000.0);
         }
     }
 
@@ -540,15 +624,18 @@ impl WaterfallApp {
         }
     }
 
-    fn annotate_new_cqs(&mut self, center_hz: f64) {
+    fn annotate_new_spots(&mut self, center_hz: f64) {
         for spot in &self.skimmer_spots {
-            if spot.kind != SpotKind::CallingCq {
-                continue;
-            }
             let Some(call) = &spot.callsign else { continue };
-            if self.annotated.insert(call.clone()) {
+            let key = format!("{call}@{:.0}", spot.frequency_hz);
+            if self.annotated.insert(key) {
                 let offset = (spot.frequency_hz - center_hz) as f32;
-                self.slow.annotate(offset, format!("CQ {call}"), spot.snr_db);
+                let label = match spot.kind {
+                    SpotKind::CallingCq => format!("CQ {call}"),
+                    SpotKind::Answering => format!("→ {call}"),
+                    SpotKind::Heard => call.clone(),
+                };
+                self.slow.annotate(offset, label, spot.snr_db);
             }
         }
         if self.annotated.len() > 512 {
@@ -699,8 +786,10 @@ impl WaterfallApp {
         match result {
             Ok(path) => {
                 log::info(format!("MASTER.SCP saved to {}", path.display()));
-                self.engine.send(EngineCommand::ReloadScp);
-                self.scp_notice = Some(format!("Downloaded to {} — reloading", path.display()));
+                self.engine.send(EngineCommand::ReloadScpFrom(path.clone()));
+                self.scp_reload_pending = true;
+                self.scp_reload_deadline = Some(Instant::now() + Duration::from_secs(8));
+                self.scp_notice = Some(format!("Downloaded — loading {}", path.display()));
             }
             Err(e) => {
                 log::error(format!("MASTER.SCP download failed: {e}"));
@@ -745,6 +834,8 @@ impl WaterfallApp {
                 }
                 if ui.button("Reload").clicked() {
                     self.engine.send(EngineCommand::ReloadScp);
+                    self.scp_reload_pending = true;
+                    self.scp_reload_deadline = Some(Instant::now() + Duration::from_secs(8));
                     self.scp_notice = Some("Reloading MASTER.SCP…".into());
                     log::info("MASTER.SCP reload requested");
                 }
@@ -796,7 +887,7 @@ impl WaterfallApp {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (zero, lock, notch, blank, nr, agc, narrow, widen, rit_dn, rit_up, full, mute, console) =
+        let (zero, lock, notch, blank, nr, agc, narrow, widen, rit_dn, rit_up, full, mute, console, f11) =
             ctx.input(|i| {
                 use egui::Key;
                 (
@@ -813,6 +904,7 @@ impl WaterfallApp {
                     i.key_pressed(Key::F),
                     i.key_pressed(Key::Space),
                     i.key_pressed(Key::Backtick),
+                    i.key_pressed(Key::F11),
                 )
             });
 
@@ -857,6 +949,10 @@ impl WaterfallApp {
         }
         if console {
             self.show_console = !self.show_console;
+        }
+        if f11 {
+            let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
         }
     }
 
@@ -916,225 +1012,135 @@ impl WaterfallApp {
         }
     }
 
-    fn update_history_texture(&mut self, ctx: &egui::Context) {
-        let rows = self.slow.rows();
-        if rows.is_empty() {
+    fn history_panel(&mut self, ui: &mut egui::Ui) {
+        section_heading(ui, "Callsign log (10 min)");
+        let center_hz = self.center_khz * 1000.0;
+        let annotations: Vec<_> = self.slow.annotations().iter().cloned().collect();
+        if annotations.is_empty() {
+            ui.label(
+                egui::RichText::new("Decoded callsigns appear here when skimmer is on.")
+                    .small()
+                    .color(MUTED),
+            );
             return;
         }
-        let view = self.spectrum_view();
-        let w = extract_view_window(
-            &self.latest,
-            view.row_rate_hz,
-            view.view_span_hz,
-            view.pan_offset_hz,
-        )
-        .len()
-        .max(1);
-        let h = rows.len();
-        let mut pixels = vec![Color32::BLACK; w * h];
-        for (y, row_data) in rows.iter().enumerate() {
-            let row_view = extract_view_window(
-                row_data,
-                view.row_rate_hz,
-                view.view_span_hz,
-                view.pan_offset_hz,
-            );
-            let base = y * w;
-            for (x, &db) in row_view.iter().enumerate() {
-                if x < w {
-                    pixels[base + x] = db_to_colour(db, self.ref_db, self.range_db);
-                }
-            }
-        }
-        let image = egui::ColorImage::new([w, h], pixels);
-        match &mut self.slow_texture {
-            Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
-            none => {
-                *none =
-                    Some(ctx.load_texture("slow_waterfall", image, egui::TextureOptions::NEAREST));
-            }
-        }
-    }
-
-    fn history_panel(&mut self, ui: &mut egui::Ui) {
-        section_heading(ui, "Band history (last 10 min · peak-hold)");
-        let span = self.plot_view.view_span_hz(self.sample_rate);
-        let pan = self.plot_view.pan_offset_hz;
-        let size = egui::vec2(ui.available_width(), ui.available_height().max(40.0));
-        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-
-        if let Some(tex) = &self.slow_texture {
-            ui.painter().image(
-                tex.id(),
-                rect,
-                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        } else {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "collecting history…",
-                egui::FontId::proportional(12.0),
-                MUTED,
-            );
-        }
-
-        let painter = ui.painter().clone();
-        for ann in self.slow.annotations() {
-            let x = crate::interaction::offset_hz_to_x(ann.offset_hz as f64, rect, span, pan);
-            if x < rect.left() || x > rect.right() {
-                continue;
-            }
-            let age = ann.at.elapsed().as_secs_f32();
-            let y = (rect.top() + (age / 600.0) * rect.height()).clamp(rect.top(), rect.bottom());
-            painter.line_segment(
-                [egui::pos2(x, y - 4.0), egui::pos2(x, y + 4.0)],
-                egui::Stroke::new(1.5, WARN),
-            );
-            painter.text(
-                egui::pos2(x + 3.0, y),
-                egui::Align2::LEFT_CENTER,
-                &ann.label,
-                egui::FontId::proportional(10.0),
-                WARN,
-            );
-        }
-    }
-
-    fn connect_screen(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(60.0);
-            ui.heading("hfsdr — connect a receiver");
-            ui.add_space(12.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_max_width(440.0);
-                egui::Grid::new("connect_form")
-                    .num_columns(2)
-                    .spacing([12.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("Source");
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut self.form_kind, SourceKind::Kiwi, "KiwiSDR");
-                            #[cfg(feature = "airspy")]
-                            ui.selectable_value(&mut self.form_kind, SourceKind::Airspy, "Airspy");
-                        });
-                        ui.end_row();
-
-                        if self.form_kind == SourceKind::Kiwi {
-                            ui.label("Host");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.form_host)
-                                    .hint_text("kiwi.example.com")
-                                    .desired_width(240.0),
-                            );
-                            ui.end_row();
-
-                            ui.label("Port");
-                            ui.add(egui::DragValue::new(&mut self.form_port).range(1..=65535));
-                            ui.end_row();
-                        }
-
-                        ui.label("Center");
-                        ui.add(
-                            egui::DragValue::new(&mut self.form_center_mhz)
-                                .range(0.0..=60.0)
-                                .speed(0.001)
-                                .suffix(" MHz")
-                                .fixed_decimals(3),
-                        );
-                        ui.end_row();
-                    });
-
-                ui.add_space(10.0);
-                let connecting = matches!(
-                    self.conn_state,
-                    ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
-                );
-                ui.horizontal(|ui| {
-                    let can_connect = {
-                        #[cfg(feature = "airspy")]
-                        {
-                            self.form_kind == SourceKind::Airspy || !self.form_host.trim().is_empty()
-                        }
-                        #[cfg(not(feature = "airspy"))]
-                        {
-                            !self.form_host.trim().is_empty()
-                        }
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for ann in annotations {
+                    let age = ann.at.elapsed();
+                    let freq_khz = center_hz + ann.offset_hz as f64;
+                    let age_s = age.as_secs();
+                    let age_txt = if age_s < 60 {
+                        format!("{age_s}s ago")
+                    } else {
+                        format!("{}m ago", age_s / 60)
                     };
-                    if ui
-                        .add_enabled(can_connect && !connecting, egui::Button::new("Connect"))
-                        .clicked()
-                    {
-                        self.connect_now();
-                    }
-                    if connecting && ui.button("Cancel").clicked() {
-                        self.engine.send(EngineCommand::Disconnect);
-                    }
-                });
-
-                ui.add_space(8.0);
-                match &self.conn_state {
-                    ConnState::Connecting { label } => {
-                        ui.colored_label(WARN, format!("Connecting to {label}…"));
-                    }
-                    ConnState::Reconnecting { attempt, retry_in_s } => {
-                        ui.colored_label(
-                            WARN,
-                            format!("Reconnecting (attempt {attempt}) in {retry_in_s:.0}s…"),
-                        );
-                    }
-                    _ => {}
-                }
-                if let Some(err) = &self.last_error {
-                    ui.colored_label(Color32::from_rgb(248, 113, 113), err);
+                    let frame = egui::Frame::new()
+                        .fill(Color32::from_rgb(32, 38, 52))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(8.0)
+                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(55, 65, 85)));
+                    frame.show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&ann.label).strong().color(OK));
+                            ui.label(
+                                egui::RichText::new(format!("{freq_khz:.1} kHz"))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("+{:.0} dB", ann.snr_db))
+                                    .small()
+                                    .color(MUTED),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .small_button("Tune")
+                                    .on_hover_text("Tune receiver to this spot")
+                                    .clicked()
+                                {
+                                    self.tune_to_hz(freq_khz);
+                                }
+                                ui.label(egui::RichText::new(age_txt).small().color(MUTED));
+                            });
+                        });
+                    });
+                    ui.add_space(4.0);
                 }
             });
+    }
 
-            if !self.recent_hosts.is_empty() {
-                ui.add_space(12.0);
-                ui.label(egui::RichText::new("Recent").small().color(MUTED));
-                let recents = self.recent_hosts.clone();
-                for req in recents {
-                    if ui.button(req.label()).clicked() {
-                        self.form_kind = req.kind;
-                        self.form_host = req.host.clone();
-                        self.form_port = req.port;
-                        self.form_center_mhz = req.center_hz / 1e6;
-                        self.connect_now();
-                    }
-                }
-            }
-
-            ui.add_space(16.0);
-            section_hint(
-                ui,
-                "Tip: launch with `waterfall kiwi <host> [port] [center_hz]` to auto-connect.",
-            );
-        });
+    fn connection_popup(&mut self, ctx: &egui::Context) {
+        if !self.show_connection_drawer {
+            return;
+        }
+        let screen = ctx.content_rect();
+        let win_h = (screen.height() * 0.72).clamp(280.0, 520.0);
+        egui::Window::new("Connection")
+            .id(egui::Id::new("connection_popup"))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(540.0)
+            .default_height(win_h)
+            .default_pos([screen.left() + 10.0, screen.top() + 34.0])
+            .max_height(win_h)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    section_heading(ui, "Connection");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Close").clicked() {
+                            self.show_connection_drawer = false;
+                        }
+                    });
+                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.connection_card(ui);
+                    });
+            });
     }
 
     fn status_banner(&mut self, ui: &mut egui::Ui) {
+        let conn_label = match &self.conn_state {
+            ConnState::Streaming if self.connection_unstable() => "UNSTABLE".to_string(),
+            ConnState::Streaming => "STREAMING".to_string(),
+            ConnState::Reconnecting { attempt, retry_in_s } => {
+                format!("RECONNECT #{attempt} ({retry_in_s:.0}s)")
+            }
+            ConnState::Connecting { .. } => "CONNECTING".to_string(),
+            _ => "OFFLINE".to_string(),
+        };
+        let conn_color = match &self.conn_state {
+            ConnState::Streaming if !self.connection_unstable() => OK,
+            ConnState::Disconnected => MUTED,
+            _ => WARN,
+        };
         ui.horizontal(|ui| {
-            match &self.conn_state {
-                ConnState::Streaming if self.stats.slow => {
-                    badge(ui, "SLOW LINK", WARN);
-                }
-                ConnState::Streaming => {
-                    badge(ui, "STREAMING", OK);
-                }
-                ConnState::Reconnecting { attempt, retry_in_s } => {
-                    badge(
-                        ui,
-                        &format!("RECONNECTING #{attempt} ({retry_in_s:.0}s)"),
-                        WARN,
-                    );
-                }
-                ConnState::Connecting { .. } => badge(ui, "CONNECTING", WARN),
-                _ => badge(ui, "OFFLINE", MUTED),
+            let badge_resp = clickable_badge(ui, &conn_label, conn_color)
+                .on_hover_text("Click to open/close connection settings");
+            if badge_resp.clicked() {
+                self.show_connection_drawer = !self.show_connection_drawer;
             }
             ui.separator();
-            ui.label(format!("{:.3} MHz", self.center_khz / 1000.0));
+            ui.label(egui::RichText::new("RX").small().color(MUTED));
+            ui.add(
+                egui::DragValue::new(&mut self.center_khz)
+                    .speed(0.05)
+                    .suffix(" kHz"),
+            );
+            ui.separator();
+            ui.label(
+                egui::RichText::new(format!("listen {:.0} Hz", self.listen_offset_hz()))
+                    .small()
+                    .color(MUTED),
+            );
+            ui.label(
+                egui::RichText::new(format!("SNR {:.0} dB", self.last_snr_db))
+                    .small()
+                    .color(MUTED),
+            );
             ui.separator();
             ui.label(format!("{:.0} kS/s", self.stats.effective_sps / 1000.0));
             if self.stats.dropped > 0 {
@@ -1146,16 +1152,28 @@ impl WaterfallApp {
                 ui.label(format!("{rssi:.0} dBm"));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Disconnect").clicked() {
+                if ui
+                    .button("F11")
+                    .on_hover_text("Toggle fullscreen (F11)")
+                    .clicked()
+                {
+                    let on = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+                }
+                if matches!(
+                    self.conn_state,
+                    ConnState::Streaming | ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
+                ) && ui.button("Disconnect").on_hover_text("Stop streaming").clicked()
+                {
                     self.engine.send(EngineCommand::Disconnect);
-                    self.rows.clear();
                 }
                 ui.separator();
                 ui.toggle_value(&mut self.show_right, "Right");
-                ui.toggle_value(&mut self.show_history, "History");
+                ui.toggle_value(&mut self.show_history, "Spots");
                 ui.toggle_value(&mut self.show_left, "Left");
-                ui.toggle_value(&mut self.show_console, "Log (`)");
-                if self.stats.slow {
+                ui.toggle_value(&mut self.show_console, "Log");
+                if self.connection_unstable() {
                     ui.separator();
                     ui.colored_label(WARN, "connection unstable");
                 }
@@ -1172,10 +1190,9 @@ impl WaterfallApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                self.connection_card(ui);
-                self.receiver_card(ui);
                 self.frequency_card(ui);
-                self.skimmer_card(ui);
+                self.filter_pipeline_card(ui);
+                self.notch_card(ui);
             });
     }
 
@@ -1183,46 +1200,293 @@ impl WaterfallApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                self.spot_display_card(ui);
                 self.cw_demod_card(ui);
-                self.filter_pipeline_card(ui);
-                self.notch_card(ui);
-                self.audio_card(ui);
+                collapsible_section(ui, "skimmer-settings", "Skimmer settings", false, |ui| {
+                    self.skimmer_settings_body(ui);
+                });
+                collapsible_section(ui, "audio", "Audio", false, |ui| {
+                    self.audio_card_body(ui);
+                });
                 self.display_section(ui);
                 self.performance_section(ui);
 
                 ui.add_space(4.0);
                 section_hint(
                     ui,
-                    "Keys: Z zero-beat · L pitch-lock · N notch · B NB · R NR · A AGC · [ ] width · , . RIT · F full · Space mute",
+                    "Z zero-beat · L lock · N notch · B NB · R NR · A AGC · [ ] width · F11 fullscreen",
                 );
             });
     }
 
-    fn connection_card(&mut self, ui: &mut egui::Ui) {
+    fn spot_display_card(&mut self, ui: &mut egui::Ui) {
         section_card(ui, |ui| {
-            section_heading(ui, "Connection");
-            match &self.conn_state {
-                ConnState::Streaming if self.stats.slow => badge(ui, "slow / unstable", WARN),
-                ConnState::Streaming => badge(ui, "streaming", OK),
-                ConnState::Connecting { .. } => badge(ui, "connecting", WARN),
-                ConnState::Reconnecting { attempt, retry_in_s } => {
-                    badge(ui, &format!("reconnect #{attempt} ({retry_in_s:.0}s)"), WARN)
+            section_heading(ui, "Spots");
+            ui.horizontal(|ui| {
+                toggle(ui, &mut self.skimmer_enabled, "Skimmer on");
+                if ui.button("Clear").on_hover_text("Clear all spots").clicked() {
+                    self.clear_spots();
                 }
-                ConnState::Disconnected => badge(ui, "offline", MUTED),
+                let n = self.frame_visible_spots.len();
+                ui.label(
+                    egui::RichText::new(format!("{n} shown · {} decoded", self.skimmer_spots.len()))
+                        .small()
+                        .color(MUTED),
+                );
+            });
+            if !self.skimmer_enabled {
+                ui.colored_label(MUTED, "Enable skimmer to decode callsigns on the band.");
             }
-            ui.add_space(4.0);
-            stat_row(ui, "Source", if self.is_kiwi { "KiwiSDR" } else { "Airspy" });
+            scroll_slider_f32(ui, &mut self.min_spot_snr, 0.0..=40.0, "Table min SNR");
+            scroll_slider_f32(ui, &mut self.spot_max_age_secs, 0.0..=300.0, "Max age (s, 0=all)");
+            let mut label_lim = self.spot_label_limit as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Plot labels").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut label_lim).range(8..=80).speed(1));
+            });
+            self.spot_label_limit = label_lim as usize;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Call filter").small().color(MUTED));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.spot_callsign_filter)
+                        .desired_width(100.0)
+                        .hint_text("e.g. G or DL"),
+                );
+            });
+            toggle(ui, &mut self.spot_cq_only, "CQ only");
+            toggle(ui, &mut self.spot_hide_heard_labels, "Hide unconfirmed on plot");
+            ui.checkbox(&mut self.continent_filter, "Filter by continent");
+            if self.continent_filter {
+                ui.horizontal_wrapped(|ui| {
+                    for c in Continent::ALL {
+                        let idx = continent_index(c);
+                        let on = self.show_continents[idx];
+                        if ui.selectable_label(on, c.code()).clicked() {
+                            self.show_continents[idx] = !on;
+                        }
+                    }
+                });
+            }
+            if self.continent_filter && !self.show_continents.iter().any(|&on| on) {
+                ui.colored_label(WARN, "All continents off — no spots will match");
+            }
+            ui.separator();
+            self.spot_table(ui);
+        });
+    }
+
+    fn connection_card(&mut self, ui: &mut egui::Ui) {
+        if self.connection_unstable() {
+                ui.add_space(4.0);
+                ui.colored_label(
+                    WARN,
+                    "Link slow or reconnecting — spectrum may be frozen; tuning is kept.",
+                );
+                if let Some(err) = &self.last_error {
+                    ui.label(
+                        egui::RichText::new(err)
+                            .small()
+                            .color(Color32::from_rgb(248, 113, 113)),
+                    );
+                }
+            }
+
+            ui.add_space(6.0);
+            egui::Grid::new("connect_form")
+                .num_columns(2)
+                .spacing([8.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Source").small().color(MUTED));
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.form_kind, SourceKind::Kiwi, "KiwiSDR");
+                        #[cfg(feature = "airspy")]
+                        ui.selectable_value(&mut self.form_kind, SourceKind::Airspy, "Airspy");
+                    });
+                    ui.end_row();
+
+                    if self.form_kind == SourceKind::Kiwi {
+                        ui.label(egui::RichText::new("Host").small().color(MUTED));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.form_host)
+                                .hint_text("kiwi.example.com")
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Port").small().color(MUTED));
+                        ui.add(egui::DragValue::new(&mut self.form_port).range(1..=65535));
+                        ui.end_row();
+                    }
+
+                    ui.label(egui::RichText::new("Center").small().color(MUTED));
+                    ui.add(
+                        egui::DragValue::new(&mut self.form_center_mhz)
+                            .range(0.0..=60.0)
+                            .speed(0.001)
+                            .suffix(" MHz")
+                            .fixed_decimals(3),
+                    );
+                    ui.end_row();
+                });
+
+            let connecting = matches!(
+                self.conn_state,
+                ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
+            );
+            ui.horizontal(|ui| {
+                let can_connect = {
+                    #[cfg(feature = "airspy")]
+                    {
+                        self.form_kind == SourceKind::Airspy || !self.form_host.trim().is_empty()
+                    }
+                    #[cfg(not(feature = "airspy"))]
+                    {
+                        !self.form_host.trim().is_empty()
+                    }
+                };
+                if ui
+                    .add_enabled(can_connect && !connecting, egui::Button::new("Connect"))
+                    .clicked()
+                {
+                    self.connect_now();
+                }
+                if connecting && ui.button("Cancel").clicked() {
+                    self.engine.send(EngineCommand::Disconnect);
+                }
+                if matches!(self.conn_state, ConnState::Streaming | ConnState::Reconnecting { .. } | ConnState::Connecting { .. })
+                    && ui.button("Disconnect").clicked()
+                {
+                    self.engine.send(EngineCommand::Disconnect);
+                }
+            });
+
+            if let Some(err) = &self.last_error {
+                if matches!(
+                    self.conn_state,
+                    ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
+                ) {
+                    ui.colored_label(WARN, err);
+                }
+            }
+
+            if self.form_kind == SourceKind::Kiwi {
+                ui.add_space(6.0);
+                if self.kiwi_directory_rx.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("Loading public KiwiSDRs…")
+                                .small()
+                                .color(MUTED),
+                        );
+                    });
+                } else if !self.kiwi_nearby.is_empty() {
+                    let header = if let Some(geo) = &self.kiwi_geo {
+                        format!(
+                            "Nearby ({}, sorted by distance)",
+                            geo.country_code
+                        )
+                    } else {
+                        "Public KiwiSDRs (sorted by distance)".to_string()
+                    };
+                    ui.label(egui::RichText::new(header).small().color(MUTED));
+                    section_hint(
+                        ui,
+                        "Receivers marked FULL have no free slots — pick one with open users.",
+                    );
+                    let mut nearby = self.kiwi_nearby.clone();
+                    nearby.sort_by(|a, b| {
+                        let af = a.users >= a.users_max;
+                        let bf = b.users >= b.users_max;
+                        af.cmp(&bf)
+                            .then_with(|| a.distance_km.partial_cmp(&b.distance_km).unwrap_or(std::cmp::Ordering::Equal))
+                    });
+                    egui::ScrollArea::vertical()
+                        .max_height(160.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for rx in nearby {
+                                let full = rx.users >= rx.users_max;
+                                let dist = if rx.distance_km > 0.0 {
+                                    format!("{:.0} km · ", rx.distance_km)
+                                } else {
+                                    String::new()
+                                };
+                                let users = if full {
+                                    format!("FULL {}/{}", rx.users, rx.users_max)
+                                } else {
+                                    format!("{}/{} users", rx.users, rx.users_max)
+                                };
+                                let label = format!(
+                                    "{}:{} · {}{} · {}",
+                                    rx.host,
+                                    rx.port,
+                                    dist,
+                                    users,
+                                    rx.location,
+                                );
+                                let btn = egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .small()
+                                        .color(if full { MUTED } else { Color32::WHITE }),
+                                );
+                                if ui
+                                    .add_enabled(!full, btn)
+                                    .on_hover_text(if full {
+                                        "All slots busy on this Kiwi"
+                                    } else {
+                                        "Connect to this receiver"
+                                    })
+                                    .clicked()
+                                {
+                                    self.form_host = rx.host;
+                                    self.form_port = rx.port;
+                                    self.connect_now();
+                                }
+                            }
+                        });
+                    if ui.small_button("Refresh list").clicked() {
+                        self.start_kiwi_directory_fetch(true);
+                    }
+                } else if let Some(err) = &self.kiwi_directory_error {
+                    ui.colored_label(WARN, err);
+                    if ui.small_button("Retry directory").clicked() {
+                        self.kiwi_directory_error = None;
+                        self.start_kiwi_directory_fetch(true);
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new("No receivers in cache — use Refresh")
+                            .small()
+                            .color(MUTED),
+                    );
+                    if ui.small_button("Refresh list").clicked() {
+                        self.start_kiwi_directory_fetch(true);
+                    }
+                }
+            }
+
+            if !self.recent_hosts.is_empty() {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Recent").small().color(MUTED));
+                let recents = self.recent_hosts.clone();
+                for req in recents {
+                    if ui.button(req.label()).clicked() {
+                        self.form_kind = req.kind;
+                        self.form_host = req.host.clone();
+                        self.form_port = req.port;
+                        self.form_center_mhz = req.center_hz / 1e6;
+                        self.connect_now();
+                    }
+                }
+            }
+
+            ui.add_space(6.0);
             stat_row(ui, "Effective", format!("{:.1} kS/s", self.stats.effective_sps / 1000.0));
             stat_row(ui, "Dropped", self.stats.dropped.to_string());
             if let Some(rssi) = self.stats.rssi_dbm {
                 stat_row(ui, "S-meter", format!("{rssi:.1} dBm"));
             }
-            ui.add_space(4.0);
-            if ui.button("Disconnect").clicked() {
-                self.engine.send(EngineCommand::Disconnect);
-                self.rows.clear();
-            }
-        });
     }
 
     fn display_section(&mut self, ui: &mut egui::Ui) {
@@ -1306,24 +1570,9 @@ impl WaterfallApp {
         });
     }
 
-    fn receiver_card(&mut self, ui: &mut egui::Ui) {
-        section_card(ui, |ui| {
-            section_heading(ui, "Receiver");
-            stat_row(ui, "RX center", format!("{:.3} MHz", self.center_khz / 1000.0));
-            stat_row(ui, "Listen", format!("{:.0} Hz", self.listen_offset_hz()));
-            stat_row(ui, "SNR", format!("{:.0} dB", self.last_snr_db));
-            stat_row(ui, "IQ rate", format!("{:.1} kS/s", self.sample_rate / 1000.0));
-            stat_row(
-                ui,
-                "Spectrum FFT",
-                format!("{} @ {:.1} kS/s", self.stats.spectrum_fft, self.stats.spectrum_rate / 1000.0),
-            );
-        });
-    }
-
     fn frequency_card(&mut self, ui: &mut egui::Ui) {
         section_card(ui, |ui| {
-            section_heading(ui, "Frequency");
+            section_heading(ui, "Operator");
             ui.horizontal_wrapped(|ui| {
                 for (label, hz) in BAND_PRESETS {
                     let selected = (self.center_khz * 1000.0).round() == hz;
@@ -1335,7 +1584,7 @@ impl WaterfallApp {
             scroll_drag_f64(ui, &mut self.center_khz, 0.0..=60_000.0, 0.05, " kHz");
             scroll_slider_f32(ui, &mut self.rit_hz, -800.0..=800.0, "RIT");
             ui.horizontal(|ui| {
-                if ui.button("Zero-beat (Z)").clicked() {
+                if ui.button("Zero-beat (Z)").on_hover_text("Snap listen passband to strongest carrier").clicked() {
                     self.zero_beat();
                 }
                 ui.checkbox(&mut self.pitch_lock, "Lock pitch (L)");
@@ -1395,7 +1644,7 @@ impl WaterfallApp {
     }
 
     fn filter_pipeline_card(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "pipeline", "Filter pipeline", true, |ui| {
+        collapsible_section(ui, "pipeline", "QRM tools", true, |ui| {
             section_hint(ui, "Each stage toggles independently (stackable).");
 
             ui.checkbox(&mut self.cw.noise_blanker.enabled, "Noise blanker (B) — impulse QRN");
@@ -1471,24 +1720,13 @@ impl WaterfallApp {
         });
     }
 
-    fn skimmer_card(&mut self, ui: &mut egui::Ui) {
-        section_card(ui, |ui| {
-            section_heading(ui, "Skimmer");
-            toggle(ui, &mut self.skimmer_enabled, "Decode whole span");
-            toggle(ui, &mut self.show_history, "Band history");
-            if self.skimmer_enabled {
-                stat_row(ui, "Decoders", self.skimmer_channels.to_string());
-                stat_row(ui, "Spots", self.skimmer_spots.len().to_string());
-            }
-        });
-
+    fn skimmer_settings_body(&mut self, ui: &mut egui::Ui) {
+        if self.skimmer_enabled {
+            stat_row(ui, "Decoders", self.skimmer_channels.to_string());
+        }
         self.scp_section(ui);
 
-        if !self.skimmer_enabled {
-            return;
-        }
-
-        collapsible_section(ui, "skim-decoder", "Decoder & channel DSP", true, |ui| {
+        section_heading(ui, "Decoder & channel DSP");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Algorithm").small().color(MUTED));
                 if ui
@@ -1515,6 +1753,8 @@ impl WaterfallApp {
                 "Bigram: best copy on pileups · Adaptive: lighter CPU",
             );
             scroll_slider_f32(ui, &mut self.skimmer.min_snr_db, 6.0..=30.0, "Peak min SNR");
+            scroll_slider_f32(ui, &mut self.skimmer.min_decode_snr_db, 6.0..=40.0, "Decode min SNR");
+            scroll_slider_f32(ui, &mut self.skimmer.decode_gate_ms, 20.0..=500.0, "Key gate ms");
             scroll_slider_f32(ui, &mut self.skimmer.bucket_hz, 20.0..=200.0, "Bucket Hz");
             let mut sep = self.skimmer.min_separation_bins as i32;
             ui.horizontal(|ui| {
@@ -1596,56 +1836,6 @@ impl WaterfallApp {
                 &mut self.skimmer.require_scp,
                 "Require MASTER.SCP match",
             );
-        });
-
-        collapsible_section(ui, "spots", "Spot display", true, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Clear spots").clicked() {
-                    self.clear_spots();
-                }
-                let n = self.frame_visible_spots.len();
-                ui.label(
-                    egui::RichText::new(format!("{n} shown"))
-                        .small()
-                        .color(MUTED),
-                );
-            });
-            scroll_slider_f32(ui, &mut self.min_spot_snr, 0.0..=40.0, "Table min SNR");
-            scroll_slider_f32(ui, &mut self.spot_max_age_secs, 0.0..=300.0, "Max age (s, 0=all)");
-            let mut label_lim = self.spot_label_limit as i32;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Plot labels").small().color(MUTED));
-                ui.add(egui::DragValue::new(&mut label_lim).range(8..=80).speed(1));
-            });
-            self.spot_label_limit = label_lim as usize;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Call filter").small().color(MUTED));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.spot_callsign_filter)
-                        .desired_width(100.0)
-                        .hint_text("e.g. G or DL"),
-                );
-            });
-            toggle(ui, &mut self.spot_cq_only, "CQ only");
-            toggle(ui, &mut self.spot_hide_heard_labels, "Hide unconfirmed on plot");
-            ui.checkbox(&mut self.continent_filter, "Filter by continent");
-            if self.continent_filter {
-                ui.horizontal_wrapped(|ui| {
-                    for c in Continent::ALL {
-                        let idx = continent_index(c);
-                        let on = self.show_continents[idx];
-                        if ui.selectable_label(on, c.code()).clicked() {
-                            self.show_continents[idx] = !on;
-                        }
-                    }
-                });
-            }
-            if self.continent_filter && !self.show_continents.iter().any(|&on| on) {
-                ui.colored_label(WARN, "All continents off — no spots will match");
-            }
-            ui.separator();
-            self.spot_table(ui);
-        });
     }
 
     fn spot_table(&mut self, ui: &mut egui::Ui) {
@@ -1735,10 +1925,8 @@ impl WaterfallApp {
         }
     }
 
-    fn audio_card(&mut self, ui: &mut egui::Ui) {
-        section_card(ui, |ui| {
-            section_heading(ui, "Audio");
-            if self.audio_devices.is_empty() {
+    fn audio_card_body(&mut self, ui: &mut egui::Ui) {
+        if self.audio_devices.is_empty() {
                 ui.colored_label(WARN, "No output devices found");
             } else {
                 let selected = self
@@ -1769,10 +1957,35 @@ impl WaterfallApp {
             } else {
                 ui.colored_label(WARN, "No output device open");
             }
-        });
     }
 
     fn central_panel(&mut self, ui: &mut egui::Ui) {
+        if !matches!(self.conn_state, ConnState::Streaming) {
+            ui.horizontal_wrapped(|ui| {
+                match &self.conn_state {
+                    ConnState::Reconnecting { attempt, retry_in_s } => {
+                        ui.colored_label(
+                            WARN,
+                            format!(
+                                "Reconnecting (attempt {attempt}) in {retry_in_s:.0}s — keeping last spectrum"
+                            ),
+                        );
+                    }
+                    ConnState::Connecting { label } => {
+                        ui.colored_label(WARN, format!("Connecting to {label}…"));
+                    }
+                    ConnState::Disconnected => {
+                        ui.colored_label(
+                            MUTED,
+                            "Not connected — click OFFLINE in the status bar to pick a receiver",
+                        );
+                    }
+                    ConnState::Streaming => {}
+                }
+            });
+            ui.add_space(4.0);
+        }
+
         self.plot_view.clamp_pan(self.sample_rate);
         let view = self.spectrum_view();
         let trace = display_trace(
@@ -1835,9 +2048,14 @@ impl WaterfallApp {
             );
             plot_actions.extend(wf_actions);
         } else {
-            ui.allocate_space(egui::vec2(ui.available_width(), ui.available_height()));
+            ui.allocate_space(egui::vec2(ui.available_width(), ui.available_height().max(120.0)));
             ui.centered_and_justified(|ui| {
-                ui.label("Waiting for IQ data…");
+                let msg = if matches!(self.conn_state, ConnState::Disconnected) {
+                    "Connect to a receiver to see live spectrum"
+                } else {
+                    "Waiting for IQ data…"
+                };
+                ui.label(egui::RichText::new(msg).color(MUTED));
             });
         }
 
@@ -1904,6 +2122,7 @@ fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
     SkimmerConfig {
         bucket_hz: s.skimmer_bucket_hz,
         min_snr_db: s.skimmer_min_snr_db,
+        min_decode_snr_db: s.skimmer_min_decode_snr_db,
         min_separation_bins: s.skimmer_min_separation_bins,
         max_channels: s.skimmer_max_channels.max(1),
         channel_timeout_secs: s.skimmer_channel_timeout_secs,
@@ -1913,12 +2132,14 @@ fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
         decoder: skimmer_decoder_from_u8(s.skimmer_decoder),
         lpf_cutoff_hz: s.skimmer_lpf_cutoff_hz,
         target_audio_rate_hz: s.skimmer_target_audio_rate_hz,
+        decode_gate_ms: s.skimmer_decode_gate_ms,
         decoder_params: DecoderParams {
             initial_wpm: s.skimmer_initial_wpm,
             beam_width: s.skimmer_beam_width.max(1),
             envelope: EnvelopeSettings {
                 thr_low: s.skimmer_thr_low,
                 thr_high: s.skimmer_thr_high,
+                min_span_fraction: EnvelopeSettings::default().min_span_fraction,
             },
             max_text_chars: s.skimmer_max_decode_chars.max(16),
         },
@@ -1945,24 +2166,10 @@ impl eframe::App for WaterfallApp {
         }
 
         self.poll_scp_download();
+        self.poll_kiwi_directory();
         self.handle_shortcuts(&ctx);
         self.pump_engine();
         self.frame_visible_spots = self.visible_spots();
-
-        let has_data = !self.rows.is_empty();
-        let show_main = matches!(self.conn_state, ConnState::Streaming)
-            || (has_data
-                && matches!(
-                    self.conn_state,
-                    ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
-                ));
-
-        if !show_main {
-            egui::CentralPanel::default().show_inside(ui, |ui| self.connect_screen(ui));
-            self.autosave();
-            ctx.request_repaint_after(Duration::from_millis(100));
-            return;
-        }
 
         // Lazy texture rebuild: only when new rows arrived or the view changed.
         let view = self.spectrum_view();
@@ -1971,9 +2178,6 @@ impl eframe::App for WaterfallApp {
             || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
         if self.textures_dirty || view_changed {
             self.update_texture(&ctx);
-            if self.show_history {
-                self.update_history_texture(&ctx);
-            }
             self.textures_dirty = false;
             self.last_tex_span = view.view_span_hz;
             self.last_tex_pan = view.pan_offset_hz;
@@ -2015,6 +2219,8 @@ impl eframe::App for WaterfallApp {
             .show_inside(ui, |ui| {
                 self.central_panel(ui);
             });
+
+        self.connection_popup(&ctx);
 
         self.apply_radio_settings();
         self.autosave();

@@ -144,6 +144,9 @@ impl MasterScp {
             return;
         }
         let upper = t.to_ascii_uppercase();
+        if upper.starts_with('#') || upper.starts_with("!!") {
+            return;
+        }
         if upper.starts_with("VER") && upper.len() >= 7 && upper[3..].chars().all(|c| c.is_ascii_digit())
         {
             self.version = Some(upper);

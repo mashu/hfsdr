@@ -24,6 +24,7 @@ enum SkimmerMsg {
     Frame(SkimmerInput),
     Clear,
     ReloadScp,
+    ReloadScpPath(std::path::PathBuf),
 }
 
 /// MASTER.SCP load status for the UI.
@@ -93,6 +94,10 @@ impl SkimmerHandle {
                             skimmer.reload_scp_discover();
                             publish_scp(&skimmer, &scp_thread);
                         }
+                        SkimmerMsg::ReloadScpPath(path) => {
+                            skimmer.reload_scp_from(&path);
+                            publish_scp(&skimmer, &scp_thread);
+                        }
                         SkimmerMsg::Frame(input) => {
                             if let Ok(cfg) = config_thread.lock() {
                                 skimmer.set_config(cfg.clone());
@@ -149,9 +154,14 @@ impl SkimmerHandle {
         }
     }
 
-    /// Re-scan known MASTER.SCP locations and reload.
+    /// Re-scan known MASTER.SCP locations and reload (blocks until the worker runs it).
     pub fn reload_scp(&self) {
-        let _ = self.tx.try_send(SkimmerMsg::ReloadScp);
+        let _ = self.tx.send(SkimmerMsg::ReloadScp);
+    }
+
+    /// Reload from an explicit path (e.g. after download).
+    pub fn reload_scp_from(&self, path: std::path::PathBuf) {
+        let _ = self.tx.send(SkimmerMsg::ReloadScpPath(path));
     }
 
     /// Forward a block to the worker; drops silently if the worker is busy.

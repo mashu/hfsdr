@@ -26,8 +26,13 @@ Requires [mdBook](https://rust-lang.github.io/mdBook/) 0.4.x:
 cargo install mdbook --locked
 ```
 
-On Linux, API docs with Airspy need `libairspyhf-dev`. Without it, the script
-builds Kiwi-only rustdoc automatically.
+On Linux, full API docs need native packages:
+
+- `libairspyhf-dev` — Airspy FFI (omit if missing)
+- `libasound2-dev` — cpal audio via the `gui` feature (omit if missing)
+
+Without them, `./scripts/build-docs.sh` builds rustdoc with only the features
+whose dependencies are present (library-only if both are absent).
 
 ---
 

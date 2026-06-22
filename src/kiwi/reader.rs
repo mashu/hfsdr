@@ -56,6 +56,28 @@ fn record_badp(link_error: &Mutex<Option<String>>, value: &str) {
     }
 }
 
+fn record_too_busy(link_error: &Mutex<Option<String>>, value: &str) {
+    let slots = value.parse::<u32>().unwrap_or(0);
+    let msg = if slots > 0 {
+        format!(
+            "KiwiSDR all {slots} client slots are busy — pick another receiver or retry in a minute"
+        )
+    } else {
+        "KiwiSDR is busy (all client slots taken)".to_string()
+    };
+    if let Ok(mut slot) = link_error.lock() {
+        *slot = Some(msg);
+    }
+}
+
+fn record_link_lost(link_error: &Mutex<Option<String>>, detail: &str) {
+    if let Ok(mut slot) = link_error.lock() {
+        if slot.is_none() {
+            *slot = Some(detail.to_string());
+        }
+    }
+}
+
 fn handle_msg_text(
     ws: &mut Ws,
     text: &str,
@@ -64,10 +86,17 @@ fn handle_msg_text(
     link_error: &Mutex<Option<String>>,
 ) {
     let params = crate::kiwi::protocol::kiwi_msg_params(text);
-    if params.contains("badp=") {
+    if params.contains("badp=") && !*iq_configured {
         for tok in params.split_whitespace() {
             if let Some(v) = tok.strip_prefix("badp=") {
                 record_badp(link_error, v);
+            }
+        }
+    }
+    if params.contains("too_busy=") && !*iq_configured {
+        for tok in params.split_whitespace() {
+            if let Some(v) = tok.strip_prefix("too_busy=") {
+                record_too_busy(link_error, v);
             }
         }
     }
@@ -141,12 +170,16 @@ pub fn reader_loop(
                     flush_pending(&mut ws, &mut pending_cmds);
                 }
             }
-            Ok(Message::Close(_)) => return,
+            Ok(Message::Close(_)) => {
+                record_link_lost(&link_error, "Kiwi closed the connection");
+                return;
+            }
             Ok(_) => {}
             Err(tungstenite::Error::Io(e))
                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
             Err(e) => {
                 eprintln!("kiwi reader: websocket error: {e}");
+                record_link_lost(&link_error, &format!("Kiwi connection lost: {e}"));
                 return;
             }
         }

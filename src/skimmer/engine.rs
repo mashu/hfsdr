@@ -9,6 +9,7 @@ use super::adaptive::AdaptiveCwDecoder;
 use super::bigram::BigramCwDecoder;
 use super::config::{DecoderParams, SkimmerConfig, SkimmerDecoderKind};
 use super::decoder::CwDecoder;
+use super::envelope::{DecodeGate, KeyingEnvelope};
 use super::patterns::analyze;
 use super::peaks::detect_peaks;
 use super::scp::MasterScp;
@@ -80,11 +81,14 @@ struct DecoderChannel {
     decim_counter: usize,
     filter: ComplexLowpass,
     audio_rate: f32,
+    gate_env: KeyingEnvelope,
+    gate: DecodeGate,
     decoder: ChannelDecoder,
     audio: Vec<f32>,
     text: String,
     last_seen: Instant,
     snr_db: f32,
+    min_decode_snr_db: f32,
 }
 
 impl DecoderChannel {
@@ -99,15 +103,22 @@ impl DecoderChannel {
             decim_counter: 0,
             filter: ComplexLowpass::new(audio_rate, config.lpf_cutoff_hz),
             audio_rate,
+            gate_env: KeyingEnvelope::new(config.decoder_params.envelope),
+            gate: DecodeGate::new(audio_rate, config.decode_gate_ms),
             decoder: ChannelDecoder::new(config.decoder, audio_rate, config.decoder_params),
             audio: Vec::new(),
             text: String::new(),
             last_seen: Instant::now(),
             snr_db,
+            min_decode_snr_db: config.min_decode_snr_db,
         }
     }
 
     fn process(&mut self, iq: &[Complex32], iq_rate: f32) -> String {
+        if self.snr_db < self.min_decode_snr_db {
+            self.gate.reset();
+            return String::new();
+        }
         self.audio.clear();
         let inc = std::f32::consts::TAU * self.offset_hz / iq_rate;
         for &s in iq {
@@ -126,6 +137,19 @@ impl DecoderChannel {
                 let mag = self.filter.process(shifted).norm();
                 self.audio.push(mag);
             }
+        }
+        if self.audio.is_empty() {
+            return String::new();
+        }
+        let mut gated = false;
+        for &mag in &self.audio {
+            let step = self.gate_env.update(mag);
+            if self.gate.feed(&step) {
+                gated = true;
+            }
+        }
+        if !gated || !self.gate.is_armed() {
+            return String::new();
         }
         self.decoder.push_audio(&self.audio, self.audio_rate)
     }
@@ -237,6 +261,7 @@ impl Skimmer {
             if let Some(ch) = self.channels.get_mut(&key) {
                 ch.last_seen = Instant::now();
                 ch.snr_db = p.snr_db;
+                ch.min_decode_snr_db = self.config.min_decode_snr_db;
             } else if self.channels.len() < self.config.max_channels {
                 self.channels.insert(
                     key,
@@ -283,6 +308,7 @@ impl Skimmer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skimmer::config::{DecoderParams, EnvelopeSettings, SkimmerConfig, SkimmerDecoderKind};
     use crate::skimmer::morse::encode_char;
     use std::f32::consts::TAU;
 
@@ -353,6 +379,17 @@ mod tests {
         let mut sk = Skimmer::new(SkimmerConfig {
             decoder: SkimmerDecoderKind::Adaptive,
             require_scp: false,
+            min_snr_db: 10.0,
+            min_decode_snr_db: 10.0,
+            decode_gate_ms: 25.0,
+            decoder_params: DecoderParams {
+                envelope: EnvelopeSettings {
+                    thr_low: 0.4,
+                    thr_high: 0.55,
+                    min_span_fraction: 0.05,
+                },
+                ..DecoderParams::default()
+            },
             ..SkimmerConfig::default()
         });
         for chunk in iq.chunks(1024) {

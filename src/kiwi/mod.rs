@@ -189,8 +189,19 @@ impl IqSource for KiwiSource {
             let _ = tcp.set_read_timeout(Some(READ_TIMEOUT));
         }
 
-        // Auth only — IQ mode is configured after the server sends sample_rate=…
-        for line in ["SET auth t=kiwi p=", "SET ident_user=hfsdr"] {
+        // Opening handshake: auth plus early IQ setup (original hfsdr behaviour).
+        // The reader still sends the full kiwiclient command sequence after sample_rate=….
+        for line in [
+            "SET auth t=kiwi p=",
+            "SET ident_user=hfsdr",
+            &self.mod_cmd(),
+            &format!(
+                "SET agc={} hang=0 thresh=-100 slope=6 decay=1000 manGain=50",
+                self.agc_on as u8
+            ),
+            "SET squelch=0 max=0",
+            "SET keepalive",
+        ] {
             ws.send(Message::Text(line.into()))
                 .map_err(|_| SourceError::Backend {
                     op: "kiwi auth",
@@ -281,6 +292,10 @@ impl IqSource for KiwiSource {
 
     fn link_ready(&self) -> bool {
         self.iq_ready()
+    }
+
+    fn link_alive(&self) -> bool {
+        KiwiSource::link_alive(self)
     }
 
     fn link_error(&self) -> Option<String> {

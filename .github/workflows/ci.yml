@@ -130,8 +130,17 @@ jobs:
       - name: Install mdBook
         run: cargo install mdbook --locked --version 0.4.40
 
-      - name: Install libairspyhf
-        run: sudo apt-get update && sudo apt-get install -y libairspyhf-dev
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libairspyhf-dev \
+            libasound2-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
 
       - name: Build documentation
         run: ./scripts/build-docs.sh

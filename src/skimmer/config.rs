@@ -17,13 +17,16 @@ pub enum SkimmerDecoderKind {
 pub struct EnvelopeSettings {
     pub thr_low: f32,
     pub thr_high: f32,
+    /// Minimum (peak − noise) / peak before treating energy as signal.
+    pub min_span_fraction: f32,
 }
 
 impl Default for EnvelopeSettings {
     fn default() -> Self {
         Self {
-            thr_low: 0.4,
-            thr_high: 0.6,
+            thr_low: 0.55,
+            thr_high: 0.72,
+            min_span_fraction: 0.10,
         }
     }
 }
@@ -31,10 +34,11 @@ impl Default for EnvelopeSettings {
 impl EnvelopeSettings {
     pub fn clamped(self) -> Self {
         let lo = self.thr_low.clamp(0.05, 0.95);
-        let hi = self.thr_high.clamp(lo + 0.01, 0.99);
+        let hi = self.thr_high.clamp(lo + 0.05, 0.99);
         Self {
             thr_low: lo,
             thr_high: hi,
+            min_span_fraction: self.min_span_fraction.clamp(0.02, 0.40),
         }
     }
 }
@@ -75,6 +79,8 @@ impl DecoderParams {
 pub struct SkimmerConfig {
     pub bucket_hz: f32,
     pub min_snr_db: f32,
+    /// Peaks below this SNR may exist but decoders stay muted.
+    pub min_decode_snr_db: f32,
     pub min_separation_bins: usize,
     pub max_channels: usize,
     pub channel_timeout_secs: f32,
@@ -84,6 +90,8 @@ pub struct SkimmerConfig {
     pub decoder: SkimmerDecoderKind,
     pub lpf_cutoff_hz: f32,
     pub target_audio_rate_hz: f32,
+    /// Sustained keyed energy required before Morse decode (ms).
+    pub decode_gate_ms: f32,
     pub decoder_params: DecoderParams,
 }
 
@@ -91,16 +99,18 @@ impl Default for SkimmerConfig {
     fn default() -> Self {
         Self {
             bucket_hz: 80.0,
-            min_snr_db: 14.0,
-            min_separation_bins: 6,
+            min_snr_db: 18.0,
+            min_decode_snr_db: 20.0,
+            min_separation_bins: 8,
             max_channels: 24,
             channel_timeout_secs: 8.0,
             spot_store_max_age_secs: 120.0,
             source_label: "rx".to_string(),
             require_scp: true,
             decoder: SkimmerDecoderKind::Bigram,
-            lpf_cutoff_hz: 150.0,
+            lpf_cutoff_hz: 120.0,
             target_audio_rate_hz: 12_000.0,
+            decode_gate_ms: 80.0,
             decoder_params: DecoderParams::default(),
         }
     }
@@ -110,12 +120,14 @@ impl SkimmerConfig {
     pub fn clamped(mut self) -> Self {
         self.bucket_hz = self.bucket_hz.clamp(20.0, 200.0);
         self.min_snr_db = self.min_snr_db.clamp(0.0, 60.0);
+        self.min_decode_snr_db = self.min_decode_snr_db.clamp(self.min_snr_db, 60.0);
         self.min_separation_bins = self.min_separation_bins.clamp(1, 32);
         self.max_channels = self.max_channels.max(1);
         self.channel_timeout_secs = self.channel_timeout_secs.clamp(1.0, 120.0);
         self.spot_store_max_age_secs = self.spot_store_max_age_secs.max(0.0);
         self.lpf_cutoff_hz = self.lpf_cutoff_hz.clamp(40.0, 800.0);
         self.target_audio_rate_hz = self.target_audio_rate_hz.clamp(4_000.0, 48_000.0);
+        self.decode_gate_ms = self.decode_gate_ms.clamp(20.0, 500.0);
         self.decoder_params = self.decoder_params.clamped();
         self
     }
@@ -137,6 +149,8 @@ impl SkimmerConfig {
         self.decoder != other.decoder
             || (self.lpf_cutoff_hz - other.lpf_cutoff_hz).abs() > f32::EPSILON
             || (self.target_audio_rate_hz - other.target_audio_rate_hz).abs() > f32::EPSILON
+            || (self.decode_gate_ms - other.decode_gate_ms).abs() > f32::EPSILON
+            || (self.min_decode_snr_db - other.min_decode_snr_db).abs() > f32::EPSILON
             || self.decoder_params != other.decoder_params
     }
 }
