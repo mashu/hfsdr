@@ -1,4 +1,4 @@
-//! Mouse interaction for RF plots: tune, zoom, pan view.
+//! Mouse interaction for RF plots: tune, zoom, pan view, filter/notch editing.
 
 use eframe::egui::{Pos2, Rect, Response, Ui};
 
@@ -12,6 +12,14 @@ pub const CW_PASSBAND_MIN_HZ: f32 = 50.0;
 pub const CW_PASSBAND_MAX_HZ: f32 = 2_000.0;
 pub const CW_PASSBAND_NARROW_MAX_HZ: f32 = 500.0;
 
+pub const NOTCH_WIDTH_MIN_HZ: f32 = 10.0;
+pub const NOTCH_WIDTH_MAX_HZ: f32 = 500.0;
+/// Default spacing when arming another manual notch around the listen point.
+pub const NOTCH_STAGGER_HZ: f32 = 80.0;
+pub const NOTCH_MIN_SEPARATION_HZ: f32 = 40.0;
+pub const RIT_MIN_HZ: f32 = -800.0;
+pub const RIT_MAX_HZ: f32 = 800.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DragMode {
     None,
@@ -20,6 +28,24 @@ pub enum DragMode {
     PanView,
     ResizeLeft,
     ResizeRight,
+    ShiftPassband,
+    DragNotch(usize),
+    ResizeNotchLeft(usize),
+    ResizeNotchRight(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NotchHit {
+    Left,
+    Right,
+    Body,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NotchMarker {
+    pub slot: usize,
+    pub offset_hz: f32,
+    pub width_hz: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -32,6 +58,16 @@ pub enum PlotAction {
     PanViewDeltaHz(f64),
     ZoomView(f32),
     SetPassbandHz(f32),
+    /// Move listen offset (RIT) without retuning the carrier.
+    SetRitHz(f32),
+    SetNotchOffset {
+        slot: usize,
+        offset_hz: f32,
+    },
+    SetNotchWidth {
+        slot: usize,
+        width_hz: f32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -98,12 +134,13 @@ impl PlotInteraction {
         passband_max_hz: f32,
         filter_editable: bool,
         listen_center_hz: f64,
-        _tune_preview_offset_hz: f64,
+        tune_preview_offset_hz: f64,
+        notches: &[NotchMarker],
     ) -> Vec<PlotAction> {
         let mut actions = Vec::new();
         let view_span = view.view_span_hz(sample_rate);
         let pan = view.pan_offset_hz;
-        let center_x = offset_hz_to_x(listen_center_hz, rect, view_span, pan);
+        let preview_x = offset_hz_to_x(tune_preview_offset_hz, rect, view_span, pan);
         let shift = ui.input(|i| i.modifiers.shift);
         let ctrl = ui.input(|i| i.modifiers.ctrl);
 
@@ -135,8 +172,13 @@ impl PlotInteraction {
                 self.drag_origin = Some(pos);
                 self.tune_drag_active = false;
                 let can_pan = view.can_pan(sample_rate);
-                if pos.x >= center_x - CENTER_GRAB_PX && pos.x <= center_x + CENTER_GRAB_PX {
-                    self.drag_mode = DragMode::DragCenter;
+
+                if let Some((slot, hit)) = pick_notch_hit(pos.x, rect, view_span, pan, notches) {
+                    self.drag_mode = match hit {
+                        NotchHit::Left => DragMode::ResizeNotchLeft(slot),
+                        NotchHit::Right => DragMode::ResizeNotchRight(slot),
+                        NotchHit::Body => DragMode::DragNotch(slot),
+                    };
                 } else if filter_editable {
                     let (left, right) =
                         filter_edges(rect, view_span, pan, listen_center_hz, passband_hz);
@@ -144,11 +186,21 @@ impl PlotInteraction {
                         self.drag_mode = DragMode::ResizeLeft;
                     } else if pos.x >= right - EDGE_GRAB_PX && pos.x <= right + EDGE_GRAB_PX {
                         self.drag_mode = DragMode::ResizeRight;
+                    } else if pos.x >= preview_x - CENTER_GRAB_PX
+                        && pos.x <= preview_x + CENTER_GRAB_PX
+                    {
+                        self.drag_mode = DragMode::DragCenter;
+                    } else if in_passband_body(pos.x, left, right) {
+                        self.drag_mode = DragMode::ShiftPassband;
                     } else if shift || can_pan {
                         self.drag_mode = DragMode::PanView;
                     } else {
                         self.drag_mode = DragMode::Tune;
                     }
+                } else if pos.x >= preview_x - CENTER_GRAB_PX
+                    && pos.x <= preview_x + CENTER_GRAB_PX
+                {
+                    self.drag_mode = DragMode::DragCenter;
                 } else if shift || can_pan {
                     self.drag_mode = DragMode::PanView;
                 } else {
@@ -199,6 +251,29 @@ impl PlotInteraction {
                         actions.push(PlotAction::SetPassbandHz(bw));
                     }
                 }
+                DragMode::ShiftPassband => {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
+                        let rit = (offset - tune_preview_offset_hz) as f32;
+                        actions.push(PlotAction::SetRitHz(rit.clamp(RIT_MIN_HZ, RIT_MAX_HZ)));
+                    }
+                }
+                DragMode::DragNotch(slot) => {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let offset = x_to_offset_hz(pos.x, rect, view_span, pan) as f32;
+                        actions.push(PlotAction::SetNotchOffset { slot, offset_hz: offset });
+                    }
+                }
+                DragMode::ResizeNotchLeft(slot) | DragMode::ResizeNotchRight(slot) => {
+                    if let (Some(pos), Some(n)) = (
+                        response.interact_pointer_pos(),
+                        notches.iter().find(|n| n.slot == slot),
+                    ) {
+                        let edge = x_to_offset_hz(pos.x, rect, view_span, pan);
+                        let width = notch_width_from_edge(n.offset_hz, edge);
+                        actions.push(PlotAction::SetNotchWidth { slot, width_hz: width });
+                    }
+                }
                 DragMode::None => {}
             }
         }
@@ -220,6 +295,100 @@ impl PlotInteraction {
         }
 
         actions
+    }
+}
+
+fn in_passband_body(x: f32, left: f32, right: f32) -> bool {
+    x > left + EDGE_GRAB_PX && x < right - EDGE_GRAB_PX
+}
+
+fn pick_notch_hit(
+    x: f32,
+    rect: Rect,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    notches: &[NotchMarker],
+) -> Option<(usize, NotchHit)> {
+    let mut best: Option<(usize, NotchHit, f32)> = None;
+    for n in notches {
+        let half = n.width_hz as f64 / 2.0;
+        let center = n.offset_hz as f64;
+        let left = offset_hz_to_x(center - half, rect, view_span_hz, pan_offset_hz);
+        let right = offset_hz_to_x(center + half, rect, view_span_hz, pan_offset_hz);
+        let cx = offset_hz_to_x(center, rect, view_span_hz, pan_offset_hz);
+
+        let mut consider = |part: NotchHit, dist: f32| {
+            if best.is_none_or(|(_, _, d)| dist < d) {
+                best = Some((n.slot, part, dist));
+            }
+        };
+
+        if x >= left - EDGE_GRAB_PX && x <= left + EDGE_GRAB_PX {
+            consider(NotchHit::Left, (x - left).abs());
+        }
+        if x >= right - EDGE_GRAB_PX && x <= right + EDGE_GRAB_PX {
+            consider(NotchHit::Right, (x - right).abs());
+        }
+        if x > left + EDGE_GRAB_PX && x < right - EDGE_GRAB_PX {
+            consider(NotchHit::Body, (x - cx).abs());
+        }
+    }
+    best.map(|(slot, part, _)| (slot, part))
+}
+
+pub fn notch_width_from_edge(center_hz: f32, edge_offset_hz: f64) -> f32 {
+    (2.0 * (edge_offset_hz - center_hz as f64).abs() as f32)
+        .clamp(NOTCH_WIDTH_MIN_HZ, NOTCH_WIDTH_MAX_HZ)
+}
+
+/// Suggested RF offset when the user arms a manual notch (listen point + stagger).
+pub fn suggest_notch_offset_hz(listen_offset_hz: f32, other_offsets: &[f32]) -> f32 {
+    if other_offsets.is_empty() {
+        return listen_offset_hz;
+    }
+
+    for step in 1..=4 {
+        for sign in [1.0_f32, -1.0] {
+            let candidate = listen_offset_hz + sign * step as f32 * NOTCH_STAGGER_HZ;
+            if other_offsets
+                .iter()
+                .all(|&o| (candidate - o).abs() >= NOTCH_MIN_SEPARATION_HZ)
+            {
+                return candidate;
+            }
+        }
+    }
+
+    let nearest = other_offsets
+        .iter()
+        .min_by(|a, b| {
+            (*a - listen_offset_hz)
+                .abs()
+                .total_cmp(&(*b - listen_offset_hz).abs())
+        })
+        .copied()
+        .unwrap_or(listen_offset_hz);
+    let mirrored = 2.0 * listen_offset_hz - nearest;
+    if other_offsets
+        .iter()
+        .all(|&o| (mirrored - o).abs() >= NOTCH_MIN_SEPARATION_HZ)
+    {
+        return mirrored;
+    }
+
+    let extreme = other_offsets
+        .iter()
+        .fold(listen_offset_hz, |acc, &o| {
+            if (o - listen_offset_hz).abs() > (acc - listen_offset_hz).abs() {
+                o
+            } else {
+                acc
+            }
+        });
+    if extreme >= listen_offset_hz {
+        extreme + NOTCH_STAGGER_HZ
+    } else {
+        extreme - NOTCH_STAGGER_HZ
     }
 }
 
@@ -313,6 +482,10 @@ pub fn center_grab_px() -> f32 {
     CENTER_GRAB_PX
 }
 
+pub fn edge_grab_px() -> f32 {
+    EDGE_GRAB_PX
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +512,42 @@ mod tests {
         let step = nice_freq_step_hz(3_000.0);
         assert!(step >= 200.0 && step <= 1_500.0);
         assert!((3_000.0 / step).round() >= 2.0);
+    }
+
+    #[test]
+    fn notch_width_from_edge_symmetric() {
+        let w = notch_width_from_edge(100.0, 150.0);
+        assert!((w - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn passband_body_between_edges() {
+        assert!(in_passband_body(50.0, 10.0, 90.0));
+        assert!(!in_passband_body(15.0, 10.0, 90.0));
+    }
+
+    #[test]
+    fn suggest_notch_first_at_listen() {
+        assert!((suggest_notch_offset_hz(120.0, &[]) - 120.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn suggest_notch_staggers_from_listen() {
+        let o = suggest_notch_offset_hz(0.0, &[0.0]);
+        assert!((o - 80.0).abs() < f32::EPSILON);
+        let o = suggest_notch_offset_hz(0.0, &[0.0, 80.0]);
+        assert!((o + 80.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn suggest_notch_mirrors_across_listen() {
+        let o = suggest_notch_offset_hz(100.0, &[180.0]);
+        assert!((o - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn suggest_notch_extends_when_cluster_full() {
+        let o = suggest_notch_offset_hz(0.0, &[80.0, -80.0, 160.0, -160.0]);
+        assert!((o - 240.0).abs() < f32::EPSILON);
     }
 }

@@ -22,13 +22,16 @@ use hfsdr::{
 
 use crate::audio::AudioOutput;
 use crate::colormap::db_to_colour;
-use crate::controls::{scroll_drag_f64, scroll_slider_f32, scroll_slider_log_f32};
+use crate::controls::{scroll_drag_f64, scroll_slider_f32, scroll_slider_f32_step, scroll_slider_log_f32};
 use crate::display_levels::{estimate_levels, estimate_levels_from_rows};
 use crate::engine::{
     ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
 };
 use crate::iq_panel::{IqPanel, IqPanelCmd, IqPanelView};
-use crate::interaction::{PlotAction, PlotInteraction, PlotViewState};
+use crate::interaction::{
+    PlotAction, PlotInteraction, PlotViewState, RIT_MAX_HZ, RIT_MIN_HZ, NOTCH_WIDTH_MAX_HZ,
+    NOTCH_WIDTH_MIN_HZ, suggest_notch_offset_hz,
+};
 use crate::interaction::{CW_PASSBAND_MAX_HZ, CW_PASSBAND_MIN_HZ, CW_PASSBAND_NARROW_MAX_HZ};
 use crate::kiwi_directory::{GeoLocation, KiwiReceiver};
 use crate::log;
@@ -186,10 +189,10 @@ impl WaterfallApp {
             form_kind: SourceKind::Kiwi,
             form_host: String::new(),
             form_port: 8073,
-            form_center_mhz: 7.03,
+            form_center_mhz: 14.01,
             sample_rate: 12_000.0,
-            center_khz: 7_030.0,
-            last_center_khz: 7_030.0,
+            center_khz: 14_010.0,
+            last_center_khz: 14_010.0,
             is_kiwi: false,
             cw: CwChannelSettings::default(),
             rit_hz: 0.0,
@@ -269,13 +272,13 @@ impl WaterfallApp {
         };
 
         app.apply_settings(&saved);
+        app.form_center_mhz = app.center_khz / 1000.0;
 
-        // Seed the connect form from the most-recent host.
-        if let Some(r) = app.recent_hosts.first().cloned() {
+        // Seed host/port from the most-recent connection; keep the tune point from settings/defaults.
+        if let Some(r) = app.recent_hosts.first() {
             app.form_kind = r.kind;
-            app.form_host = r.host;
+            app.form_host = r.host.clone();
             app.form_port = r.port;
-            app.form_center_mhz = r.center_hz / 1e6;
         }
 
         // CLI args take precedence and trigger an auto-connect on first frame.
@@ -666,6 +669,19 @@ impl WaterfallApp {
                     self.cw.passband_hz =
                         bw.clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
                 }
+                PlotAction::SetRitHz(rit) => {
+                    self.rit_hz = rit.clamp(RIT_MIN_HZ, RIT_MAX_HZ);
+                }
+                PlotAction::SetNotchOffset { slot, offset_hz } => {
+                    if let Some(n) = self.cw.notches.get_mut(slot) {
+                        n.offset_hz = offset_hz;
+                    }
+                }
+                PlotAction::SetNotchWidth { slot, width_hz } => {
+                    if let Some(n) = self.cw.notches.get_mut(slot) {
+                        n.width_hz = width_hz.clamp(NOTCH_WIDTH_MIN_HZ, NOTCH_WIDTH_MAX_HZ);
+                    }
+                }
             }
         }
     }
@@ -794,12 +810,42 @@ impl WaterfallApp {
         self.rit_hz as f64 + self.tune_preview_offset_hz.unwrap_or(0.0)
     }
 
-    fn enabled_notches(&self) -> Vec<(f32, f32)> {
+    fn arm_manual_notch(&mut self, slot: usize, offset_hz: Option<f32>) {
+        let listen = self.listen_offset_hz() as f32;
+        let other: Vec<f32> = self
+            .cw
+            .notches
+            .iter()
+            .enumerate()
+            .filter(|(i, n)| *i != slot && n.enabled)
+            .map(|(_, n)| n.offset_hz)
+            .collect();
+        let offset = offset_hz.unwrap_or_else(|| suggest_notch_offset_hz(listen, &other));
+        let Some(notch) = self.cw.notches.get_mut(slot) else {
+            return;
+        };
+        notch.enabled = true;
+        notch.offset_hz = offset;
+        if notch.width_hz < NOTCH_WIDTH_MIN_HZ {
+            notch.width_hz = 50.0;
+        }
+    }
+
+    fn first_free_notch_slot(&self) -> Option<usize> {
+        self.cw.notches.iter().position(|n| !n.enabled)
+    }
+
+    fn enabled_notches(&self) -> Vec<crate::interaction::NotchMarker> {
         self.cw
             .notches
             .iter()
-            .filter(|n| n.enabled)
-            .map(|n| (n.offset_hz, n.width_hz))
+            .enumerate()
+            .filter(|(_, n)| n.enabled)
+            .map(|(slot, n)| crate::interaction::NotchMarker {
+                slot,
+                offset_hz: n.offset_hz,
+                width_hz: n.width_hz,
+            })
             .collect()
     }
 
@@ -1406,12 +1452,13 @@ impl WaterfallApp {
                     }
 
                     ui.label(egui::RichText::new("Center").small().color(MUTED));
-                    ui.add(
-                        egui::DragValue::new(&mut self.form_center_mhz)
-                            .range(0.0..=60.0)
-                            .speed(0.001)
-                            .suffix(" MHz")
-                            .fixed_decimals(3),
+                    scroll_drag_f64(
+                        ui,
+                        &mut self.form_center_mhz,
+                        0.0..=60.0,
+                        0.001,
+                        0.000_01,
+                        " MHz",
                     );
                     ui.end_row();
                 });
@@ -1727,8 +1774,8 @@ impl WaterfallApp {
                     }
                 }
             });
-            scroll_drag_f64(ui, &mut self.center_khz, 0.0..=60_000.0, 0.05, " kHz");
-            scroll_slider_f32(ui, &mut self.rit_hz, -800.0..=800.0, "RIT");
+            scroll_drag_f64(ui, &mut self.center_khz, 0.0..=60_000.0, 0.05, 0.01, " kHz");
+            scroll_slider_f32_step(ui, &mut self.rit_hz, -800.0..=800.0, "RIT", 1.0);
             ui.horizontal(|ui| {
                 if ui.button("Zero-beat (Z)").on_hover_text("Snap listen passband to strongest carrier").clicked() {
                     self.zero_beat();
@@ -1749,7 +1796,7 @@ impl WaterfallApp {
                     }
                 }
             });
-            scroll_slider_f32(ui, &mut self.cw.bfo_hz, 300.0..=1_200.0, "BFO tone");
+            scroll_slider_f32_step(ui, &mut self.cw.bfo_hz, 300.0..=1_200.0, "BFO tone", 10.0);
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.filter_wide, false, "CW (≤500 Hz)");
                 ui.selectable_value(&mut self.filter_wide, true, "Wide (≤2 kHz)");
@@ -1817,7 +1864,7 @@ impl WaterfallApp {
             if self.cw.passband_flatten {
                 section_hint(
                     ui,
-                    "Compensates upstream boxcar/CIC droop — useful on Kiwi and Airspy paths.",
+                    "Lifts upstream boxcar/CIC droop (N≈7). Off by default — enable if the tone sounds dull at band edges.",
                 );
             }
             let audio_rate = hfsdr::audio_sample_rate(self.sample_rate, self.cw.decimation);
@@ -1835,7 +1882,7 @@ impl WaterfallApp {
                 ui,
                 "APF after demod sharpens tone without smearing dits. Keep NR light (stutters if heavy).",
             );
-            section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan edges");
+            section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan band = RIT shift · cyan edges = width · purple notches draggable");
         });
     }
 
@@ -1893,26 +1940,35 @@ impl WaterfallApp {
 
     fn notch_card(&mut self, ui: &mut egui::Ui) {
         collapsible_section(ui, "notches", "Manual notches", false, |ui| {
-            section_hint(ui, "Steer multiple notches onto hets in the passband.");
+            section_hint(ui, "New notches land on the listen point, then ±80 Hz from it. Drag on the spectrum to fine-tune.");
             if let Some(hover) = self.hover_offset_hz {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(format!("Cursor {hover:.0} Hz")).small().color(MUTED));
                     if ui.small_button("Notch at cursor").clicked() {
-                        if let Some(slot) = self.cw.notches.iter_mut().find(|n| !n.enabled) {
-                            slot.enabled = true;
-                            slot.offset_hz = hover as f32;
+                        if let Some(slot) = self.first_free_notch_slot() {
+                            self.arm_manual_notch(slot, Some(hover as f32));
                         }
                     }
                 });
             }
             for idx in 0..MAX_NOTCHES {
-                let notch = &mut self.cw.notches[idx];
+                let was_enabled = self.cw.notches[idx].enabled;
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut notch.enabled, format!("#{}", idx + 1));
+                    ui.checkbox(&mut self.cw.notches[idx].enabled, format!("#{}", idx + 1));
                 });
-                if notch.enabled {
-                    scroll_slider_f32(ui, &mut notch.offset_hz, -5_000.0..=5_000.0, "Offset");
-                    scroll_slider_f32(ui, &mut notch.width_hz, 10.0..=200.0, "Width");
+                if self.cw.notches[idx].enabled && !was_enabled {
+                    self.arm_manual_notch(idx, None);
+                }
+                if self.cw.notches[idx].enabled {
+                    let notch = &mut self.cw.notches[idx];
+                    scroll_slider_f32_step(
+                        ui,
+                        &mut notch.offset_hz,
+                        -5_000.0..=5_000.0,
+                        "Offset",
+                        1.0,
+                    );
+                    scroll_slider_f32_step(ui, &mut notch.width_hz, 10.0..=200.0, "Width", 1.0);
                 }
             }
         });

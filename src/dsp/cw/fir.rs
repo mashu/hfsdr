@@ -183,7 +183,8 @@ pub fn design_gaussian_lowpass(sample_rate: f32, bandwidth_hz: f32) -> FirFilter
 }
 
 /// Short inverse-sinc compensator for upstream boxcar/CIC passband droop.
-/// Based on the liquid-dsp approach: passband gain ∝ 1/sinc(N·f), N ≈ 7.
+/// Assumes nominal boxcar length N≈7 (typical SDR channel filter); see liquid-dsp
+/// inverse-sinc article. Only applied when [`LowpassDesign::passband_flatten`] is true.
 fn design_droop_compensator() -> Vec<f32> {
     const N: f32 = 7.0;
     const TAPS: usize = 15;

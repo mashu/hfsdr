@@ -6,11 +6,10 @@ use eframe::egui::{
 use hfsdr::extract_view_window;
 
 use crate::interaction::{
-    center_grab_px, filter_edges, format_freq_hz, format_offset_label, nice_freq_step_hz,
-    offset_hz_to_x, PlotAction, PlotInteraction, PlotViewState,
+    center_grab_px, edge_grab_px, filter_edges, format_freq_hz, format_offset_label,
+    nice_freq_step_hz, offset_hz_to_x, NotchMarker, PlotAction, PlotInteraction, PlotViewState,
 };
 
-const EDGE_GRAB_PX: f32 = 12.0;
 use crate::smooth::spatial_smooth;
 use crate::theme::{ACCENT, CENTER_LINE, FILTER_EDGE, GRID, NOTCH_LINE, OK, TRACE, TRACE_GLOW, WARN};
 
@@ -37,7 +36,7 @@ pub struct PlotParams<'a> {
     pub filter_editable: bool,
     pub listen_center_hz: f64,
     pub tune_preview_offset_hz: f64,
-    pub notches: &'a [(f32, f32)],
+    pub notches: &'a [NotchMarker],
     pub labels: &'a [SpotLabel],
     pub trace: &'a [f32],
     pub ref_db: f32,
@@ -71,8 +70,17 @@ impl SpectrumWidget {
             draw_filter_band(&painter, rect, view_span, pan, p.listen_center_hz, p.passband_hz, true);
         }
 
-        for &(offset, width) in p.notches {
-            draw_notch_marker(&painter, rect, view_span, pan, offset, width);
+        for notch in p.notches {
+            draw_notch_marker(
+                &painter,
+                rect,
+                view_span,
+                pan,
+                notch.slot,
+                notch.offset_hz,
+                notch.width_hz,
+                true,
+            );
         }
 
         draw_db_scale(&painter, rect, p.ref_db, p.range_db);
@@ -117,6 +125,7 @@ impl SpectrumWidget {
             p.filter_editable,
             p.listen_center_hz,
             p.tune_preview_offset_hz,
+            p.notches,
         );
 
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
@@ -172,8 +181,17 @@ impl WaterfallWidget {
             draw_filter_band(&painter, rect, view_span, pan, p.listen_center_hz, p.passband_hz, false);
         }
 
-        for &(offset, width) in p.notches {
-            draw_notch_marker(&painter, rect, view_span, pan, offset, width);
+        for notch in p.notches {
+            draw_notch_marker(
+                &painter,
+                rect,
+                view_span,
+                pan,
+                notch.slot,
+                notch.offset_hz,
+                notch.width_hz,
+                false,
+            );
         }
 
         draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, false);
@@ -199,6 +217,7 @@ impl WaterfallWidget {
             p.filter_editable,
             p.listen_center_hz,
             p.tune_preview_offset_hz,
+            p.notches,
         );
 
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
@@ -399,13 +418,21 @@ fn draw_filter_band(
     );
 
     if fill {
+        let grab_w = edge_grab_px();
         for x in [left, right] {
             let handle = Rect::from_center_size(
                 Pos2::new(x, rect.center().y),
-                Vec2::new(EDGE_GRAB_PX, rect.height() * 0.35),
+                Vec2::new(grab_w, rect.height() * 0.35),
             );
             painter.rect_filled(handle, 3.0, Color32::from_rgba_unmultiplied(125, 211, 252, 60));
         }
+        painter.text(
+            Pos2::new((left + right) * 0.5, rect.bottom() - 4.0),
+            Align2::CENTER_BOTTOM,
+            "drag band = RIT · edges = BW",
+            FontId::proportional(9.0),
+            Color32::from_rgba_unmultiplied(125, 211, 252, 140),
+        );
     }
 }
 
@@ -474,8 +501,10 @@ fn draw_notch_marker(
     rect: Rect,
     view_span_hz: f32,
     pan_offset_hz: f64,
+    slot: usize,
     notch_offset_hz: f32,
     notch_width_hz: f32,
+    show_handles: bool,
 ) {
     let half = notch_width_hz as f64 / 2.0;
     let center = notch_offset_hz as f64;
@@ -502,13 +531,24 @@ fn draw_notch_marker(
                 [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
                 Stroke::new(1.0, Color32::from_rgba_unmultiplied(192, 132, 252, 160)),
             );
+            if show_handles {
+                let handle = Rect::from_center_size(
+                    Pos2::new(x, rect.center().y),
+                    Vec2::new(edge_grab_px(), rect.height() * 0.28),
+                );
+                painter.rect_filled(
+                    handle,
+                    3.0,
+                    Color32::from_rgba_unmultiplied(192, 132, 252, 55),
+                );
+            }
         }
     }
 
     painter.text(
         Pos2::new(center_x, rect.top() + 14.0),
         Align2::CENTER_TOP,
-        "notch",
+        format!("#{}", slot + 1),
         FontId::proportional(10.0),
         NOTCH_LINE,
     );

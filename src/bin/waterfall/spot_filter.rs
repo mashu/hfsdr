@@ -145,6 +145,7 @@ mod tests {
             first_heard: now,
             last_heard: now,
             sources: Vec::new(),
+            callsign_rank: 0,
         }
     }
 

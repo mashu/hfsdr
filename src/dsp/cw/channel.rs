@@ -222,8 +222,9 @@ impl CwChannel {
         };
         let design_changed = (bandwidth - self.last_bandwidth).abs() > 1.0
             || settings.window != self.last_window
-            || (settings.kaiser_beta - self.last_kaiser_beta).abs() > 0.05
-            || settings.passband_flatten != self.last_passband_flatten;
+            || settings.passband_flatten != self.last_passband_flatten
+            || (settings.window == WindowKind::Kaiser
+                && (settings.kaiser_beta - self.last_kaiser_beta).abs() > 0.05);
         if design_changed {
             self.channel_fir = design_lowpass_with(audio_rate, bandwidth, design);
             self.last_bandwidth = bandwidth;

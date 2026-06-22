@@ -190,7 +190,7 @@ impl Default for AppSettings {
             show_left: true,
             show_right: true,
             recent_hosts: Vec::new(),
-            last_center_mhz: 7.03,
+            last_center_mhz: 14.01,
             iq_capture_dir: String::new(),
             iq_playback_path: String::new(),
         }

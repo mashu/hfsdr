@@ -49,7 +49,7 @@ impl Default for ConnectRequest {
             kind: SourceKind::Kiwi,
             host: String::new(),
             port: 8073,
-            center_hz: 7_030_000.0,
+            center_hz: 14_010_000.0,
             sample_rate: 0,
         }
     }
@@ -137,7 +137,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
         Some("kiwi") => {
             let host = args.get(2).cloned()?;
             let port = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(8073);
-            let center_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(7_030_000.0);
+            let center_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
             Some(ConnectRequest {
                 kind: SourceKind::Kiwi,
                 host,
@@ -149,7 +149,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
         #[cfg(feature = "airspy")]
         Some("airspy") => {
             let sample_rate = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-            let center_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(7_030_000.0);
+            let center_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
             Some(ConnectRequest {
                 kind: SourceKind::Airspy,
                 host: String::new(),

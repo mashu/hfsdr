@@ -4,7 +4,7 @@ use eframe::egui::{self, Color32, Response, Ui};
 
 use crate::theme::{OK, WARN};
 
-/// Link health gauge (red = starving / stale, green = healthy).
+/// IQ ring / pump utilization (green = consuming at rate, red = starved).
 pub fn iq_buffer_gauge(ui: &mut Ui, fill: f32, buffer_secs: f32) -> Response {
     let fill = fill.clamp(0.0, 1.0);
     let size = egui::vec2(52.0, 11.0);
@@ -18,9 +18,9 @@ pub fn iq_buffer_gauge(ui: &mut Ui, fill: f32, buffer_secs: f32) -> Response {
         painter.rect_filled(fill_rect, rounding, buffer_color(fill));
     }
     response.on_hover_text(format!(
-        "Link health {:.0}%\n\
-         IQ queued ~{:.1}s · rate + freshness + ring headroom\n\
-         Green = data flowing reliably · Red = stall / underrun risk",
+        "IQ utilization {:.0}%\n\
+         ~{:.2}s queued in ring · pump vs expected rate\n\
+         High = samples flowing and consumed · Low / empty = stall or underrun",
         fill * 100.0,
         buffer_secs
     ))

@@ -18,32 +18,43 @@ pub fn scroll_drag_f64(
     ui: &mut Ui,
     value: &mut f64,
     range: RangeInclusive<f64>,
-    step: f64,
+    drag_speed: f64,
+    scroll_step: f64,
     suffix: &str,
 ) -> Response {
     let response = ui.add(
         DragValue::new(value)
             .range(range.clone())
-            .speed(step)
+            .speed(drag_speed)
             .suffix(suffix),
     );
     if response.hovered() {
         let steps = scroll_steps(ui.input(|i| i.smooth_scroll_delta.y));
         if steps != 0 {
-            *value = (*value + steps as f64 * step).clamp(*range.start(), *range.end());
+            *value = (*value + steps as f64 * scroll_step).clamp(*range.start(), *range.end());
         }
     }
     response
 }
 
 pub fn scroll_slider_f32(ui: &mut Ui, value: &mut f32, range: RangeInclusive<f32>, label: &str) -> Response {
+    let span = *range.end() - *range.start();
+    scroll_slider_f32_step(ui, value, range, label, span / 120.0)
+}
+
+/// Like [`scroll_slider_f32`] but with an explicit wheel step (Hz, dB, etc.).
+pub fn scroll_slider_f32_step(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: RangeInclusive<f32>,
+    label: &str,
+    scroll_step: f32,
+) -> Response {
     let response = ui.add(Slider::new(value, range.clone()).text(label));
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll.abs() > 2.0 {
-            let span = *range.end() - *range.start();
-            let step = span / 120.0;
-            let delta = if scroll > 0.0 { step } else { -step };
+            let delta = if scroll > 0.0 { scroll_step } else { -scroll_step };
             *value = (*value + delta).clamp(*range.start(), *range.end());
         }
     }

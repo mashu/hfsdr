@@ -300,6 +300,7 @@ struct Engine {
     iq_buffer_secs: f32,
     iq_buffer_peak: f32,
     last_pump_got: usize,
+    last_pump_at: Instant,
 }
 
 impl Engine {
@@ -345,6 +346,7 @@ impl Engine {
             iq_buffer_secs: 0.0,
             iq_buffer_peak: 0.0,
             last_pump_got: 0,
+            last_pump_at: Instant::now(),
         }
     }
 
@@ -365,6 +367,14 @@ impl Engine {
                 }
             } else {
                 self.maybe_retry_reconnect();
+                let (sample_rate, _, _) = self.link_meta();
+                let dt = self
+                    .last_pump_at
+                    .elapsed()
+                    .as_secs_f32()
+                    .clamp(0.001, 0.1);
+                self.update_ring_utilization(sample_rate, (0.0, 0.0), 0, dt);
+                self.last_pump_at = Instant::now();
                 self.publish_stats(0);
                 thread::sleep(Duration::from_millis(20));
             }
@@ -546,6 +556,7 @@ impl Engine {
         self.iq_buffer_secs = 0.0;
         self.iq_buffer_peak = 0.0;
         self.last_pump_got = 0;
+        self.last_pump_at = Instant::now();
         self.stop_recorder();
     }
 
@@ -586,7 +597,12 @@ impl Engine {
     fn pump_stream(&mut self) -> usize {
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
         let (sample_rate, _, _) = self.link_meta();
-        self.update_link_health(sample_rate);
+        let dt = self
+            .last_pump_at
+            .elapsed()
+            .as_secs_f32()
+            .clamp(0.001, 0.1);
+        let ring_before = self.measure_iq_buffer();
 
         self.drain.clear();
         if let Some(pb) = &mut self.playback {
@@ -611,6 +627,8 @@ impl Engine {
         }
         let got = self.drain.len();
         self.last_pump_got = got;
+        self.update_ring_utilization(sample_rate, ring_before, got, dt);
+        self.last_pump_at = Instant::now();
         if got == 0 {
             self.publish_stats(0);
             return 0;
@@ -723,42 +741,62 @@ impl Engine {
         }
     }
 
-    fn update_link_health(&mut self, sample_rate: f32) {
-        let (raw_fill, raw_secs) = self.measure_iq_buffer();
-        self.iq_buffer_peak = (self.iq_buffer_peak * 0.992).max(raw_fill);
-        let ring_boost = (raw_fill * 24.0)
-            .min(1.0)
-            .max((self.iq_buffer_peak * 10.0).min(1.0));
+    fn update_ring_utilization(
+        &mut self,
+        sample_rate: f32,
+        ring_before: (f32, f32),
+        got: usize,
+        dt: f32,
+    ) {
+        let (ring_fill, ring_secs) = ring_before;
+        self.iq_buffer_peak = (self.iq_buffer_peak * 0.985).max(ring_fill);
 
-        if let Some(pb) = &self.playback {
-            let health = if self.last_pump_got > 0 {
-                raw_fill.max(0.9)
-            } else if !pb.finished() {
-                0.6
+        if self.playback.is_some() {
+            // Disk playback: bar tracks ring occupancy (should stay high).
+            let util = if got > 0 {
+                ring_fill.max(0.75)
             } else {
-                0.0
+                ring_fill * 0.5
             };
-            self.iq_buffer_fill = self.iq_buffer_fill * 0.65 + health * 0.35;
-            self.iq_buffer_secs = self.iq_buffer_secs * 0.65 + raw_secs.max(0.8) * 0.35;
+            self.iq_buffer_fill = self.iq_buffer_fill * 0.55 + util * 0.45;
+            self.iq_buffer_secs = self.iq_buffer_secs * 0.55 + ring_secs * 0.45;
             return;
         }
 
         if self.conn.is_none() || !self.first_iq_received {
-            self.iq_buffer_fill *= 0.85;
-            self.iq_buffer_secs *= 0.85;
+            self.iq_buffer_fill *= 0.8;
+            self.iq_buffer_secs *= 0.8;
             return;
         }
 
-        let stale = self.last_data.elapsed().as_secs_f32();
-        let stall = self.stall_timeout().as_secs_f32();
-        let freshness = (1.0 - stale / stall).clamp(0.0, 1.0);
         let nominal = sample_rate.max(1.0);
-        let rate_health = (self.cached_rate / (nominal * SLOW_FRACTION)).clamp(0.0, 1.0);
-        let health =
-            (freshness * 0.5 + rate_health * 0.38 + ring_boost * 0.12).clamp(0.0, 1.0);
-        self.iq_buffer_fill = self.iq_buffer_fill * 0.72 + health * 0.28;
-        let conceptual_secs = raw_secs.max(freshness * 3.0).max(rate_health * 5.0);
-        self.iq_buffer_secs = self.iq_buffer_secs * 0.72 + conceptual_secs * 0.28;
+        let expected = nominal * dt;
+        let throughput = if got == 0 {
+            0.0
+        } else {
+            (got as f32 / expected).min(1.0)
+        };
+
+        // High when we consume a full pump batch; 0 when starved (got == 0).
+        let util = if got == 0 {
+            0.0
+        } else {
+            throughput
+                .max(ring_fill)
+                .max(self.iq_buffer_peak * 0.6)
+        };
+
+        if got == 0 {
+            self.iq_buffer_fill *= 0.45;
+        } else {
+            self.iq_buffer_fill = self.iq_buffer_fill * 0.5 + util * 0.5;
+        }
+        let queued_secs = if got > 0 {
+            ring_secs.max(got as f32 / nominal)
+        } else {
+            ring_secs
+        };
+        self.iq_buffer_secs = self.iq_buffer_secs * 0.5 + queued_secs * 0.5;
     }
 
     fn iq_buffer_stats(&self) -> (f32, f32) {
@@ -846,9 +884,6 @@ impl Engine {
     }
 
     fn publish_stats(&mut self, got: usize) {
-        self.last_pump_got = got;
-        let (sample_rate, _, _) = self.link_meta();
-        self.update_link_health(sample_rate);
         let scp = self.skimmer.scp_status();
         let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
