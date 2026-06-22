@@ -762,30 +762,70 @@ fn draw_band_overview(
     actions
 }
 
-/// Build smoothed display trace from latest FFT row.
-pub fn display_trace(
+/// Update smoothed display trace from latest FFT row (in-place).
+pub fn update_trace(
     latest: &[f32],
     smoothed: &mut Vec<f32>,
+    composed: &mut Vec<f32>,
+    view_key: &mut TraceViewKey,
     row_rate_hz: f32,
     view_span_hz: f32,
     data_span_hz: f32,
     center_offset_hz: f64,
     smooth_alpha: f32,
-) -> Vec<f32> {
-    let view = compose_panadapter_row(
-        latest,
+    latest_changed: bool,
+) {
+    let key = TraceViewKey::new(
         row_rate_hz,
         view_span_hz,
         data_span_hz,
         center_offset_hz,
+        latest.len(),
     );
-    if smoothed.len() != view.len() {
-        smoothed.resize(view.len(), -120.0);
+    if latest_changed || *view_key != key {
+        *composed = compose_panadapter_row(
+            latest,
+            row_rate_hz,
+            view_span_hz,
+            data_span_hz,
+            center_offset_hz,
+        );
+        *view_key = key;
     }
-    crate::smooth::ema_update(smoothed, &view, smooth_alpha);
+    if smoothed.len() != composed.len() {
+        smoothed.resize(composed.len(), -120.0);
+    }
+    crate::smooth::ema_update(smoothed, composed, smooth_alpha);
     if smoothed.len() <= 1024 {
-        spatial_smooth(smoothed)
-    } else {
-        smoothed.to_vec()
+        let filtered = spatial_smooth(smoothed);
+        smoothed.copy_from_slice(&filtered);
+    }
+}
+
+/// View parameters that force recomposing the panadapter row for the trace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TraceViewKey {
+    row_rate_bits: u32,
+    view_span_bits: u32,
+    data_span_bits: u32,
+    pan_bits: u64,
+    latest_len: usize,
+}
+
+impl TraceViewKey {
+    pub fn new(
+        row_rate_hz: f32,
+        view_span_hz: f32,
+        data_span_hz: f32,
+        center_offset_hz: f64,
+        latest_len: usize,
+    ) -> Self {
+        Self {
+            row_rate_bits: row_rate_hz.to_bits(),
+            view_span_bits: view_span_hz.to_bits(),
+            data_span_bits: data_span_hz.to_bits(),
+            pan_bits: center_offset_hz.to_bits(),
+            latest_len,
+        }
     }
 }

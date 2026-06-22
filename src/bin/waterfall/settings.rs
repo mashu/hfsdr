@@ -11,7 +11,7 @@ use crate::source::{ConnectRequest, KiwiSettings};
 const APP_DIR: &str = "hfsdr";
 const FILE: &str = "settings.json";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotchData {
     pub enabled: bool,
     pub offset_hz: f32,
@@ -28,7 +28,7 @@ impl Default for NotchData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
     // CW demod / filter chain.
@@ -190,7 +190,7 @@ impl Default for AppSettings {
             show_continents: [true; 7],
             show_console: false,
             filter_wide: false,
-            show_history: true,
+            show_history: false,
             show_left: true,
             show_right: true,
             recent_hosts: Vec::new(),

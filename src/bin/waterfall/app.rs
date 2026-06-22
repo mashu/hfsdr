@@ -54,7 +54,7 @@ use crate::theme::{
     apply, clickable_badge, collapsible_section, section_card, section_heading, section_hint,
     stat_row, stage_toggle, toggle, MUTED, OK, WARN,
 };
-use crate::widgets::{display_trace, SpectrumWidget, SpotLabel, WaterfallWidget};
+use crate::widgets::{update_trace, SpectrumWidget, SpotLabel, TraceViewKey, WaterfallWidget};
 
 const SMOOTH_ALPHA: f32 = 0.09;
 
@@ -158,9 +158,19 @@ pub struct WaterfallApp {
     rows: VecDeque<Vec<f32>>,
     latest: Vec<f32>,
     smoothed_trace: Vec<f32>,
+    trace_composed: Vec<f32>,
+    trace_view_key: TraceViewKey,
     overview_smoothed: Vec<f32>,
+    overview_composed: Vec<f32>,
+    overview_view_key: TraceViewKey,
+    latest_frame_tick: bool,
     texture: Option<egui::TextureHandle>,
+    waterfall_pixels: Vec<Color32>,
+    tex_width: usize,
     textures_dirty: bool,
+    force_texture_full: bool,
+    pending_row_appends: usize,
+    was_plot_dragging: bool,
     last_tex_span: f32,
     last_tex_pan: f64,
     last_tex_row_rate: f32,
@@ -223,7 +233,7 @@ pub struct WaterfallApp {
     show_iq_drawer: bool,
     iq: IqPanel,
 
-    last_settings_json: String,
+    last_settings_snapshot: Option<AppSettings>,
     settings_dirty_at: Option<std::time::Instant>,
 
     spectrum_widget: SpectrumWidget,
@@ -263,9 +273,19 @@ impl WaterfallApp {
             rows: VecDeque::with_capacity(WATERFALL_ROWS),
             latest: vec![-120.0; FFT_SIZE],
             smoothed_trace: Vec::new(),
+            trace_composed: Vec::new(),
+            trace_view_key: TraceViewKey::new(0.0, 0.0, 0.0, 0.0, 0),
             overview_smoothed: Vec::new(),
+            overview_composed: Vec::new(),
+            overview_view_key: TraceViewKey::new(0.0, 0.0, 0.0, 0.0, 0),
+            latest_frame_tick: false,
             texture: None,
+            waterfall_pixels: Vec::new(),
+            tex_width: 0,
             textures_dirty: false,
+            force_texture_full: true,
+            pending_row_appends: 0,
+            was_plot_dragging: false,
             last_tex_span: 0.0,
             last_tex_pan: 0.0,
             last_tex_row_rate: 0.0,
@@ -324,7 +344,7 @@ impl WaterfallApp {
             show_iq_drawer: false,
             iq: IqPanel::new(hfsdr::default_capture_dir()),
 
-            last_settings_json: String::new(),
+            last_settings_snapshot: None,
             settings_dirty_at: None,
             spectrum_widget: SpectrumWidget::new(),
             waterfall_widget: WaterfallWidget::new(),
@@ -357,8 +377,7 @@ impl WaterfallApp {
             app.show_connection_drawer = false;
         }
 
-        app.last_settings_json =
-            serde_json::to_string(&app.current_settings()).unwrap_or_default();
+        app.last_settings_snapshot = Some(app.current_settings());
         if let Some((geo, receivers)) = crate::kiwi_directory::load_cached_receivers() {
             app.kiwi_geo = geo;
             app.kiwi_nearby = receivers;
@@ -412,6 +431,31 @@ impl WaterfallApp {
                 self.conn_state,
                 ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
             )
+    }
+
+    /// Wideband local SDR (e.g. Airspy) — higher DSP load than Kiwi.
+    fn is_wideband(&self) -> bool {
+        !self.is_kiwi && self.sample_rate > 48_000.0
+    }
+
+    /// Cap repaint rate on wideband + skimmer to leave CPU for decoders.
+    fn effective_target_fps(&self) -> u32 {
+        if self.is_wideband() && self.skimmer_enabled {
+            self.target_fps.min(30)
+        } else {
+            self.target_fps
+        }
+    }
+
+    /// Scale skimmer decoder count with available bandwidth.
+    fn effective_skimmer(&self) -> SkimmerConfig {
+        let mut cfg = self.skimmer.clone().clamped();
+        if self.is_wideband() {
+            cfg.max_channels = cfg.max_channels.min(8);
+        } else if self.sample_rate > 24_000.0 {
+            cfg.max_channels = cfg.max_channels.min(12);
+        }
+        cfg
     }
 
     fn apply_settings(&mut self, s: &AppSettings) {
@@ -586,9 +630,9 @@ impl WaterfallApp {
 
     /// Debounced autosave: persist once settings have been stable for ~1s.
     fn autosave(&mut self) {
-        let json = serde_json::to_string(&self.current_settings()).unwrap_or_default();
-        if json != self.last_settings_json {
-            self.last_settings_json = json;
+        let current = self.current_settings();
+        if self.last_settings_snapshot.as_ref() != Some(&current) {
+            self.last_settings_snapshot = Some(current);
             self.settings_dirty_at = Some(Instant::now());
         }
         if let Some(at) = self.settings_dirty_at {
@@ -605,13 +649,12 @@ impl WaterfallApp {
         self.plot_view
             .clamp_pan(self.plot_full_span_hz(), self.plot_max_zoom_out());
         let view = self.spectrum_view();
-        self.skimmer = self.skimmer.clone().clamped();
         self.engine.set_params(EngineParams {
             cw: self.cw.clone(),
             audio_enabled: self.audio_enabled,
             volume: self.volume,
             skimmer_enabled: self.skimmer_enabled,
-            skimmer: self.skimmer.clone(),
+            skimmer: self.effective_skimmer(),
             fft_size: self.fft_size,
             fft_auto: self.fft_auto,
             view_span_hz: view.view_span_hz,
@@ -655,9 +698,11 @@ impl WaterfallApp {
             // FFT size changed under us: adopt the new width and reset buffers.
             self.latest = latest;
             self.rows.clear();
+            self.force_texture_full = true;
             self.textures_dirty = true;
         } else {
             self.latest.copy_from_slice(&latest);
+            self.latest_frame_tick = true;
         }
 
         self.sample_rate = self.stats.sample_rate;
@@ -680,6 +725,7 @@ impl WaterfallApp {
         {
             // Zoomed rows are mix-down specific — stale pan poisons the waterfall.
             self.rows.clear();
+            self.force_texture_full = true;
             self.textures_dirty = true;
         }
         self.last_spectrum_pan = view_pan;
@@ -687,6 +733,7 @@ impl WaterfallApp {
         self.last_spectrum_zoomed = zoomed;
 
         if !new_rows.is_empty() {
+            let n_new = new_rows.len();
             for row in new_rows {
                 let mut stored = if self.rows.len() >= WATERFALL_ROWS {
                     self.rows.pop_back().unwrap_or_else(|| vec![-120.0; row.len()])
@@ -700,6 +747,7 @@ impl WaterfallApp {
                 self.rows.push_front(stored);
             }
             self.waterfall_rows = self.rows.len();
+            self.pending_row_appends += n_new;
             self.textures_dirty = true;
             self.update_display_levels();
         }
@@ -811,6 +859,7 @@ impl WaterfallApp {
         };
         self.ref_db = ref_db;
         self.range_db = range_db;
+        self.force_texture_full = true;
         self.textures_dirty = true;
         self.display_levels_initialized = true;
     }
@@ -1108,6 +1157,7 @@ impl WaterfallApp {
         self.plot_view.pan_offset_hz = 0.0;
         self.plot_view
             .zoom_to_cw_segment(segment, full_span, max_zoom);
+        self.force_texture_full = true;
         self.textures_dirty = true;
     }
 
@@ -1325,27 +1375,140 @@ impl WaterfallApp {
             });
     }
 
-    fn update_texture(&mut self, ctx: &egui::Context) {
-        let view = self.spectrum_view();
-        let data_span = self.plot_full_span_hz();
-        let w = panadapter_output_bins(self.latest.len(), view.view_span_hz, data_span).max(1);
-        let h = WATERFALL_ROWS;
-        let avg = self.waterfall_avg.max(1) as usize;
-        let mut pixels = vec![Color32::BLACK; w * h];
-        for y in 0..h {
-            let row_view = self.waterfall_texture_row(y, &view, data_span, w, avg);
-            let base = y * w;
-            for (x, &db) in row_view.iter().enumerate().take(w) {
-                pixels[base + x] = db_to_colour(db, self.ref_db, self.range_db);
-            }
+    fn waterfall_row_db(
+        &self,
+        row_index: usize,
+        view: &SpectrumViewMapping,
+        data_span: f32,
+        width: usize,
+        avg: usize,
+    ) -> Vec<f32> {
+        if self.rows.is_empty() {
+            return vec![-120.0; width];
         }
-        let image = egui::ColorImage::new([w, h], pixels);
+        let mut acc = vec![0.0f32; width];
+        let mut count = 0usize;
+        for k in 0..avg {
+            let Some(row_data) = self.rows.get(row_index.saturating_add(k)) else {
+                break;
+            };
+            let row_view = fit_panadapter_row_width(
+                compose_panadapter_row(
+                    row_data,
+                    view.row_rate_hz,
+                    view.view_span_hz,
+                    data_span,
+                    view.pan_offset_hz,
+                ),
+                width,
+            );
+            let n = row_view.len().min(width);
+            for (i, &db) in row_view.iter().take(n).enumerate() {
+                acc[i] += db;
+            }
+            count += 1;
+        }
+        if count == 0 {
+            return vec![-120.0; width];
+        }
+        let inv = 1.0 / count as f32;
+        for v in &mut acc {
+            *v *= inv;
+        }
+        acc
+    }
+
+    fn write_row_pixels(pixels: &mut [Color32], y: usize, width: usize, db_row: &[f32], ref_db: f32, range_db: f32) {
+        let base = y * width;
+        for (x, &db) in db_row.iter().enumerate().take(width) {
+            pixels[base + x] = db_to_colour(db, ref_db, range_db);
+        }
+    }
+
+    fn upload_waterfall_texture(&mut self, ctx: &egui::Context, width: usize, height: usize) {
+        let image = egui::ColorImage::new([width, height], self.waterfall_pixels.clone());
         match &mut self.texture {
             Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
             none => {
                 *none = Some(ctx.load_texture("waterfall", image, egui::TextureOptions::LINEAR));
             }
         }
+    }
+
+    fn rebuild_waterfall_texture(&mut self, ctx: &egui::Context) {
+        let view = self.spectrum_view();
+        let data_span = self.plot_full_span_hz();
+        let w = panadapter_output_bins(self.latest.len(), view.view_span_hz, data_span).max(1);
+        let h = WATERFALL_ROWS;
+        let avg = self.waterfall_avg.max(1) as usize;
+        let ref_db = self.ref_db;
+        let range_db = self.range_db;
+        self.tex_width = w;
+        self.waterfall_pixels.resize(w * h, Color32::BLACK);
+        for y in 0..h {
+            let row_db = self.waterfall_row_db(y, &view, data_span, w, avg);
+            Self::write_row_pixels(&mut self.waterfall_pixels, y, w, &row_db, ref_db, range_db);
+        }
+        self.upload_waterfall_texture(ctx, w, h);
+    }
+
+    /// Scroll existing pixels down and paint only the newest rows at the top.
+    fn append_waterfall_texture_rows(&mut self, ctx: &egui::Context, new_rows: usize) {
+        if new_rows == 0 {
+            return;
+        }
+        let view = self.spectrum_view();
+        let data_span = self.plot_full_span_hz();
+        let w = panadapter_output_bins(self.latest.len(), view.view_span_hz, data_span).max(1);
+        let h = WATERFALL_ROWS;
+        let avg = self.waterfall_avg.max(1) as usize;
+        let ref_db = self.ref_db;
+        let range_db = self.range_db;
+        if w != self.tex_width || self.waterfall_pixels.len() != w * h {
+            self.rebuild_waterfall_texture(ctx);
+            return;
+        }
+        let scroll = new_rows.min(h);
+        if scroll < h {
+            for y in (scroll..h).rev() {
+                let src = (y - scroll) * w;
+                let dst = y * w;
+                self.waterfall_pixels
+                    .copy_within(src..src + w, dst);
+            }
+        }
+        for y in 0..scroll {
+            let row_db = self.waterfall_row_db(y, &view, data_span, w, avg);
+            Self::write_row_pixels(&mut self.waterfall_pixels, y, w, &row_db, ref_db, range_db);
+        }
+        self.upload_waterfall_texture(ctx, w, h);
+    }
+
+    fn sync_waterfall_texture(&mut self, ctx: &egui::Context) {
+        if !self.textures_dirty {
+            return;
+        }
+        if self.force_texture_full
+            || self.pending_row_appends == 0
+            || self.rows.is_empty()
+            || self.tex_width == 0
+        {
+            self.rebuild_waterfall_texture(ctx);
+        } else {
+            self.append_waterfall_texture_rows(ctx, self.pending_row_appends);
+        }
+        self.textures_dirty = false;
+        self.force_texture_full = false;
+        self.pending_row_appends = 0;
+        let view = self.spectrum_view();
+        let pan_track = if self.stats.spectrum_zoomed {
+            self.plot_view.pan_offset_hz
+        } else {
+            view.pan_offset_hz
+        };
+        self.last_tex_span = view.view_span_hz;
+        self.last_tex_pan = pan_track;
+        self.last_tex_row_rate = view.row_rate_hz;
     }
 
     fn history_panel(&mut self, ui: &mut egui::Ui) {
@@ -1419,13 +1582,34 @@ impl WaterfallApp {
         }
     }
 
+    fn connection_session_live(&self) -> bool {
+        matches!(
+            self.conn_state,
+            ConnState::Streaming | ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
+        )
+    }
+
+    fn connection_alias(&self) -> String {
+        match self.form_kind {
+            SourceKind::Airspy => "Airspy HF+".to_string(),
+            SourceKind::Kiwi => {
+                let host = self.form_host.trim();
+                if host.is_empty() {
+                    "KiwiSDR".to_string()
+                } else {
+                    format!("{host}:{}", self.form_port)
+                }
+            }
+        }
+    }
+
     fn connection_popup(&mut self, ctx: &egui::Context) {
         if !self.show_connection_drawer {
             return;
         }
         let screen = ctx.content_rect();
-        let max_h = (screen.height() - 48.0).max(320.0);
-        let win_h = (screen.height() * 0.58).clamp(360.0, max_h);
+        let max_h = (screen.height() - 12.0).max(320.0);
+        let win_h = (screen.height() * 0.86).clamp(420.0, max_h);
         let mut open = self.show_connection_drawer;
         let (status_label, status_color) = self.connection_status_pill();
         configure_popup_window(
@@ -1433,6 +1617,7 @@ impl WaterfallApp {
             [screen.left() + 12.0, screen.top() + 36.0],
             500.0,
             win_h,
+            280.0,
             max_h,
         )
         .show(ctx, |ui| {
@@ -1457,7 +1642,8 @@ impl WaterfallApp {
             return;
         }
         let screen = ctx.content_rect();
-        let win_h = 200.0;
+        let max_h = (screen.height() - 12.0).max(200.0);
+        let win_h = 260.0_f32.clamp(180.0, max_h);
         let mut open = self.show_iq_drawer;
         let subtitle = format!(
             "{:.0}% · {:.2}s queued",
@@ -1478,7 +1664,8 @@ impl WaterfallApp {
             [screen.left() + 200.0, screen.top() + 36.0],
             420.0,
             win_h,
-            win_h,
+            180.0,
+            max_h,
         )
         .show(ctx, |ui| {
             popup_header(
@@ -1548,6 +1735,16 @@ impl WaterfallApp {
             if badge_resp.clicked() {
                 self.show_connection_drawer = !self.show_connection_drawer;
             }
+            if self.connection_session_live() {
+                let alias_resp =
+                    crate::status_widgets::connection_alias_chip(ui, &self.connection_alias());
+                if alias_resp.clicked() {
+                    self.show_connection_drawer = !self.show_connection_drawer;
+                }
+                if crate::status_widgets::disconnect_chip(ui).clicked() {
+                    self.engine.send(EngineCommand::Disconnect);
+                }
+            }
             ui.separator();
             ui.label(
                 egui::RichText::new(format!("listen {:.0} Hz", self.listen_offset_hz()))
@@ -1605,13 +1802,6 @@ impl WaterfallApp {
                     let on = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
-                }
-                if matches!(
-                    self.conn_state,
-                    ConnState::Streaming | ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
-                ) && ui.button("Disconnect").on_hover_text("Stop streaming").clicked()
-                {
-                    self.engine.send(EngineCommand::Disconnect);
                 }
                 ui.separator();
                 ui.toggle_value(&mut self.show_right, "Right");
@@ -2021,10 +2211,14 @@ impl WaterfallApp {
             if scroll_slider_f32(ui, &mut self.ref_db, -120.0..=20.0, "Ref dB").changed() {
                 self.display_levels_initialized = true;
                 self.display_auto_track = false;
+                self.force_texture_full = true;
+                self.textures_dirty = true;
             }
             if scroll_slider_f32(ui, &mut self.range_db, 12.0..=80.0, "Range dB").changed() {
                 self.display_levels_initialized = true;
                 self.display_auto_track = false;
+                self.force_texture_full = true;
+                self.textures_dirty = true;
             }
             scroll_slider_f32(ui, &mut self.smooth_alpha, 0.05..=0.45, "Spectrum smooth");
             ui.horizontal(|ui| {
@@ -2036,54 +2230,12 @@ impl WaterfallApp {
                         .clicked()
                     {
                         self.waterfall_avg = n;
+                        self.force_texture_full = true;
                         self.textures_dirty = true;
                     }
                 }
             });
         });
-    }
-
-    fn waterfall_texture_row(
-        &self,
-        y: usize,
-        view: &SpectrumViewMapping,
-        data_span: f32,
-        width: usize,
-        avg: usize,
-    ) -> Vec<f32> {
-        if self.rows.is_empty() {
-            return vec![-120.0; width];
-        }
-        let mut acc = vec![0.0f32; width];
-        let mut count = 0usize;
-        for k in 0..avg {
-            let Some(row_data) = self.rows.get(y.saturating_add(k)) else {
-                break;
-            };
-            let row_view = fit_panadapter_row_width(
-                compose_panadapter_row(
-                    row_data,
-                    view.row_rate_hz,
-                    view.view_span_hz,
-                    data_span,
-                    view.pan_offset_hz,
-                ),
-                width,
-            );
-            let n = row_view.len().min(width);
-            for (i, &db) in row_view.iter().take(n).enumerate() {
-                acc[i] += db;
-            }
-            count += 1;
-        }
-        if count == 0 {
-            return vec![-120.0; width];
-        }
-        let inv = 1.0 / count as f32;
-        for v in &mut acc {
-            *v *= inv;
-        }
-        acc
     }
 
     fn passband_max_hz(&self) -> f32 {
@@ -2143,6 +2295,27 @@ impl WaterfallApp {
             let mut fps = self.target_fps as f32;
             if scroll_slider_f32(ui, &mut fps, 10.0..=60.0, "Target FPS").changed() {
                 self.target_fps = fps.round() as u32;
+            }
+            if self.is_wideband() && self.skimmer_enabled {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Repaint capped at {} FPS while wideband + skimmer",
+                        self.effective_target_fps()
+                    ))
+                    .small()
+                    .color(MUTED),
+                );
+            }
+            let eff_sk = self.effective_skimmer();
+            if eff_sk.max_channels < self.skimmer.max_channels {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Skimmer channels capped at {} on wideband",
+                        eff_sk.max_channels
+                    ))
+                    .small()
+                    .color(MUTED),
+                );
             }
 
             ui.separator();
@@ -2739,28 +2912,32 @@ impl WaterfallApp {
         let view = self.spectrum_view();
         let plot_full_span = self.plot_full_span_hz();
         let max_zoom = self.plot_max_zoom_out();
-        let trace = display_trace(
+        update_trace(
             &self.latest,
             &mut self.smoothed_trace,
+            &mut self.trace_composed,
+            &mut self.trace_view_key,
             view.row_rate_hz,
             view.view_span_hz,
             plot_full_span,
             view.pan_offset_hz,
             self.smooth_alpha,
+            self.latest_frame_tick,
         );
-        let overview_trace = if self.show_band_overview {
-            display_trace(
+        if self.show_band_overview {
+            update_trace(
                 &self.latest,
                 &mut self.overview_smoothed,
+                &mut self.overview_composed,
+                &mut self.overview_view_key,
                 self.sample_rate,
                 plot_full_span,
                 plot_full_span,
                 0.0,
                 self.smooth_alpha,
-            )
-        } else {
-            Vec::new()
-        };
+                self.latest_frame_tick,
+            );
+        }
         let overview_span_hz = self.band_overview_span_hz();
 
         let mut plot_actions = Vec::new();
@@ -2786,8 +2963,12 @@ impl WaterfallApp {
             tune_preview_offset_hz,
             notches: &notches,
             labels: &labels,
-            trace: &trace,
-            overview_trace: &overview_trace,
+            trace: &self.smoothed_trace,
+            overview_trace: if self.show_band_overview {
+                &self.overview_smoothed
+            } else {
+                &[]
+            },
             overview_span_hz,
             show_overview: self.show_band_overview,
             ref_db: self.ref_db,
@@ -2954,26 +3135,6 @@ impl eframe::App for WaterfallApp {
         self.pump_engine();
         self.frame_visible_spots = self.visible_spots();
 
-        // Lazy texture rebuild: only when new rows arrived or the view changed.
-        let view = self.spectrum_view();
-        let pan_track = if self.stats.spectrum_zoomed {
-            self.plot_view.pan_offset_hz
-        } else {
-            view.pan_offset_hz
-        };
-        let view_changed = (view.view_span_hz - self.last_tex_span).abs()
-            > (view.view_span_hz * 0.003).max(2.0)
-            || (pan_track - self.last_tex_pan).abs()
-                > (view.view_span_hz as f64 * 0.003).max(2.0)
-            || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
-        if self.textures_dirty || view_changed {
-            self.update_texture(&ctx);
-            self.textures_dirty = false;
-            self.last_tex_span = view.view_span_hz;
-            self.last_tex_pan = pan_track;
-            self.last_tex_row_rate = view.row_rate_hz;
-        }
-
         egui::Panel::top("status").show_inside(ui, |ui| self.status_banner(ui));
 
         if self.show_left {
@@ -3010,13 +3171,39 @@ impl eframe::App for WaterfallApp {
                 self.central_panel(ui);
             });
 
+        // Waterfall texture after plot interaction (defer rebuild while dragging).
+        let dragging = self.plot_interaction.is_dragging();
+        if self.was_plot_dragging && !dragging {
+            self.force_texture_full = true;
+            self.textures_dirty = true;
+        }
+        self.was_plot_dragging = dragging;
+
+        let view = self.spectrum_view();
+        let pan_track = if self.stats.spectrum_zoomed {
+            self.plot_view.pan_offset_hz
+        } else {
+            view.pan_offset_hz
+        };
+        let view_changed = (view.view_span_hz - self.last_tex_span).abs()
+            > (view.view_span_hz * 0.003).max(2.0)
+            || (pan_track - self.last_tex_pan).abs()
+                > (view.view_span_hz as f64 * 0.003).max(2.0)
+            || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
+        if view_changed && !dragging {
+            self.force_texture_full = true;
+            self.textures_dirty = true;
+        }
+        self.sync_waterfall_texture(&ctx);
+        self.latest_frame_tick = false;
+
         self.connection_popup(&ctx);
         self.iq_popup(&ctx);
 
         self.apply_radio_settings();
         self.autosave();
 
-        let frame_ms = (1000 / self.target_fps.max(1)).max(8) as u64;
+        let frame_ms = (1000 / self.effective_target_fps().max(1)).max(8) as u64;
         ctx.request_repaint_after(Duration::from_millis(frame_ms));
     }
 

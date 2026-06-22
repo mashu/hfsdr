@@ -152,6 +152,11 @@ impl PlotInteraction {
         }
     }
 
+    /// True while the user is dragging on a plot (pan, tune, notch, etc.).
+    pub fn is_dragging(&self) -> bool {
+        !matches!(self.drag_mode, DragMode::None)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn handle(
         &mut self,

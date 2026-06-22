@@ -137,6 +137,73 @@ pub fn iq_record_toggle(
     }
 }
 
+/// Receiver alias beside the connection badge — click opens connection settings.
+pub fn connection_alias_chip(ui: &mut Ui, alias: &str) -> Response {
+    let text = truncate_middle(alias, 28);
+    let size = Vec2::new(128.0, 20.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let painter = ui.painter_at(rect);
+    let rounding = 4.0;
+    let border = if hovered {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 180)
+    } else {
+        Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 90)
+    };
+    let bg = if hovered {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 20)
+    } else {
+        Color32::from_rgb(30, 36, 48)
+    };
+    painter.rect(rect, rounding, bg, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        FontId::monospace(10.5),
+        if hovered { ACCENT } else { MUTED },
+    );
+    response.on_hover_text(format!("{alias}\nClick for connection settings"))
+}
+
+/// One-click disconnect beside the connection badge.
+pub fn disconnect_chip(ui: &mut Ui) -> Response {
+    let size = Vec2::new(22.0, 20.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let painter = ui.painter_at(rect);
+    let rounding = 4.0;
+    let stroke_color = if hovered {
+        Color32::from_rgba_unmultiplied(WARN.r(), WARN.g(), WARN.b(), 220)
+    } else {
+        Color32::from_rgba_unmultiplied(WARN.r(), WARN.g(), WARN.b(), 130)
+    };
+    let bg = if hovered {
+        Color32::from_rgba_unmultiplied(WARN.r(), WARN.g(), WARN.b(), 42)
+    } else {
+        Color32::from_rgb(30, 36, 48)
+    };
+    painter.rect(rect, rounding, bg, Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "✕",
+        FontId::proportional(11.0),
+        if hovered { WARN } else { MUTED },
+    );
+    response.on_hover_text("Disconnect")
+}
+
+fn truncate_middle(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let keep = max_chars.saturating_sub(1) / 2;
+    let head: String = s.chars().take(keep).collect();
+    let tail: String = s.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{head}…{tail}")
+}
+
 fn buffer_color(fill: f32) -> Color32 {
     let low = Color32::from_rgb(248, 113, 113);
     let mid = WARN;

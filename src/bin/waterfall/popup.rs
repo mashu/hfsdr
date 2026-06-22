@@ -74,9 +74,11 @@ pub fn popup_header(ui: &mut Ui, header: PopupHeader<'_>, open: &mut bool) {
 }
 
 pub fn popup_scroll_body<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    let body_h = ui.available_height();
     Frame::new()
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
+            ui.set_min_height(body_h.max(0.0));
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -323,8 +325,9 @@ pub fn status_pill(ui: &mut Ui, label: impl Display, color: Color32) {
 pub fn configure_popup_window(
     id: &str,
     default_pos: [f32; 2],
-    default_width: f32,
+    width: f32,
     default_height: f32,
+    min_height: f32,
     max_height: f32,
 ) -> egui::Window<'static> {
     egui::Window::new(egui::RichText::new("").size(0.0))
@@ -332,11 +335,13 @@ pub fn configure_popup_window(
         .title_bar(false)
         .frame(popup_window_frame())
         .collapsible(false)
-        .resizable(true)
-        .default_width(default_width)
-        .default_height(default_height)
-        .default_pos(default_pos)
+        .resizable([false, true])
+        .min_width(width)
+        .max_width(width)
+        .min_height(min_height)
         .max_height(max_height)
+        .default_size([width, default_height])
+        .default_pos(default_pos)
 }
 
 fn truncate_middle(s: &str, max_chars: usize) -> String {

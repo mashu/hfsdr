@@ -302,6 +302,7 @@ struct Engine {
     iq_buffer_peak: f32,
     last_pump_got: usize,
     last_pump_at: Instant,
+    row_pool: Vec<Vec<f32>>,
 }
 
 impl Engine {
@@ -349,6 +350,7 @@ impl Engine {
             iq_buffer_peak: 0.0,
             last_pump_got: 0,
             last_pump_at: Instant::now(),
+            row_pool: Vec::new(),
         }
     }
 
@@ -693,10 +695,18 @@ impl Engine {
         };
         let analyzer = &mut self.analyzer;
         let latest = &mut self.latest;
+        let row_pool = &mut self.row_pool;
         let mut produced: Vec<Vec<f32>> = Vec::new();
         analyzer.process(fft_input, |row| {
             latest.copy_from_slice(row);
-            produced.push(row.to_vec());
+            let mut buf = row_pool
+                .pop()
+                .unwrap_or_else(|| vec![-120.0; row.len()]);
+            if buf.len() != row.len() {
+                buf.resize(row.len(), -120.0);
+            }
+            buf.copy_from_slice(row);
+            produced.push(buf);
         });
 
         self.skimmer.set_enabled(params.skimmer_enabled);

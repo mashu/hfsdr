@@ -6,6 +6,12 @@ pub const TARGET_BIN_HZ: f32 = 8.0;
 /// Maximum FFT size (memory/CPU trade-off on wideband sources).
 pub const MAX_FFT_SIZE: usize = 65_536;
 
+/// IQ rates above this (e.g. Airspy HF+) use [`WIDEBAND_MAX_FFT`] in auto mode.
+pub const WIDEBAND_IQ_THRESHOLD: f32 = 100_000.0;
+
+/// Auto-FFT ceiling on wideband SDRs — keeps CPU headroom for skimmer + UI.
+pub const WIDEBAND_MAX_FFT: usize = 16_384;
+
 /// Minimum FFT size.
 pub const MIN_FFT_SIZE: usize = 2048;
 
@@ -37,6 +43,14 @@ pub fn spectrum_zoom_decimation(iq_rate: f32, view_span_hz: f32) -> usize {
     raw.next_power_of_two().clamp(1, 256)
 }
 
+fn fft_cap(iq_rate: f32) -> usize {
+    if iq_rate > WIDEBAND_IQ_THRESHOLD {
+        WIDEBAND_MAX_FFT
+    } else {
+        MAX_FFT_SIZE
+    }
+}
+
 /// Combined plan: (decimation factor, FFT size, effective IQ rate for spectrum).
 pub fn spectrum_plan(
     iq_rate: f32,
@@ -46,10 +60,11 @@ pub fn spectrum_plan(
 ) -> (usize, usize, f32) {
     let decim = spectrum_zoom_decimation(iq_rate, view_span_hz);
     let eff = iq_rate / decim as f32;
+    let cap = fft_cap(iq_rate);
     let fft = if fft_auto {
-        auto_fft_size(eff)
+        auto_fft_size(eff).min(cap)
     } else {
-        manual_fft.clamp(1024, MAX_FFT_SIZE)
+        manual_fft.clamp(1024, MAX_FFT_SIZE).min(cap)
     };
     (decim, fft, eff)
 }
@@ -96,5 +111,11 @@ mod tests {
         assert!(eff < 100_000.0);
         assert!(fft <= MAX_FFT_SIZE);
         assert!(bin_width_hz(eff, fft) <= 20.0);
+    }
+
+    #[test]
+    fn wideband_full_span_caps_fft() {
+        let (_, fft, _) = spectrum_plan(768_000.0, 65_536, true, 768_000.0);
+        assert_eq!(fft, WIDEBAND_MAX_FFT);
     }
 }
