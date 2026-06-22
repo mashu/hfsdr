@@ -356,7 +356,6 @@ impl WaterfallApp {
         self.cw.kaiser_beta = s.kaiser_beta.clamp(2.0, 14.0);
         self.cw.passband_flatten = s.passband_flatten;
         self.cw.decimation = s.decimation;
-        self.cw.squelch = s.squelch;
         self.cw.noise_blanker.enabled = s.nb_enabled;
         self.cw.noise_blanker.threshold = s.nb_threshold;
         self.cw.noise_blanker.width = s.nb_width as usize;
@@ -437,7 +436,6 @@ impl WaterfallApp {
             kaiser_beta: self.cw.kaiser_beta,
             passband_flatten: self.cw.passband_flatten,
             decimation: self.cw.decimation,
-            squelch: self.cw.squelch,
             nb_enabled: self.cw.noise_blanker.enabled,
             nb_threshold: self.cw.noise_blanker.threshold,
             nb_width: self.cw.noise_blanker.width as u32,
@@ -751,6 +749,14 @@ impl WaterfallApp {
     }
 
     /// Snap tuning so the strongest signal near the cursor lands at the BFO pitch.
+    fn clear_rit(&mut self) {
+        self.rit_hz = 0.0;
+        if self.pitch_lock {
+            self.pitch_lock = false;
+        }
+    }
+
+    /// Snap carrier to the strongest signal in view and clear listen offset.
     fn zero_beat(&mut self) {
         let listen = self.listen_offset_hz() as f32;
         let pan = self.plot_view.pan_offset_hz as f32;
@@ -767,7 +773,7 @@ impl WaterfallApp {
                 peak
             };
             self.center_khz += (from_center - listen) as f64 / 1000.0;
-            self.rit_hz = 0.0;
+            self.clear_rit();
             self.tune_preview_offset_hz = None;
         }
     }
@@ -961,7 +967,7 @@ impl WaterfallApp {
         self.center_khz = frequency_hz / 1000.0;
         self.plot_view.pan_offset_hz = 0.0;
         self.tune_preview_offset_hz = None;
-        self.rit_hz = 0.0;
+        self.clear_rit();
     }
 
     fn apply_radio_settings(&mut self) {
@@ -997,30 +1003,71 @@ impl WaterfallApp {
         self.recent_hosts.truncate(8);
     }
 
+    fn toggle_manual_notch(&mut self, slot: usize) {
+        if slot >= MAX_NOTCHES {
+            return;
+        }
+        if self.cw.notches[slot].enabled {
+            self.cw.notches[slot].enabled = false;
+        } else {
+            self.arm_manual_notch(slot, None);
+        }
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (zero, lock, notch, blank, nr, agc, narrow, widen, rit_dn, rit_up, full, mute, console, f11) =
-            ctx.input(|i| {
-                use egui::Key;
-                (
-                    i.key_pressed(Key::Z),
-                    i.key_pressed(Key::L),
-                    i.key_pressed(Key::N),
-                    i.key_pressed(Key::B),
-                    i.key_pressed(Key::R),
-                    i.key_pressed(Key::A),
-                    i.key_pressed(Key::OpenBracket),
-                    i.key_pressed(Key::CloseBracket),
-                    i.key_pressed(Key::Comma),
-                    i.key_pressed(Key::Period),
-                    i.key_pressed(Key::F),
-                    i.key_pressed(Key::Space),
-                    i.key_pressed(Key::Backtick),
-                    i.key_pressed(Key::F11),
-                )
-            });
+        let (
+            zero,
+            lock,
+            notch,
+            blank,
+            nr,
+            agc,
+            apf,
+            narrow,
+            widen,
+            rit_dn,
+            rit_up,
+            rit_clr,
+            full,
+            mute,
+            vol_dn,
+            vol_up,
+            console,
+            f11,
+            notch1,
+            notch2,
+            notch3,
+            notch4,
+        ) = ctx.input(|i| {
+            use egui::Key;
+            (
+                i.key_pressed(Key::Z),
+                i.key_pressed(Key::L),
+                i.key_pressed(Key::N),
+                i.key_pressed(Key::B),
+                i.key_pressed(Key::R),
+                i.key_pressed(Key::A),
+                i.key_pressed(Key::P),
+                i.key_pressed(Key::OpenBracket),
+                i.key_pressed(Key::CloseBracket),
+                i.key_pressed(Key::Comma),
+                i.key_pressed(Key::Period),
+                i.key_pressed(Key::Backslash),
+                i.key_pressed(Key::F),
+                i.key_pressed(Key::Space),
+                i.key_pressed(Key::Minus),
+                i.key_pressed(Key::Equals),
+                i.key_pressed(Key::Backtick),
+                i.key_pressed(Key::F11),
+                i.key_pressed(Key::Num1),
+                i.key_pressed(Key::Num2),
+                i.key_pressed(Key::Num3),
+                i.key_pressed(Key::Num4),
+            )
+        });
 
         if zero {
             self.zero_beat();
@@ -1040,6 +1087,9 @@ impl WaterfallApp {
         if agc {
             self.cw.agc.enabled = !self.cw.agc.enabled;
         }
+        if apf {
+            self.cw.apf.enabled = !self.cw.apf.enabled;
+        }
         if narrow {
             self.cw.passband_hz =
                 (self.cw.passband_hz - 25.0).clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
@@ -1054,6 +1104,9 @@ impl WaterfallApp {
         if rit_up {
             self.rit_hz = (self.rit_hz + 10.0).clamp(-800.0, 800.0);
         }
+        if rit_clr {
+            self.clear_rit();
+        }
         if full {
             self.plot_view.zoom = 1.0;
             self.plot_view.pan_offset_hz = 0.0;
@@ -1061,12 +1114,30 @@ impl WaterfallApp {
         if mute {
             self.audio_enabled = !self.audio_enabled;
         }
+        if vol_dn {
+            self.volume = (self.volume - 0.1).max(0.0);
+        }
+        if vol_up {
+            self.volume = (self.volume + 0.1).min(4.0);
+        }
         if console {
             self.show_console = !self.show_console;
         }
         if f11 {
             let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+        }
+        if notch1 {
+            self.toggle_manual_notch(0);
+        }
+        if notch2 {
+            self.toggle_manual_notch(1);
+        }
+        if notch3 {
+            self.toggle_manual_notch(2);
+        }
+        if notch4 {
+            self.toggle_manual_notch(3);
         }
     }
 
@@ -1324,8 +1395,7 @@ impl WaterfallApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 self.frequency_card(ui);
-                self.filter_pipeline_card(ui);
-                self.notch_card(ui);
+                self.receive_chain_card(ui);
             });
     }
 
@@ -1347,7 +1417,8 @@ impl WaterfallApp {
                 ui.add_space(4.0);
                 section_hint(
                     ui,
-                    "Z zero-beat · L lock · N notch · B NB · R NR · A AGC · [ ] width · F11 fullscreen",
+                    "Operator: Z zero-beat · , . RIT ±10 Hz · \\ clear RIT · L pitch lock · F full span\n\
+                     Audio: Space speakers · - + volume · QRM: 1–4 IQ notches · P APF · N auto-notch · B blanker · R NR · A AGC · [ ] filter width · F11 fullscreen",
                 );
             });
     }
@@ -1777,11 +1848,34 @@ impl WaterfallApp {
             scroll_drag_f64(ui, &mut self.center_khz, 0.0..=60_000.0, 0.05, 0.01, " kHz");
             scroll_slider_f32_step(ui, &mut self.rit_hz, -800.0..=800.0, "RIT", 1.0);
             ui.horizontal(|ui| {
-                if ui.button("Zero-beat (Z)").on_hover_text("Snap listen passband to strongest carrier").clicked() {
-                    self.zero_beat();
+                let rit_on = self.rit_hz.abs() > 0.5;
+                if ui
+                    .add_enabled(rit_on, egui::Button::new("Clear RIT"))
+                    .on_hover_text("Listen offset → 0 Hz without moving RX center (\\)")
+                    .clicked()
+                {
+                    self.clear_rit();
                 }
-                ui.checkbox(&mut self.pitch_lock, "Lock pitch (L)");
             });
+        });
+    }
+
+    fn cw_carrier_tools(&mut self, ui: &mut egui::Ui) {
+        let bfo = self.cw.bfo_hz.round();
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!("Zero-beat (Z) → {bfo:.0} Hz"))
+                .on_hover_text(format!(
+                    "Retune RX so the strongest carrier in view lands on your BFO ({bfo:.0} Hz audio tone); clears RIT"
+                ))
+                .clicked()
+            {
+                self.zero_beat();
+            }
+            ui.checkbox(&mut self.pitch_lock, format!("Lock pitch (L) @ {bfo:.0} Hz"))
+                .on_hover_text(format!(
+                    "Track drift: steer RIT so the carrier stays at {bfo:.0} Hz in your headphones"
+                ));
         });
     }
 
@@ -1797,6 +1891,7 @@ impl WaterfallApp {
                 }
             });
             scroll_slider_f32_step(ui, &mut self.cw.bfo_hz, 300.0..=1_200.0, "BFO tone", 10.0);
+            self.cw_carrier_tools(ui);
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.filter_wide, false, "CW (≤500 Hz)");
                 ui.selectable_value(&mut self.filter_wide, true, "Wide (≤2 kHz)");
@@ -1820,7 +1915,11 @@ impl WaterfallApp {
                 ui,
                 &mut self.cw.passband_hz,
                 CW_PASSBAND_MIN_HZ..=bw_max,
-                "Audio BW",
+                "Channel filter",
+            );
+            section_hint(
+                ui,
+                "Complex IQ filter before demod (not post-audio). Rejects adjacent signals while the carrier is still recoverable.",
             );
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Shape").small().color(MUTED));
@@ -1874,104 +1973,120 @@ impl WaterfallApp {
                     .small()
                     .color(MUTED),
             );
-            section_hint(
-                ui,
-                "Narrow BW alone rarely beats QRM — try Blackman at 200–300 Hz, then manual notches on hets.",
-            );
-            section_hint(
-                ui,
-                "APF after demod sharpens tone without smearing dits. Keep NR light (stutters if heavy).",
-            );
-            section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan band = RIT shift · cyan edges = width · purple notches draggable");
+            section_hint(ui, "③ Channel filter — complex IQ, before the BFO detector.");
+            self.agc_controls(ui);
+            section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan band = RIT · cyan edges = width · purple notches draggable");
         });
     }
 
-    fn filter_pipeline_card(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "pipeline", "QRM tools", true, |ui| {
-            section_hint(ui, "Each stage toggles independently (stackable).");
+    fn receive_chain_card(&mut self, ui: &mut egui::Ui) {
+        collapsible_section(ui, "pipeline", "Receive chain", true, |ui| {
+            section_hint(
+                ui,
+                "Stages run top-to-bottom in the DSP. Prefer IQ notches + channel filter before any post-demod polish.",
+            );
 
-            ui.checkbox(&mut self.cw.noise_blanker.enabled, "Noise blanker (B) — impulse QRN");
+            ui.label(egui::RichText::new("① IQ — before demod").small().color(MUTED));
+            ui.checkbox(&mut self.cw.noise_blanker.enabled, "Noise blanker (B) — wideband IQ");
             if self.cw.noise_blanker.enabled {
                 scroll_slider_f32(ui, &mut self.cw.noise_blanker.threshold, 2.0..=12.0, "NB threshold");
                 let mut width = self.cw.noise_blanker.width as f32;
                 scroll_slider_f32(ui, &mut width, 1.0..=30.0, "NB recovery");
                 self.cw.noise_blanker.width = width.round() as usize;
-                section_hint(ui, "Soft limiter — attenuates lightning/ignition without muting CW.");
+                section_hint(ui, "Blank lightning/ignition on raw IQ — must be before the narrow filter.");
             }
 
             ui.separator();
-            ui.checkbox(&mut self.cw.auto_notch.enabled, "Auto-notch (N) — guard-aware");
-            if self.cw.auto_notch.enabled {
-                scroll_slider_f32(ui, &mut self.cw.auto_notch.guard_hz, 60.0..=300.0, "Guard ±Hz");
-                scroll_slider_f32(ui, &mut self.cw.auto_notch.rate, 0.002..=0.1, "Adapt rate");
-            }
+            self.manual_notches_body(ui);
+            section_hint(
+                ui,
+                "② IQ notches above · ③ channel filter + ④ AGC + BFO in CW demod panel (right).",
+            );
 
             ui.separator();
-            ui.checkbox(&mut self.cw.apf.enabled, "Audio peak filter — boost at pitch");
+            ui.label(egui::RichText::new("⑤ Audio — after BFO demod (optional)").small().color(MUTED));
+            ui.checkbox(&mut self.cw.apf.enabled, "Audio peak filter (P) — boost at BFO pitch");
             if self.cw.apf.enabled {
                 scroll_slider_f32(ui, &mut self.cw.apf.width_hz, 40.0..=300.0, "APF width");
                 scroll_slider_f32(ui, &mut self.cw.apf.gain, 0.2..=4.0, "APF gain");
             }
 
-            ui.separator();
-            ui.checkbox(&mut self.cw.noise_reduction.enabled, "Noise reduction (R) — light LMS");
+            ui.checkbox(&mut self.cw.auto_notch.enabled, "Auto-notch (N) — audio LMS");
+            if self.cw.auto_notch.enabled {
+                scroll_slider_f32(ui, &mut self.cw.auto_notch.guard_hz, 60.0..=300.0, "Guard ±Hz");
+                scroll_slider_f32(ui, &mut self.cw.auto_notch.rate, 0.002..=0.1, "Adapt rate");
+                section_hint(
+                    ui,
+                    "Post-demod because it can see your BFO tone and freeze while you copy. \
+                     Hets are better removed with purple IQ notches above — those run before demod.",
+                );
+            }
+
+            ui.checkbox(&mut self.cw.noise_reduction.enabled, "Noise reduction (R) — audio LMS");
             if self.cw.noise_reduction.enabled {
                 scroll_slider_f32(ui, &mut self.cw.noise_reduction.level, 0.0..=0.5, "NR level");
-                section_hint(ui, "Keep below ~0.4 — higher values smear keying and sound underwater.");
+                section_hint(
+                    ui,
+                    "Optional polish only — the IQ channel filter is the real noise remover. \
+                     NR does not belong before demod; narrowing the channel filter is the IQ equivalent.",
+                );
             }
-
-            ui.separator();
-            ui.checkbox(&mut self.cw.agc.enabled, "AGC (A)");
-            if self.cw.agc.enabled {
-                scroll_slider_f32(ui, &mut self.cw.agc.attack_ms, 1.0..=20.0, "Attack ms");
-                scroll_slider_f32(ui, &mut self.cw.agc.decay_ms, 20.0..=600.0, "Decay ms");
-                scroll_slider_f32(ui, &mut self.cw.agc.target, 0.05..=0.6, "Target");
-            } else {
-                scroll_slider_f32(ui, &mut self.cw.agc.manual_gain, 0.1..=16.0, "Manual gain");
-            }
-            if self.is_kiwi {
-                ui.checkbox(&mut self.agc_rf_on, "Kiwi RF AGC");
-            }
-
-            ui.separator();
-            scroll_slider_f32(ui, &mut self.cw.squelch, 0.0..=0.08, "Squelch");
         });
     }
 
-    fn notch_card(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "notches", "Manual notches", false, |ui| {
-            section_hint(ui, "New notches land on the listen point, then ±80 Hz from it. Drag on the spectrum to fine-tune.");
-            if let Some(hover) = self.hover_offset_hz {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Cursor {hover:.0} Hz")).small().color(MUTED));
-                    if ui.small_button("Notch at cursor").clicked() {
-                        if let Some(slot) = self.first_free_notch_slot() {
-                            self.arm_manual_notch(slot, Some(hover as f32));
-                        }
+    fn manual_notches_body(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Manual notches — complex IQ").small().color(MUTED));
+        section_hint(
+            ui,
+            "Pre-demod: removes hets while the carrier is still recoverable. Drag purple markers on the spectrum.",
+        );
+        section_hint(ui, "Keys 1–4 toggle notches · new ones land on listen ±80 Hz.");
+        if let Some(hover) = self.hover_offset_hz {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("Cursor {hover:.0} Hz")).small().color(MUTED));
+                if ui.small_button("Notch at cursor").clicked() {
+                    if let Some(slot) = self.first_free_notch_slot() {
+                        self.arm_manual_notch(slot, Some(hover as f32));
                     }
-                });
-            }
-            for idx in 0..MAX_NOTCHES {
-                let was_enabled = self.cw.notches[idx].enabled;
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.cw.notches[idx].enabled, format!("#{}", idx + 1));
-                });
-                if self.cw.notches[idx].enabled && !was_enabled {
-                    self.arm_manual_notch(idx, None);
                 }
-                if self.cw.notches[idx].enabled {
-                    let notch = &mut self.cw.notches[idx];
-                    scroll_slider_f32_step(
-                        ui,
-                        &mut notch.offset_hz,
-                        -5_000.0..=5_000.0,
-                        "Offset",
-                        1.0,
-                    );
-                    scroll_slider_f32_step(ui, &mut notch.width_hz, 10.0..=200.0, "Width", 1.0);
-                }
+            });
+        }
+        for idx in 0..MAX_NOTCHES {
+            let was_enabled = self.cw.notches[idx].enabled;
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.cw.notches[idx].enabled, format!("#{} ({})", idx + 1, idx + 1));
+            });
+            if self.cw.notches[idx].enabled && !was_enabled {
+                self.arm_manual_notch(idx, None);
             }
-        });
+            if self.cw.notches[idx].enabled {
+                let notch = &mut self.cw.notches[idx];
+                scroll_slider_f32_step(
+                    ui,
+                    &mut notch.offset_hz,
+                    -5_000.0..=5_000.0,
+                    "Offset",
+                    1.0,
+                );
+                scroll_slider_f32_step(ui, &mut notch.width_hz, 10.0..=200.0, "Width", 1.0);
+            }
+        }
+    }
+
+    fn agc_controls(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(egui::RichText::new("④ Level — IQ envelope, before demod").small().color(MUTED));
+        ui.checkbox(&mut self.cw.agc.enabled, "AGC (A)");
+        if self.cw.agc.enabled {
+            scroll_slider_f32(ui, &mut self.cw.agc.attack_ms, 1.0..=20.0, "Attack ms");
+            scroll_slider_f32(ui, &mut self.cw.agc.decay_ms, 20.0..=600.0, "Decay ms");
+            scroll_slider_f32(ui, &mut self.cw.agc.target, 0.05..=0.6, "Target");
+        } else {
+            scroll_slider_f32(ui, &mut self.cw.agc.manual_gain, 0.1..=16.0, "Manual gain");
+        }
+        if self.is_kiwi {
+            ui.checkbox(&mut self.agc_rf_on, "Kiwi RF AGC");
+        }
     }
 
     fn skimmer_settings_body(&mut self, ui: &mut egui::Ui) {
@@ -2203,8 +2318,12 @@ impl WaterfallApp {
                     self.last_audio_device = usize::MAX;
                 }
             }
-            ui.checkbox(&mut self.audio_enabled, "Play on speakers (Space)");
-            scroll_slider_f32(ui, &mut self.volume, 0.0..=4.0, "Volume");
+            ui.checkbox(&mut self.audio_enabled, "Speakers on (Space)");
+            scroll_slider_f32(ui, &mut self.volume, 0.0..=4.0, "Volume (- / +)");
+            section_hint(
+                ui,
+                "Muting speakers or setting volume to 0 keeps spectrum, waterfall, and skimmer running.",
+            );
             if let Some(name) = &self.stats.audio_device {
                 stat_row(ui, "Active", name.clone());
                 stat_row(ui, "Rate", format!("{} Hz", self.stats.audio_rate));

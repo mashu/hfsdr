@@ -140,7 +140,6 @@ pub struct CwChannelSettings {
     pub apf: ApfSettings,
     pub noise_reduction: NoiseReductionSettings,
     pub agc: AgcSettings,
-    pub squelch: f32,
 }
 
 impl Default for CwChannelSettings {
@@ -159,7 +158,6 @@ impl Default for CwChannelSettings {
             apf: ApfSettings::default(),
             noise_reduction: NoiseReductionSettings::default(),
             agc: AgcSettings::default(),
-            squelch: 0.0,
         }
     }
 }

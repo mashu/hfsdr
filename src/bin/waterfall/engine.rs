@@ -658,9 +658,9 @@ impl Engine {
 
         self.sync_spectrum_chain(sample_rate, &params);
 
+        self.demod
+            .process(&self.drain, sample_rate, &params.cw, &mut self.audio_scratch);
         if params.audio_enabled {
-            self.demod
-                .process(&self.drain, sample_rate, &params.cw, &mut self.audio_scratch);
             if let Some(audio) = &mut self.audio {
                 let audio_rate = hfsdr::audio_sample_rate(sample_rate, params.cw.decimation);
                 audio.push(&self.audio_scratch, audio_rate as u32, params.volume);

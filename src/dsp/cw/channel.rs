@@ -2,10 +2,13 @@
 //!
 //! Fixed order (each optional stage is bypassed when disabled):
 //! ```text
-//! IQ → [noise blanker] → NCO shift → decimate → [manual notches]
-//!    → channel filter → AGC/manual gain → product detector
-//!    → [APF] → [auto-notch] → [noise reduction] → squelch → audio
+//! IQ → [noise blanker] → NCO shift → decimate → [manual IQ notches]
+//!    → channel filter → AGC/manual gain → product detector (BFO demod)
+//!    → [APF] → [auto-notch] → [noise reduction] → audio
 //! ```
+//! Manual notches and the channel filter run on complex IQ before demod.
+//! Auto-notch and NR are post-demod polish: auto-notch uses a BFO guard on audio;
+//! the IQ equivalent of NR is narrowing the channel filter.
 //! All stages are preallocated; the per-sample path never allocates.
 
 use crate::source::Complex32;
@@ -35,7 +38,6 @@ pub struct CwChannel {
     apf: AudioPeakFilter,
     auto_notch: AutoNotch,
     noise_reduction: NoiseReduction,
-    squelch_env: f32,
     snr_peak: f32,
     snr_floor: f32,
     last_iq_rate: f32,
@@ -65,7 +67,6 @@ impl CwChannel {
             apf: AudioPeakFilter::new(),
             auto_notch: AutoNotch::new(),
             noise_reduction: NoiseReduction::new(),
-            squelch_env: 0.0,
             snr_peak: 1e-6,
             snr_floor: 1e-6,
             last_iq_rate: iq_sample_rate,
@@ -170,11 +171,6 @@ impl CwChannel {
                 audio = self
                     .noise_reduction
                     .process(audio, settings.noise_reduction.level);
-            }
-
-            self.squelch_env = 0.94 * self.squelch_env + 0.06 * level;
-            if settings.squelch > 0.0 && self.squelch_env < settings.squelch {
-                audio *= 0.02;
             }
 
             out.push(audio);
