@@ -103,7 +103,9 @@ impl SpectrumWidget {
         );
         draw_trace(
             &painter,
-            trace_data_rect(rect, full_span, view_span),
+            rect,
+            view_span,
+            pan,
             p.trace,
             p.ref_db,
             p.range_db,
@@ -144,12 +146,12 @@ impl SpectrumWidget {
             p.notches,
         );
 
+        // Only claim the hover crosshair when the pointer is over this plot; the
+        // shared value is reset once per frame so spectrum and waterfall agree.
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
             if rect.contains(pos) {
                 *hover_out =
                     Some(crate::interaction::x_to_offset_hz(pos.x, rect, view_span, pan));
-            } else {
-                *hover_out = None;
             }
         }
 
@@ -258,8 +260,6 @@ impl WaterfallWidget {
             if rect.contains(pos) {
                 *hover_out =
                     Some(crate::interaction::x_to_offset_hz(pos.x, rect, view_span, pan));
-            } else {
-                *hover_out = None;
             }
         }
 
@@ -588,30 +588,34 @@ fn draw_notch_marker(
     );
 }
 
-fn trace_data_rect(plot_rect: Rect, full_span_hz: f32, view_span_hz: f32) -> Rect {
-    let frac = (full_span_hz / view_span_hz).min(1.0);
-    if frac >= 0.999 {
-        return plot_rect;
-    }
-    let w = plot_rect.width() * frac;
-    Rect::from_center_size(plot_rect.center(), Vec2::new(w, plot_rect.height()))
-}
-
-fn draw_trace(painter: &Painter, rect: Rect, trace: &[f32], ref_db: f32, range_db: f32) {
+fn draw_trace(
+    painter: &Painter,
+    plot_rect: Rect,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    trace: &[f32],
+    ref_db: f32,
+    range_db: f32,
+) {
     let floor = ref_db - range_db;
     let n = trace.len();
-    if n < 2 || rect.width() < 1.0 {
+    if n < 2 || plot_rect.width() < 1.0 {
         return;
     }
 
+    let offset_at = |i: usize| -> f64 {
+        let t = i as f64 / (n as f64 - 1.0);
+        (t - 0.5) * view_span_hz as f64
+    };
+
     // Subsample to ~1.5 px per point — drawing 8k mesh verts buys nothing on a 1k-wide plot.
-    let max_pts = ((rect.width() * 1.5).round() as usize).clamp(2, 2048);
+    let max_pts = ((plot_rect.width() * 1.5).round() as usize).clamp(2, 2048);
     let mut line_pts = Vec::with_capacity(max_pts);
     if n <= max_pts {
         for (i, &db) in trace.iter().enumerate() {
-            let x = rect.left() + rect.width() * i as f32 / (n as f32 - 1.0);
+            let x = offset_hz_to_x(offset_at(i), plot_rect, view_span_hz, pan_offset_hz);
             let t = ((db - floor) / range_db).clamp(0.0, 1.0);
-            let y = rect.bottom() - rect.height() * t;
+            let y = plot_rect.bottom() - plot_rect.height() * t;
             line_pts.push(Pos2::new(x, y));
         }
     } else {
@@ -622,14 +626,15 @@ fn draw_trace(painter: &Painter, rect: Rect, trace: &[f32], ref_db: f32, range_d
                 .iter()
                 .copied()
                 .fold(f32::NEG_INFINITY, f32::max);
-            let x = rect.left() + rect.width() * out_i as f32 / (max_pts as f32 - 1.0);
+            let mid = (start + end.saturating_sub(1)) / 2;
+            let x = offset_hz_to_x(offset_at(mid), plot_rect, view_span_hz, pan_offset_hz);
             let t = ((peak - floor) / range_db).clamp(0.0, 1.0);
-            let y = rect.bottom() - rect.height() * t;
+            let y = plot_rect.bottom() - plot_rect.height() * t;
             line_pts.push(Pos2::new(x, y));
         }
     }
 
-    fill_under_trace(painter, rect, &line_pts);
+    fill_under_trace(painter, plot_rect, &line_pts);
     painter.add(Shape::line(line_pts.clone(), Stroke::new(2.5, TRACE_GLOW)));
     painter.add(Shape::line(line_pts, Stroke::new(1.25, TRACE)));
 }
@@ -721,7 +726,15 @@ fn draw_band_overview(
             0.0,
             Color32::from_rgba_unmultiplied(56, 189, 248, 12),
         );
-        draw_trace(painter, iq_rect, overview_trace, ref_db, range_db);
+        draw_trace(
+            painter,
+            iq_rect,
+            sample_rate,
+            0.0,
+            overview_trace,
+            ref_db,
+            range_db,
+        );
     }
 
     let view_left = pan_offset_hz - view_span_hz as f64 / 2.0;

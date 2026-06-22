@@ -643,6 +643,12 @@ impl WaterfallApp {
         }
     }
 
+    fn invalidate_waterfall_history(&mut self) {
+        self.rows.clear();
+        self.force_texture_full = true;
+        self.textures_dirty = true;
+    }
+
     /// Push UI settings to the engine and pull its published rows/status/spots.
     fn pump_engine(&mut self) {
         self.cw.listen_offset_hz = self.listen_offset_hz() as f32;
@@ -718,15 +724,13 @@ impl WaterfallApp {
         let view_span = self.plot_view.view_span_hz(full_span, max_zoom);
         let view_pan = self.plot_view.pan_offset_hz;
         let zoomed = self.stats.spectrum_zoomed;
-        if zoomed
-            && ((view_pan - self.last_spectrum_pan).abs() > 0.5
-                || (view_span - self.last_spectrum_span).abs() > 1.0
-                || zoomed != self.last_spectrum_zoomed)
-        {
-            // Zoomed rows are mix-down specific — stale pan poisons the waterfall.
-            self.rows.clear();
-            self.force_texture_full = true;
-            self.textures_dirty = true;
+        let zoom_mode_changed = zoomed != self.last_spectrum_zoomed;
+        if zoom_mode_changed || (view_span - self.last_spectrum_span).abs() > 1.0 {
+            // Zoom level changes rescale history — old rows would smear or flip width.
+            self.invalidate_waterfall_history();
+        } else if zoomed && (view_pan - self.last_spectrum_pan).abs() > 0.5 {
+            // Mix-down rows are pan-specific.
+            self.invalidate_waterfall_history();
         }
         self.last_spectrum_pan = view_pan;
         self.last_spectrum_span = view_span;
@@ -762,6 +766,7 @@ impl WaterfallApp {
         for action in actions {
             match action {
                 PlotAction::TuneDeltaHz(delta) | PlotAction::CenterOnOffsetHz(delta) => {
+                    self.invalidate_waterfall_history();
                     self.center_khz += delta / 1000.0;
                     self.plot_view.pan_offset_hz = 0.0;
                     self.tune_preview_offset_hz = None;
@@ -771,6 +776,7 @@ impl WaterfallApp {
                 }
                 PlotAction::CommitTunePreview => {
                     if let Some(offset) = self.tune_preview_offset_hz {
+                        self.invalidate_waterfall_history();
                         self.center_khz += offset / 1000.0;
                         self.plot_view.pan_offset_hz = 0.0;
                     }
@@ -866,12 +872,29 @@ impl WaterfallApp {
 
     fn estimate_display_levels(&self) -> Option<(f32, f32)> {
         const ROWS_FOR_ESTIMATE: usize = 24;
+        let view = self.spectrum_view();
+        let data_span = self.plot_full_span_hz();
+        let compose = |row: &[f32]| {
+            compose_panadapter_row(
+                row,
+                view.row_rate_hz,
+                view.view_span_hz,
+                data_span,
+                view.pan_offset_hz,
+            )
+        };
         if self.rows.len() >= 8 {
             let n = self.rows.len().min(ROWS_FOR_ESTIMATE);
-            let refs: Vec<&[f32]> = self.rows.iter().take(n).map(Vec::as_slice).collect();
-            estimate_levels_from_rows(&refs).or_else(|| estimate_levels(&self.latest))
+            let composed: Vec<Vec<f32>> = self
+                .rows
+                .iter()
+                .take(n)
+                .map(|row| compose(row))
+                .collect();
+            let refs: Vec<&[f32]> = composed.iter().map(Vec::as_slice).collect();
+            estimate_levels_from_rows(&refs).or_else(|| estimate_levels(&compose(&self.latest)))
         } else {
-            estimate_levels(&self.latest)
+            estimate_levels(&compose(&self.latest))
         }
     }
 
@@ -926,6 +949,7 @@ impl WaterfallApp {
                 peak
             };
             self.center_khz += (from_center - listen) as f64 / 1000.0;
+            self.invalidate_waterfall_history();
             self.clear_rit();
             self.tune_preview_offset_hz = None;
         }
@@ -1157,8 +1181,7 @@ impl WaterfallApp {
         self.plot_view.pan_offset_hz = 0.0;
         self.plot_view
             .zoom_to_cw_segment(segment, full_span, max_zoom);
-        self.force_texture_full = true;
-        self.textures_dirty = true;
+        self.invalidate_waterfall_history();
     }
 
     fn select_cw_band(&mut self, band: &CwBandPreset) {
@@ -1170,6 +1193,9 @@ impl WaterfallApp {
     }
 
     fn tune_to_hz(&mut self, frequency_hz: f64) {
+        if (frequency_hz / 1000.0 - self.center_khz).abs() > f64::EPSILON {
+            self.invalidate_waterfall_history();
+        }
         self.center_khz = frequency_hz / 1000.0;
         self.plot_view.pan_offset_hz = 0.0;
         self.tune_preview_offset_hz = None;
@@ -1178,6 +1204,7 @@ impl WaterfallApp {
 
     fn apply_radio_settings(&mut self) {
         if (self.center_khz - self.last_center_khz).abs() > f64::EPSILON {
+            self.invalidate_waterfall_history();
             self.engine.send(EngineCommand::Tune(self.center_khz * 1000.0));
             self.last_center_khz = self.center_khz;
         }
@@ -1375,6 +1402,33 @@ impl WaterfallApp {
             });
     }
 
+    fn waterfall_source_row(&self, row_index: usize) -> Option<&[f32]> {
+        self.rows
+            .get(row_index)
+            .map(Vec::as_slice)
+            .or_else(|| (row_index == 0).then(|| self.latest.as_slice()))
+    }
+
+    fn composed_waterfall_row(
+        row_data: &[f32],
+        view: &SpectrumViewMapping,
+        data_span: f32,
+        width: usize,
+    ) -> Vec<f32> {
+        let composed = compose_panadapter_row(
+            row_data,
+            view.row_rate_hz,
+            view.view_span_hz,
+            data_span,
+            view.pan_offset_hz,
+        );
+        if composed.len() == width {
+            composed
+        } else {
+            fit_panadapter_row_width(composed, width)
+        }
+    }
+
     fn waterfall_row_db(
         &self,
         row_index: usize,
@@ -1383,27 +1437,14 @@ impl WaterfallApp {
         width: usize,
         avg: usize,
     ) -> Vec<f32> {
-        if self.rows.is_empty() {
-            return vec![-120.0; width];
-        }
         let mut acc = vec![0.0f32; width];
         let mut count = 0usize;
         for k in 0..avg {
-            let Some(row_data) = self.rows.get(row_index.saturating_add(k)) else {
+            let Some(row_data) = self.waterfall_source_row(row_index.saturating_add(k)) else {
                 break;
             };
-            let row_view = fit_panadapter_row_width(
-                compose_panadapter_row(
-                    row_data,
-                    view.row_rate_hz,
-                    view.view_span_hz,
-                    data_span,
-                    view.pan_offset_hz,
-                ),
-                width,
-            );
-            let n = row_view.len().min(width);
-            for (i, &db) in row_view.iter().take(n).enumerate() {
+            let row_view = Self::composed_waterfall_row(row_data, view, data_span, width);
+            for (i, &db) in row_view.iter().enumerate().take(width) {
                 acc[i] += db;
             }
             count += 1;
@@ -1452,51 +1493,12 @@ impl WaterfallApp {
         self.upload_waterfall_texture(ctx, w, h);
     }
 
-    /// Scroll existing pixels down and paint only the newest rows at the top.
-    fn append_waterfall_texture_rows(&mut self, ctx: &egui::Context, new_rows: usize) {
-        if new_rows == 0 {
-            return;
-        }
-        let view = self.spectrum_view();
-        let data_span = self.plot_full_span_hz();
-        let w = panadapter_output_bins(self.latest.len(), view.view_span_hz, data_span).max(1);
-        let h = WATERFALL_ROWS;
-        let avg = self.waterfall_avg.max(1) as usize;
-        let ref_db = self.ref_db;
-        let range_db = self.range_db;
-        if w != self.tex_width || self.waterfall_pixels.len() != w * h {
-            self.rebuild_waterfall_texture(ctx);
-            return;
-        }
-        let scroll = new_rows.min(h);
-        if scroll < h {
-            for y in (scroll..h).rev() {
-                let src = (y - scroll) * w;
-                let dst = y * w;
-                self.waterfall_pixels
-                    .copy_within(src..src + w, dst);
-            }
-        }
-        for y in 0..scroll {
-            let row_db = self.waterfall_row_db(y, &view, data_span, w, avg);
-            Self::write_row_pixels(&mut self.waterfall_pixels, y, w, &row_db, ref_db, range_db);
-        }
-        self.upload_waterfall_texture(ctx, w, h);
-    }
-
     fn sync_waterfall_texture(&mut self, ctx: &egui::Context) {
         if !self.textures_dirty {
             return;
         }
-        if self.force_texture_full
-            || self.pending_row_appends == 0
-            || self.rows.is_empty()
-            || self.tex_width == 0
-        {
-            self.rebuild_waterfall_texture(ctx);
-        } else {
-            self.append_waterfall_texture_rows(ctx, self.pending_row_appends);
-        }
+        // Full rebuild keeps spectrum/waterfall aligned when zoom, pan, or levels change.
+        self.rebuild_waterfall_texture(ctx);
         self.textures_dirty = false;
         self.force_texture_full = false;
         self.pending_row_appends = 0;
@@ -1591,6 +1593,7 @@ impl WaterfallApp {
 
     fn connection_alias(&self) -> String {
         match self.form_kind {
+            #[cfg(feature = "airspy")]
             SourceKind::Airspy => "Airspy HF+".to_string(),
             SourceKind::Kiwi => {
                 let host = self.form_host.trim();
@@ -2976,6 +2979,9 @@ impl WaterfallApp {
             height: 200.0,
         };
 
+        // Reset before drawing; whichever plot the pointer is over claims the crosshair.
+        self.hover_offset_hz = None;
+
         let (_, spec_actions) = self.spectrum_widget.show(
             ui,
             &mut self.plot_interaction,
@@ -3171,7 +3177,7 @@ impl eframe::App for WaterfallApp {
                 self.central_panel(ui);
             });
 
-        // Waterfall texture after plot interaction (defer rebuild while dragging).
+        // Waterfall texture after plot interaction.
         let dragging = self.plot_interaction.is_dragging();
         if self.was_plot_dragging && !dragging {
             self.force_texture_full = true;
@@ -3190,7 +3196,7 @@ impl eframe::App for WaterfallApp {
             || (pan_track - self.last_tex_pan).abs()
                 > (view.view_span_hz as f64 * 0.003).max(2.0)
             || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
-        if view_changed && !dragging {
+        if view_changed {
             self.force_texture_full = true;
             self.textures_dirty = true;
         }

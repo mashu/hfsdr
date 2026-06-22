@@ -5,7 +5,6 @@ use eframe::egui::{Pos2, Rect, Response, Ui};
 const CENTER_GRAB_PX: f32 = 18.0;
 const EDGE_GRAB_PX: f32 = 12.0;
 const MIN_ZOOM: f32 = 0.04;
-const DRAG_TUNE_THRESHOLD_PX: f32 = 4.0;
 
 pub const CW_PASSBAND_MIN_HZ: f32 = 50.0;
 /// CW contest filters top out around 500 Hz; wide mode allows RTTY-adjacent widths.
@@ -140,7 +139,6 @@ impl PlotViewState {
 pub struct PlotInteraction {
     pub drag_mode: DragMode,
     drag_origin: Option<Pos2>,
-    tune_drag_active: bool,
 }
 
 impl PlotInteraction {
@@ -148,7 +146,6 @@ impl PlotInteraction {
         Self {
             drag_mode: DragMode::None,
             drag_origin: None,
-            tune_drag_active: false,
         }
     }
 
@@ -198,51 +195,50 @@ impl PlotInteraction {
             }
         }
 
-        if response.double_clicked() {
+        // Click-to-tune: let egui decide click vs drag (distance + time aware) so a
+        // steady-enough tap always jumps, instead of a brittle pixel threshold that
+        // turned small hand movement into a pan when zoomed in.
+        if response.clicked() || response.double_clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
-                let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                actions.push(PlotAction::CenterOnOffsetHz(offset));
+                let mode = classify_press(
+                    pos,
+                    rect,
+                    view_span,
+                    pan,
+                    passband_hz,
+                    filter_editable,
+                    listen_center_hz,
+                    preview_x,
+                    shift,
+                    notches,
+                );
+                // Tune anywhere on the spectrum body; leave handle grabs (edges,
+                // center line, notches) to drag gestures only.
+                if matches!(
+                    mode,
+                    DragMode::Tune | DragMode::PanView | DragMode::ShiftPassband
+                ) {
+                    let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
+                    actions.push(PlotAction::CenterOnOffsetHz(offset));
+                }
             }
         }
 
         if response.drag_started() {
             if let Some(pos) = response.interact_pointer_pos() {
                 self.drag_origin = Some(pos);
-                self.tune_drag_active = false;
-
-                if let Some((slot, hit)) = pick_notch_hit(pos.x, rect, view_span, pan, notches) {
-                    self.drag_mode = match hit {
-                        NotchHit::Left => DragMode::ResizeNotchLeft(slot),
-                        NotchHit::Right => DragMode::ResizeNotchRight(slot),
-                        NotchHit::Body => DragMode::DragNotch(slot),
-                    };
-                } else if filter_editable {
-                    let (left, right) =
-                        filter_edges(rect, view_span, pan, listen_center_hz, passband_hz);
-                    if pos.x >= left - EDGE_GRAB_PX && pos.x <= left + EDGE_GRAB_PX {
-                        self.drag_mode = DragMode::ResizeLeft;
-                    } else if pos.x >= right - EDGE_GRAB_PX && pos.x <= right + EDGE_GRAB_PX {
-                        self.drag_mode = DragMode::ResizeRight;
-                    } else if pos.x >= preview_x - CENTER_GRAB_PX
-                        && pos.x <= preview_x + CENTER_GRAB_PX
-                    {
-                        self.drag_mode = DragMode::DragCenter;
-                    } else if in_passband_body(pos.x, left, right) {
-                        self.drag_mode = DragMode::ShiftPassband;
-                    } else if shift {
-                        self.drag_mode = DragMode::PanView;
-                    } else {
-                        self.drag_mode = DragMode::Tune;
-                    }
-                } else if pos.x >= preview_x - CENTER_GRAB_PX
-                    && pos.x <= preview_x + CENTER_GRAB_PX
-                {
-                    self.drag_mode = DragMode::DragCenter;
-                } else if shift {
-                    self.drag_mode = DragMode::PanView;
-                } else {
-                    self.drag_mode = DragMode::Tune;
-                }
+                self.drag_mode = classify_press(
+                    pos,
+                    rect,
+                    view_span,
+                    pan,
+                    passband_hz,
+                    filter_editable,
+                    listen_center_hz,
+                    preview_x,
+                    shift,
+                    notches,
+                );
             }
         }
 
@@ -255,21 +251,15 @@ impl PlotInteraction {
                     }
                 }
                 DragMode::Tune => {
-                    let pos = response.interact_pointer_pos();
-                    if let (Some(origin), Some(pos)) = (self.drag_origin, pos) {
-                        if !self.tune_drag_active && pos.distance(origin) < DRAG_TUNE_THRESHOLD_PX {
-                            // Wait for click vs drag threshold.
+                    // Drag on empty spectrum: pan the view when zoomed, otherwise
+                    // walk the carrier. Pure taps are handled by `clicked()` above.
+                    let delta_hz =
+                        -response.drag_delta().x as f64 / rect.width() as f64 * view_span as f64;
+                    if delta_hz.abs() > f64::EPSILON {
+                        if can_pan {
+                            actions.push(PlotAction::PanViewDeltaHz(delta_hz));
                         } else {
-                            self.tune_drag_active = true;
-                            let delta_hz =
-                                -response.drag_delta().x as f64 / rect.width() as f64 * view_span as f64;
-                            if delta_hz.abs() > f64::EPSILON {
-                                if can_pan {
-                                    actions.push(PlotAction::PanViewDeltaHz(delta_hz));
-                                } else {
-                                    actions.push(PlotAction::TuneDeltaHz(delta_hz));
-                                }
-                            }
+                            actions.push(PlotAction::TuneDeltaHz(delta_hz));
                         }
                     }
                 }
@@ -322,17 +312,10 @@ impl PlotInteraction {
         if response.drag_stopped() {
             match self.drag_mode {
                 DragMode::DragCenter => actions.push(PlotAction::CommitTunePreview),
-                DragMode::Tune if !self.tune_drag_active => {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        actions.push(PlotAction::CenterOnOffsetHz(offset));
-                    }
-                }
                 _ => actions.push(PlotAction::ClearTunePreview),
             }
             self.drag_mode = DragMode::None;
             self.drag_origin = None;
-            self.tune_drag_active = false;
         }
 
         actions
@@ -341,6 +324,58 @@ impl PlotInteraction {
 
 fn in_passband_body(x: f32, left: f32, right: f32) -> bool {
     x > left + EDGE_GRAB_PX && x < right - EDGE_GRAB_PX
+}
+
+/// Single source of truth for what a press at `pos` targets. Shared by click-to-tune
+/// and drag-start so the two can never disagree about what was hit.
+#[allow(clippy::too_many_arguments)]
+fn classify_press(
+    pos: Pos2,
+    rect: Rect,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    passband_hz: f32,
+    filter_editable: bool,
+    listen_center_hz: f64,
+    preview_x: f32,
+    shift: bool,
+    notches: &[NotchMarker],
+) -> DragMode {
+    if let Some((slot, hit)) = pick_notch_hit(pos.x, rect, view_span_hz, pan_offset_hz, notches) {
+        return match hit {
+            NotchHit::Left => DragMode::ResizeNotchLeft(slot),
+            NotchHit::Right => DragMode::ResizeNotchRight(slot),
+            NotchHit::Body => DragMode::DragNotch(slot),
+        };
+    }
+
+    let near_center =
+        pos.x >= preview_x - CENTER_GRAB_PX && pos.x <= preview_x + CENTER_GRAB_PX;
+
+    if filter_editable {
+        let (left, right) =
+            filter_edges(rect, view_span_hz, pan_offset_hz, listen_center_hz, passband_hz);
+        if pos.x >= left - EDGE_GRAB_PX && pos.x <= left + EDGE_GRAB_PX {
+            return DragMode::ResizeLeft;
+        }
+        if pos.x >= right - EDGE_GRAB_PX && pos.x <= right + EDGE_GRAB_PX {
+            return DragMode::ResizeRight;
+        }
+        if near_center {
+            return DragMode::DragCenter;
+        }
+        if in_passband_body(pos.x, left, right) {
+            return DragMode::ShiftPassband;
+        }
+    } else if near_center {
+        return DragMode::DragCenter;
+    }
+
+    if shift {
+        DragMode::PanView
+    } else {
+        DragMode::Tune
+    }
 }
 
 fn pick_notch_hit(
@@ -545,6 +580,21 @@ mod tests {
         assert!((x_to_offset_hz(500.0, rect, 70_000.0, 0.0) - 0.0).abs() < 1.0);
         assert!((x_to_offset_hz(0.0, rect, 70_000.0, 0.0) - (-35_000.0)).abs() < 1.0);
         assert!((x_to_offset_hz(1000.0, rect, 70_000.0, 0.0) - 35_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn offset_x_roundtrip_at_band_overview() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let view_span = 70_000.0;
+        let pan = 0.0;
+        for offset in [-3_000.0, -500.0, 0.0, 750.0, 2_800.0] {
+            let x = offset_hz_to_x(offset, rect, view_span, pan);
+            let back = x_to_offset_hz(x, rect, view_span, pan);
+            assert!(
+                (back - offset).abs() < 1.0,
+                "offset {offset} -> x {x} -> {back}"
+            );
+        }
     }
 
     #[test]
