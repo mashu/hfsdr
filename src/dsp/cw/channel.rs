@@ -15,7 +15,7 @@ use super::apf::AudioPeakFilter;
 use super::autonotch::AutoNotch;
 use super::decimator::Decimator;
 use super::detector::ProductDetector;
-use super::fir::{design_lowpass, FirFilter, WindowKind};
+use super::fir::{design_lowpass_with, FirFilter, LowpassDesign, WindowKind};
 use super::nco::ComplexNco;
 use super::noiseblanker::NoiseBlanker;
 use super::noisereduction::NoiseReduction;
@@ -42,6 +42,8 @@ pub struct CwChannel {
     last_decimation: u32,
     last_bandwidth: f32,
     last_window: WindowKind,
+    last_kaiser_beta: f32,
+    last_passband_flatten: bool,
 }
 
 impl CwChannel {
@@ -53,7 +55,11 @@ impl CwChannel {
             shift_nco: ComplexNco::new(),
             decimator,
             notches: std::array::from_fn(|_| IqNotch::new()),
-            channel_fir: design_lowpass(audio_rate, 200.0, WindowKind::Gaussian),
+            channel_fir: design_lowpass_with(
+                audio_rate,
+                200.0,
+                LowpassDesign::default(),
+            ),
             agc: CwAgc::new(),
             detector: ProductDetector::new(),
             apf: AudioPeakFilter::new(),
@@ -66,6 +72,8 @@ impl CwChannel {
             last_decimation: 0,
             last_bandwidth: 200.0,
             last_window: WindowKind::Gaussian,
+            last_kaiser_beta: 6.0,
+            last_passband_flatten: false,
         }
     }
 
@@ -207,10 +215,21 @@ impl CwChannel {
 
         let bandwidth = settings.channel_bandwidth_hz();
         let audio_rate = self.decimator.output_rate(iq_rate);
-        if (bandwidth - self.last_bandwidth).abs() > 1.0 || settings.window != self.last_window {
-            self.channel_fir = design_lowpass(audio_rate, bandwidth, settings.window);
+        let design = LowpassDesign {
+            window: settings.window,
+            kaiser_beta: settings.kaiser_beta,
+            passband_flatten: settings.passband_flatten,
+        };
+        let design_changed = (bandwidth - self.last_bandwidth).abs() > 1.0
+            || settings.window != self.last_window
+            || (settings.kaiser_beta - self.last_kaiser_beta).abs() > 0.05
+            || settings.passband_flatten != self.last_passband_flatten;
+        if design_changed {
+            self.channel_fir = design_lowpass_with(audio_rate, bandwidth, design);
             self.last_bandwidth = bandwidth;
             self.last_window = settings.window;
+            self.last_kaiser_beta = settings.kaiser_beta;
+            self.last_passband_flatten = settings.passband_flatten;
         }
     }
 }

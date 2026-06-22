@@ -128,6 +128,10 @@ pub struct CwChannelSettings {
     pub bfo_hz: f32,
     pub passband_hz: f32,
     pub window: WindowKind,
+    /// Kaiser β when `window == Kaiser` (typical 4–10).
+    pub kaiser_beta: f32,
+    /// Lift upstream SDR passband droop (inverse-sinc EQ convolved into channel FIR).
+    pub passband_flatten: bool,
     /// Integer decimation factor override; `0` auto-selects from the IQ rate.
     pub decimation: u32,
     pub noise_blanker: NoiseBlankerSettings,
@@ -146,6 +150,8 @@ impl Default for CwChannelSettings {
             bfo_hz: 650.0,
             passband_hz: 200.0,
             window: WindowKind::Gaussian,
+            kaiser_beta: 6.0,
+            passband_flatten: false,
             decimation: 0,
             noise_blanker: NoiseBlankerSettings::default(),
             notches: [NotchSpec::default(); MAX_NOTCHES],

@@ -70,6 +70,7 @@ impl ConnectRequest {
 pub struct Connection {
     pub source: Box<dyn IqSource>,
     pub iq: Consumer<Complex32>,
+    pub iq_ring_capacity: usize,
     pub sample_rate: f32,
     pub center_hz: f64,
     pub is_kiwi: bool,
@@ -97,6 +98,7 @@ fn connect_kiwi(req: &ConnectRequest) -> Result<Connection, String> {
     Ok(Connection {
         source: Box::new(src),
         iq,
+        iq_ring_capacity: 1 << 16,
         sample_rate: sr,
         center_hz: req.center_hz,
         is_kiwi: true,
@@ -118,6 +120,7 @@ fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
     Ok(Connection {
         source: Box::new(src),
         iq,
+        iq_ring_capacity: 1 << 15,
         sample_rate: sr as f32,
         center_hz: req.center_hz,
         is_kiwi: false,

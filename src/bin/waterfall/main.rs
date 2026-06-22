@@ -12,6 +12,7 @@ mod display_levels;
 mod engine;
 mod interaction;
 mod iq_dialog;
+mod iq_panel;
 mod kiwi_directory;
 mod log;
 mod scp_fetch;
@@ -20,6 +21,7 @@ mod skimmer;
 mod smooth;
 mod source;
 mod spot_filter;
+mod status_widgets;
 mod theme;
 mod widgets;
 

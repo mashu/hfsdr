@@ -73,6 +73,10 @@ pub struct EngineStats {
     pub iq_playback: bool,
     pub iq_capture_samples: u64,
     pub iq_capture_path: Option<String>,
+    /// IQ ring fill 0..1 (smoothed); high = healthy headroom.
+    pub iq_buffer_fill: f32,
+    /// Seconds of IQ currently queued at nominal sample rate.
+    pub iq_buffer_secs: f32,
 }
 
 impl Default for EngineStats {
@@ -98,6 +102,8 @@ impl Default for EngineStats {
             iq_playback: false,
             iq_capture_samples: 0,
             iq_capture_path: None,
+            iq_buffer_fill: 0.0,
+            iq_buffer_secs: 0.0,
         }
     }
 }
@@ -290,6 +296,10 @@ struct Engine {
     recorder: Option<IqRecorder>,
     recorder_samples: u64,
     playback: Option<IqPlayback>,
+    iq_buffer_fill: f32,
+    iq_buffer_secs: f32,
+    iq_buffer_peak: f32,
+    last_pump_got: usize,
 }
 
 impl Engine {
@@ -331,6 +341,10 @@ impl Engine {
             recorder: None,
             recorder_samples: 0,
             playback: None,
+            iq_buffer_fill: 0.0,
+            iq_buffer_secs: 0.0,
+            iq_buffer_peak: 0.0,
+            last_pump_got: 0,
         }
     }
 
@@ -528,6 +542,10 @@ impl Engine {
         }
         self.conn = None;
         self.playback = None;
+        self.iq_buffer_fill = 0.0;
+        self.iq_buffer_secs = 0.0;
+        self.iq_buffer_peak = 0.0;
+        self.last_pump_got = 0;
         self.stop_recorder();
     }
 
@@ -567,6 +585,8 @@ impl Engine {
     /// Drain and process available IQ; returns sample count processed.
     fn pump_stream(&mut self) -> usize {
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
+        let (sample_rate, _, _) = self.link_meta();
+        self.update_link_health(sample_rate);
 
         self.drain.clear();
         if let Some(pb) = &mut self.playback {
@@ -590,6 +610,7 @@ impl Engine {
             }
         }
         let got = self.drain.len();
+        self.last_pump_got = got;
         if got == 0 {
             self.publish_stats(0);
             return 0;
@@ -686,6 +707,64 @@ impl Engine {
         }
     }
 
+    fn measure_iq_buffer(&self) -> (f32, f32) {
+        if let Some(pb) = &self.playback {
+            let fill = pb.buffer_fill();
+            let secs = pb.buffer_secs();
+            (fill, secs)
+        } else if let Some(conn) = &self.conn {
+            let cap = conn.iq_ring_capacity.max(1);
+            let slots = conn.iq.slots();
+            let fill = slots as f32 / cap as f32;
+            let secs = slots as f32 / conn.sample_rate.max(1.0);
+            (fill, secs)
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    fn update_link_health(&mut self, sample_rate: f32) {
+        let (raw_fill, raw_secs) = self.measure_iq_buffer();
+        self.iq_buffer_peak = (self.iq_buffer_peak * 0.992).max(raw_fill);
+        let ring_boost = (raw_fill * 24.0)
+            .min(1.0)
+            .max((self.iq_buffer_peak * 10.0).min(1.0));
+
+        if let Some(pb) = &self.playback {
+            let health = if self.last_pump_got > 0 {
+                raw_fill.max(0.9)
+            } else if !pb.finished() {
+                0.6
+            } else {
+                0.0
+            };
+            self.iq_buffer_fill = self.iq_buffer_fill * 0.65 + health * 0.35;
+            self.iq_buffer_secs = self.iq_buffer_secs * 0.65 + raw_secs.max(0.8) * 0.35;
+            return;
+        }
+
+        if self.conn.is_none() || !self.first_iq_received {
+            self.iq_buffer_fill *= 0.85;
+            self.iq_buffer_secs *= 0.85;
+            return;
+        }
+
+        let stale = self.last_data.elapsed().as_secs_f32();
+        let stall = self.stall_timeout().as_secs_f32();
+        let freshness = (1.0 - stale / stall).clamp(0.0, 1.0);
+        let nominal = sample_rate.max(1.0);
+        let rate_health = (self.cached_rate / (nominal * SLOW_FRACTION)).clamp(0.0, 1.0);
+        let health =
+            (freshness * 0.5 + rate_health * 0.38 + ring_boost * 0.12).clamp(0.0, 1.0);
+        self.iq_buffer_fill = self.iq_buffer_fill * 0.72 + health * 0.28;
+        let conceptual_secs = raw_secs.max(freshness * 3.0).max(rate_health * 5.0);
+        self.iq_buffer_secs = self.iq_buffer_secs * 0.72 + conceptual_secs * 0.28;
+    }
+
+    fn iq_buffer_stats(&self) -> (f32, f32) {
+        (self.iq_buffer_fill, self.iq_buffer_secs)
+    }
+
     fn publish_rows(&mut self, rows: Vec<Vec<f32>>, snr: f32, got: usize) {
         let spots = self.skimmer.spots();
         let scp = self.skimmer.scp_status();
@@ -701,6 +780,7 @@ impl Engine {
             .as_ref()
             .map(|a| (Some(a.device_name().to_string()), a.output_rate()))
             .unwrap_or((None, 0));
+        let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
 
         if let Ok(mut guard) = self.shared.lock() {
             if guard.latest.len() == self.latest.len() {
@@ -737,6 +817,8 @@ impl Engine {
                 iq_playback,
                 iq_capture_samples,
                 iq_capture_path,
+                iq_buffer_fill,
+                iq_buffer_secs,
             };
         }
     }
@@ -764,6 +846,9 @@ impl Engine {
     }
 
     fn publish_stats(&mut self, got: usize) {
+        self.last_pump_got = got;
+        let (sample_rate, _, _) = self.link_meta();
+        self.update_link_health(sample_rate);
         let scp = self.skimmer.scp_status();
         let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
@@ -776,6 +861,7 @@ impl Engine {
             .as_ref()
             .map(|a| (Some(a.device_name().to_string()), a.output_rate()))
             .unwrap_or((None, 0));
+        let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
         if let Ok(mut guard) = self.shared.lock() {
             guard.stats = EngineStats {
                 sample_rate,
@@ -798,6 +884,8 @@ impl Engine {
                 iq_playback,
                 iq_capture_samples,
                 iq_capture_path,
+                iq_buffer_fill,
+                iq_buffer_secs,
             };
         }
     }

@@ -202,8 +202,11 @@ fn writer_thread(
 }
 
 /// Real-time IQ playback into a ring buffer (engine drains like a live source).
+const PLAYBACK_RING_CAPACITY: usize = 65_536;
+
 pub struct IqPlayback {
     consumer: Consumer<Complex32>,
+    ring_capacity: usize,
     meta: IqCaptureMeta,
     done: Arc<std::sync::atomic::AtomicBool>,
     join: Option<JoinHandle<()>>,
@@ -215,7 +218,7 @@ impl IqPlayback {
         let meta = read_meta(&path)?;
         let mut file = File::open(&path)?;
         file.seek(SeekFrom::Start(HEADER_LEN as u64))?;
-        let (mut prod, cons) = RingBuffer::<Complex32>::new(65_536);
+        let (mut prod, cons) = RingBuffer::<Complex32>::new(PLAYBACK_RING_CAPACITY);
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let done_thread = Arc::clone(&done);
         let rate = meta.sample_rate.max(1);
@@ -224,6 +227,7 @@ impl IqPlayback {
             .spawn(move || playback_thread(file, rate, &mut prod, done_thread))?;
         Ok(Self {
             consumer: cons,
+            ring_capacity: PLAYBACK_RING_CAPACITY,
             meta,
             done,
             join: Some(join),
@@ -240,6 +244,18 @@ impl IqPlayback {
 
     pub fn pop(&mut self) -> Option<Complex32> {
         self.consumer.pop().ok()
+    }
+
+    /// Ring occupancy 0..1 before draining (for status UI).
+    pub fn buffer_fill(&self) -> f32 {
+        let cap = self.ring_capacity.max(1);
+        self.consumer.slots() as f32 / cap as f32
+    }
+
+    /// Seconds of IQ currently queued.
+    pub fn buffer_secs(&self) -> f32 {
+        let rate = self.meta.sample_rate.max(1) as f32;
+        self.consumer.slots() as f32 / rate
     }
 }
 

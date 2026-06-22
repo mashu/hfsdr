@@ -17,10 +17,11 @@ mod view;
 pub use audio::{iq_to_audio, IqAudioDemod};
 pub use cw::{
     channel_group_delay_ms, decimation_factor, design_gaussian_lowpass, design_lowpass,
-    effective_decimation, audio_sample_rate, AgcSettings, ApfSettings,
+    design_lowpass_with, effective_decimation, audio_sample_rate, AgcSettings, ApfSettings,
     AudioPeakFilter, AutoNotch, AutoNotchSettings, ComplexNco, CwAgc, CwChannel, CwChannelSettings,
-    Decimator, FirFilter, IqNotch, LmsPredictor, LmsStep, NoiseBlanker, NoiseBlankerSettings,
-    NoiseReduction, NoiseReductionSettings, NotchSpec, ProductDetector, WindowKind, MAX_NOTCHES,
+    Decimator, FirFilter, LowpassDesign, IqNotch, LmsPredictor, LmsStep, NoiseBlanker,
+    NoiseBlankerSettings, NoiseReduction, NoiseReductionSettings, NotchSpec, ProductDetector,
+    WindowKind, MAX_NOTCHES,
 };
 pub use spectrum::SpectrumAnalyzer;
 pub use spectrum_front::SpectrumFrontEnd;

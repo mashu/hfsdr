@@ -2,9 +2,8 @@
 //!
 //! Linear phase (symmetric taps) preserves the keying edges so fast CW does not
 //! smear or ring. The window choice trades skirt steepness against ringing:
-//! Gaussian has essentially no overshoot, raised-cosine (Hann/Blackman) gives
-//! slightly steeper skirts with negligible ring — both far cleaner than elliptic
-//! IIR designs.
+//! Gaussian has essentially no overshoot, Kaiser is tunable, raised-cosine
+//! (Hann/Blackman) gives steeper skirts — all far cleaner than elliptic IIR.
 
 use std::f32::consts::PI;
 
@@ -19,6 +18,28 @@ pub enum WindowKind {
     RaisedCosine,
     /// Blackman: steepest clean skirts, slightly wider transition.
     Blackman,
+    /// Kaiser: adjustable β — flat passband vs steep skirts.
+    Kaiser,
+}
+
+/// Parameters for [`design_lowpass_with`].
+#[derive(Clone, Copy, Debug)]
+pub struct LowpassDesign {
+    pub window: WindowKind,
+    /// Kaiser β (3 = wide, 12 = steep). Ignored for other windows.
+    pub kaiser_beta: f32,
+    /// Convolve with a short inverse-sinc EQ to lift upstream boxcar/CIC droop.
+    pub passband_flatten: bool,
+}
+
+impl Default for LowpassDesign {
+    fn default() -> Self {
+        Self {
+            window: WindowKind::Gaussian,
+            kaiser_beta: 6.0,
+            passband_flatten: false,
+        }
+    }
 }
 
 /// Preallocated FIR with a circular delay line — allocation-free after construction.
@@ -33,7 +54,7 @@ pub struct FirFilter {
 /// Maximum filter group delay — longer delays smear CW keying edges.
 const MAX_GROUP_DELAY_MS: f32 = 12.0;
 
-/// Tap count for a channel filter (matches [`design_lowpass`]).
+/// Tap count for a channel filter (matches [`design_lowpass_with`]).
 pub fn plan_num_taps(sample_rate: f32, bandwidth_hz: f32) -> usize {
     let cutoff = (bandwidth_hz * 0.5).max(10.0);
     let mut num_taps = ((sample_rate / cutoff) * 4.0).round() as usize;
@@ -105,16 +126,29 @@ impl FirFilter {
     }
 }
 
-/// Design a symmetric windowed-sinc lowpass for a CW channel of `bandwidth_hz`.
-///
-/// `bandwidth_hz` is the full passband width, so the lowpass cutoff is half that
-/// (the wanted signal sits at DC after the NCO mixes it down). Taps are causal
-/// order: `taps[0]` weights the newest sample.
+/// Design a symmetric windowed-sinc lowpass (default options).
 pub fn design_lowpass(sample_rate: f32, bandwidth_hz: f32, window: WindowKind) -> FirFilter {
+    design_lowpass_with(
+        sample_rate,
+        bandwidth_hz,
+        LowpassDesign {
+            window,
+            ..LowpassDesign::default()
+        },
+    )
+}
+
+/// Design a symmetric windowed-sinc lowpass for a CW channel of `bandwidth_hz`.
+pub fn design_lowpass_with(
+    sample_rate: f32,
+    bandwidth_hz: f32,
+    design: LowpassDesign,
+) -> FirFilter {
     let cutoff = (bandwidth_hz * 0.5).max(10.0);
     let num_taps = plan_num_taps(sample_rate, bandwidth_hz);
     let m = (num_taps - 1) as f32;
     let fc = cutoff / sample_rate;
+    let beta = design.kaiser_beta.clamp(2.0, 14.0);
 
     let mut taps = Vec::with_capacity(num_taps);
     let mut sum = 0.0f32;
@@ -125,7 +159,7 @@ pub fn design_lowpass(sample_rate: f32, bandwidth_hz: f32, window: WindowKind) -
         } else {
             (2.0 * PI * fc * x).sin() / (PI * x)
         };
-        let tap = sinc * window_value(window, k, num_taps);
+        let tap = sinc * window_value(design.window, k, num_taps, beta);
         taps.push(tap);
         sum += tap;
     }
@@ -133,6 +167,11 @@ pub fn design_lowpass(sample_rate: f32, bandwidth_hz: f32, window: WindowKind) -
         for tap in &mut taps {
             *tap /= sum;
         }
+    }
+
+    if design.passband_flatten {
+        let comp = design_droop_compensator();
+        taps = convolve_centered(&taps, &comp);
     }
 
     FirFilter::new(taps)
@@ -143,12 +182,73 @@ pub fn design_gaussian_lowpass(sample_rate: f32, bandwidth_hz: f32) -> FirFilter
     design_lowpass(sample_rate, bandwidth_hz, WindowKind::Gaussian)
 }
 
-fn window_value(window: WindowKind, k: usize, num_taps: usize) -> f32 {
+/// Short inverse-sinc compensator for upstream boxcar/CIC passband droop.
+/// Based on the liquid-dsp approach: passband gain ∝ 1/sinc(N·f), N ≈ 7.
+fn design_droop_compensator() -> Vec<f32> {
+    const N: f32 = 7.0;
+    const TAPS: usize = 15;
+    let m = (TAPS - 1) as f32;
+    let pass_edge = 0.85 / N;
+
+    let mut taps = vec![0.0f32; TAPS];
+    for i in 0..TAPS {
+        let mut acc = 0.0f32;
+        for j in 0..TAPS {
+            let f = j as f32 / TAPS as f32 * 0.5;
+            let gain = if f <= pass_edge {
+                let v = normalized_sinc(N * f);
+                (1.0 / v).clamp(1.0, 3.5)
+            } else {
+                0.0
+            };
+            let phase = 2.0 * PI * (i as f32) * (j as f32 - m / 2.0) / TAPS as f32;
+            acc += gain * phase.cos();
+        }
+        let hann = 0.5 - 0.5 * (2.0 * PI * i as f32 / m).cos();
+        taps[i] = acc / TAPS as f32 * hann;
+    }
+    let sum: f32 = taps.iter().sum();
+    if sum.abs() > f32::EPSILON {
+        for t in &mut taps {
+            *t /= sum;
+        }
+    }
+    taps
+}
+
+fn convolve_centered(main: &[f32], eq: &[f32]) -> Vec<f32> {
+    let out_len = main.len();
+    let full_len = main.len() + eq.len() - 1;
+    let mut full = vec![0.0f32; full_len];
+    for (i, &a) in main.iter().enumerate() {
+        for (j, &b) in eq.iter().enumerate() {
+            full[i + j] += a * b;
+        }
+    }
+    let start = (full_len - out_len) / 2;
+    let mut out = full[start..start + out_len].to_vec();
+    let sum: f32 = out.iter().sum();
+    if sum.abs() > f32::EPSILON {
+        for t in &mut out {
+            *t /= sum;
+        }
+    }
+    out
+}
+
+fn normalized_sinc(x: f32) -> f32 {
+    if x.abs() < 1e-6 {
+        1.0
+    } else {
+        (PI * x).sin() / (PI * x)
+    }
+}
+
+fn window_value(window: WindowKind, k: usize, num_taps: usize, kaiser_beta: f32) -> f32 {
     let m = (num_taps - 1) as f32;
     let kf = k as f32;
     match window {
         WindowKind::Gaussian => {
-            // sigma chosen for ~>40 dB stopband while staying ring-free.
             let sigma = (m / 2.0) / 3.0;
             let x = kf - m / 2.0;
             (-0.5 * (x / sigma).powi(2)).exp()
@@ -157,7 +257,28 @@ fn window_value(window: WindowKind, k: usize, num_taps: usize) -> f32 {
         WindowKind::Blackman => {
             0.42 - 0.5 * (2.0 * PI * kf / m).cos() + 0.08 * (4.0 * PI * kf / m).cos()
         }
+        WindowKind::Kaiser => kaiser_window(kf, m, kaiser_beta),
     }
+}
+
+fn kaiser_window(k: f32, m: f32, beta: f32) -> f32 {
+    let x = 2.0 * k / m - 1.0;
+    let inner = (1.0 - x * x).max(0.0);
+    bessel_i0(beta * inner.sqrt()) / bessel_i0(beta)
+}
+
+fn bessel_i0(x: f32) -> f32 {
+    let x = x.abs();
+    let mut sum = 1.0f32;
+    let mut term = 1.0f32;
+    for i in 1..24 {
+        term *= (x / 2.0).powi(2) / (i as f32).powi(2);
+        sum += term;
+        if term < 1e-8 {
+            break;
+        }
+    }
+    sum
 }
 
 #[cfg(test)]
@@ -165,10 +286,10 @@ mod tests {
     use super::*;
     use std::f32::consts::TAU;
 
-    fn stopband_db(window: WindowKind, bw: f32, probe_hz: f32) -> f32 {
+    fn stopband_db(design: LowpassDesign, bw: f32, probe_hz: f32) -> f32 {
         let rate = 12_000.0;
-        let mut pass = design_lowpass(rate, bw, window);
-        let mut stop = design_lowpass(rate, bw, window);
+        let mut pass = design_lowpass_with(rate, bw, design);
+        let mut stop = design_lowpass_with(rate, bw, design);
         let warmup = pass.len() * 2;
         let mut pass_pow = 0.0f32;
         let mut stop_pow = 0.0f32;
@@ -205,9 +326,40 @@ mod tests {
 
     #[test]
     fn gaussian_strong_stopband() {
-        // 200 Hz channel: a 600 Hz interferer must be deep in the stopband.
-        let db = stopband_db(WindowKind::Gaussian, 200.0, 600.0);
+        let db = stopband_db(LowpassDesign::default(), 200.0, 600.0);
         assert!(db < -40.0, "stopband only {db} dB");
+    }
+
+    #[test]
+    fn kaiser_high_beta_rejects_adjacent() {
+        let db = stopband_db(
+            LowpassDesign {
+                window: WindowKind::Kaiser,
+                kaiser_beta: 10.0,
+                passband_flatten: false,
+            },
+            200.0,
+            600.0,
+        );
+        assert!(db < -45.0, "Kaiser β=10 stopband only {db} dB");
+    }
+
+    #[test]
+    fn flatten_preserves_dc() {
+        let rate = 12_000.0;
+        let mut fir = design_lowpass_with(
+            rate,
+            200.0,
+            LowpassDesign {
+                passband_flatten: true,
+                ..LowpassDesign::default()
+            },
+        );
+        let mut peak = 0.0f32;
+        for _ in 0..rate as usize {
+            peak = peak.max(fir.process_complex(Complex32 { re: 1.0, im: 0.0 }).re.abs());
+        }
+        assert!(peak > 0.85, "flatten DC gain too low: {peak}");
     }
 
     #[test]
@@ -218,7 +370,14 @@ mod tests {
 
     #[test]
     fn blackman_narrow_rejects_close_adjacent() {
-        let db = stopband_db(WindowKind::Blackman, 100.0, 250.0);
+        let db = stopband_db(
+            LowpassDesign {
+                window: WindowKind::Blackman,
+                ..Default::default()
+            },
+            100.0,
+            250.0,
+        );
         assert!(db < -35.0, "250 Hz tone with 100 Hz BW: {db} dB");
     }
 }
