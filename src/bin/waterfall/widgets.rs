@@ -6,8 +6,8 @@ use eframe::egui::{
 use hfsdr::extract_view_window;
 
 use crate::interaction::{
-    center_grab_px, filter_edges, format_offset_label, offset_hz_to_x, PlotAction, PlotInteraction,
-    PlotViewState,
+    center_grab_px, filter_edges, format_freq_hz, format_offset_label, nice_freq_step_hz,
+    offset_hz_to_x, PlotAction, PlotInteraction, PlotViewState,
 };
 
 const EDGE_GRAB_PX: f32 = 12.0;
@@ -29,6 +29,8 @@ pub struct SpotLabel {
 /// future node-graph compositor (one struct describes what a plot shows).
 pub struct PlotParams<'a> {
     pub sample_rate: f32,
+    /// Tuned carrier (Hz) — used for absolute MHz/kHz axis labels.
+    pub center_freq_hz: f64,
     pub passband_hz: f32,
     pub passband_min_hz: f32,
     pub passband_max_hz: f32,
@@ -73,7 +75,15 @@ impl SpectrumWidget {
             draw_notch_marker(&painter, rect, view_span, pan, offset, width);
         }
 
-        draw_grid(&painter, rect, view_span);
+        draw_db_scale(&painter, rect, p.ref_db, p.range_db);
+        draw_freq_grid(
+            &painter,
+            rect,
+            view_span,
+            pan,
+            p.center_freq_hz,
+            true,
+        );
         draw_trace(&painter, rect, p.trace, p.ref_db, p.range_db);
 
         draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, true);
@@ -94,23 +104,6 @@ impl SpectrumWidget {
         }
 
         draw_spot_labels(&painter, rect, view_span, pan, p.labels);
-
-        let left_hz = pan - view_span as f64 / 2.0;
-        let right_hz = pan + view_span as f64 / 2.0;
-        painter.text(
-            Pos2::new(rect.left() + 4.0, rect.bottom() - 2.0),
-            Align2::LEFT_BOTTOM,
-            format_offset_label(left_hz),
-            FontId::proportional(11.0),
-            Color32::from_rgb(140, 150, 170),
-        );
-        painter.text(
-            Pos2::new(rect.right() - 4.0, rect.bottom() - 2.0),
-            Align2::RIGHT_BOTTOM,
-            format_offset_label(right_hz),
-            FontId::proportional(11.0),
-            Color32::from_rgb(140, 150, 170),
-        );
 
         let actions = interaction.handle(
             ui,
@@ -185,6 +178,15 @@ impl WaterfallWidget {
 
         draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, false);
 
+        draw_freq_grid(
+            &painter,
+            rect,
+            view_span,
+            pan,
+            p.center_freq_hz,
+            false,
+        );
+
         let actions = interaction.handle(
             ui,
             rect,
@@ -257,22 +259,112 @@ fn draw_plot_background(painter: &Painter, rect: Rect) {
     );
 }
 
-fn draw_grid(painter: &Painter, rect: Rect, span_hz: f32) {
-    for i in 1..4 {
-        let x = rect.left() + rect.width() * i as f32 / 4.0;
-        painter.line_segment(
-            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-            Stroke::new(1.0, GRID),
-        );
-    }
-    for i in 1..3 {
-        let y = rect.top() + rect.height() * i as f32 / 3.0;
+fn draw_db_scale(painter: &Painter, rect: Rect, ref_db: f32, range_db: f32) {
+    let floor = ref_db - range_db;
+    let label_x = rect.left() + 4.0;
+    let tick_color = Color32::from_rgba_unmultiplied(120, 130, 150, 180);
+    let text_color = Color32::from_rgb(130, 140, 160);
+    for frac in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+        let y = rect.bottom() - rect.height() * frac;
         painter.line_segment(
             [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
             Stroke::new(1.0, GRID),
         );
+        let db = floor + range_db * frac;
+        painter.text(
+            Pos2::new(label_x, y - 1.0),
+            if frac >= 0.99 {
+                Align2::LEFT_BOTTOM
+            } else if frac <= 0.01 {
+                Align2::LEFT_TOP
+            } else {
+                Align2::LEFT_CENTER
+            },
+            format!("{:.0}", db),
+            FontId::proportional(10.0),
+            text_color,
+        );
     }
-    let _ = span_hz;
+    painter.text(
+        Pos2::new(label_x, rect.top() + 2.0),
+        Align2::LEFT_TOP,
+        "dB",
+        FontId::proportional(9.0),
+        tick_color,
+    );
+}
+
+/// Vertical frequency grid + MHz/kHz labels along the bottom edge.
+fn draw_freq_grid(
+    painter: &Painter,
+    rect: Rect,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    center_freq_hz: f64,
+    show_rx_marker: bool,
+) {
+    let step = nice_freq_step_hz(view_span_hz) as f64;
+    let left_hz = pan_offset_hz - view_span_hz as f64 / 2.0;
+    let right_hz = pan_offset_hz + view_span_hz as f64 / 2.0;
+    let mut tick_hz = (left_hz / step).ceil() * step;
+    let text_color = Color32::from_rgb(140, 150, 170);
+    let unit_color = Color32::from_rgb(100, 110, 130);
+
+    while tick_hz <= right_hz + step * 0.01 {
+        let x = offset_hz_to_x(tick_hz, rect, view_span_hz, pan_offset_hz);
+        if x >= rect.left() && x <= rect.right() {
+            painter.line_segment(
+                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                Stroke::new(1.0, GRID),
+            );
+            let abs_hz = center_freq_hz + tick_hz;
+            let label = if center_freq_hz > 0.0 {
+                format_freq_hz(abs_hz)
+            } else {
+                format_offset_label(tick_hz)
+            };
+            painter.text(
+                Pos2::new(x, rect.bottom() - 2.0),
+                Align2::CENTER_BOTTOM,
+                label,
+                FontId::proportional(10.0),
+                text_color,
+            );
+        }
+        tick_hz += step;
+    }
+
+    if center_freq_hz > 1_000_000.0 {
+        painter.text(
+            Pos2::new(rect.right() - 4.0, rect.bottom() - 2.0),
+            Align2::RIGHT_BOTTOM,
+            "MHz",
+            FontId::proportional(9.0),
+            unit_color,
+        );
+    }
+
+    if show_rx_marker {
+        let rx_x = offset_hz_to_x(0.0, rect, view_span_hz, pan_offset_hz);
+        if rx_x > rect.left() + 8.0 && rx_x < rect.right() - 8.0 {
+            painter.line_segment(
+                [
+                    Pos2::new(rx_x, rect.bottom() - 14.0),
+                    Pos2::new(rx_x, rect.bottom()),
+                ],
+                Stroke::new(1.5, Color32::from_rgba_unmultiplied(248, 113, 113, 160)),
+            );
+            if center_freq_hz > 0.0 {
+                painter.text(
+                    Pos2::new(rx_x, rect.bottom() - 15.0),
+                    Align2::CENTER_BOTTOM,
+                    "RX",
+                    FontId::proportional(9.0),
+                    Color32::from_rgba_unmultiplied(248, 113, 113, 200),
+                );
+            }
+        }
+    }
 }
 
 fn draw_filter_band(

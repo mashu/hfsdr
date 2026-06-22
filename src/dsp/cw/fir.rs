@@ -30,6 +30,31 @@ pub struct FirFilter {
     pos: usize,
 }
 
+/// Maximum filter group delay — longer delays smear CW keying edges.
+const MAX_GROUP_DELAY_MS: f32 = 12.0;
+
+/// Tap count for a channel filter (matches [`design_lowpass`]).
+pub fn plan_num_taps(sample_rate: f32, bandwidth_hz: f32) -> usize {
+    let cutoff = (bandwidth_hz * 0.5).max(10.0);
+    let mut num_taps = ((sample_rate / cutoff) * 4.0).round() as usize;
+    let max_taps_delay =
+        ((sample_rate * MAX_GROUP_DELAY_MS / 1000.0) * 2.0).round() as usize | 1;
+    num_taps = num_taps.min(max_taps_delay).clamp(31, 2047);
+    if num_taps.is_multiple_of(2) {
+        num_taps += 1;
+    }
+    num_taps
+}
+
+/// Linear-phase group delay of the channel FIR (~half the tap count).
+pub fn channel_group_delay_ms(sample_rate: f32, bandwidth_hz: f32) -> f32 {
+    if sample_rate <= 0.0 {
+        return 0.0;
+    }
+    let n = plan_num_taps(sample_rate, bandwidth_hz) as f32;
+    (n - 1.0) * 0.5 / sample_rate * 1000.0
+}
+
 impl FirFilter {
     pub fn new(taps: Vec<f32>) -> Self {
         let len = taps.len().max(1);
@@ -87,12 +112,7 @@ impl FirFilter {
 /// order: `taps[0]` weights the newest sample.
 pub fn design_lowpass(sample_rate: f32, bandwidth_hz: f32, window: WindowKind) -> FirFilter {
     let cutoff = (bandwidth_hz * 0.5).max(10.0);
-    let mut num_taps = ((sample_rate / cutoff) * 4.0).round() as usize;
-    num_taps = num_taps.clamp(31, 2047);
-    if num_taps.is_multiple_of(2) {
-        num_taps += 1;
-    }
-
+    let num_taps = plan_num_taps(sample_rate, bandwidth_hz);
     let m = (num_taps - 1) as f32;
     let fc = cutoff / sample_rate;
 
@@ -188,6 +208,12 @@ mod tests {
         // 200 Hz channel: a 600 Hz interferer must be deep in the stopband.
         let db = stopband_db(WindowKind::Gaussian, 200.0, 600.0);
         assert!(db < -40.0, "stopband only {db} dB");
+    }
+
+    #[test]
+    fn ultra_narrow_caps_group_delay() {
+        let ms = channel_group_delay_ms(12_000.0, 50.0);
+        assert!(ms <= MAX_GROUP_DELAY_MS + 1.0, "delay {ms} ms smears keying");
     }
 
     #[test]

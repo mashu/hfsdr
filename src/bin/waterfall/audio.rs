@@ -6,7 +6,8 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::log;
 
-const RING_CAPACITY: usize = 48_000;
+/// ~0.5 s at 48 kHz — keeps audio roughly aligned with the live scope trace.
+const RING_CAPACITY: usize = 24_000;
 
 pub struct AudioOutput {
     producer: Producer<f32>,

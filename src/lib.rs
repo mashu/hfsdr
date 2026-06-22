@@ -31,7 +31,8 @@ pub use airspyhf::AirspyHf;
 pub use cty::{Continent, ContinentResolver};
 pub use history::{Annotation, RowFold, SlowWaterfall};
 pub use dsp::{
-    auto_fft_size, bin_width_hz, decimation_factor, design_gaussian_lowpass, design_lowpass,
+    auto_fft_size, bin_width_hz, channel_group_delay_ms, decimation_factor, design_gaussian_lowpass,
+    design_lowpass,
     effective_decimation, audio_sample_rate, extract_passband_view, extract_view_window, iq_to_audio, spectrum_plan, spectrum_view_mapping,
     AgcSettings, ApfSettings, AutoNotchSettings, CwChannel, CwChannelSettings, IqAudioDemod,
     NoiseBlankerSettings, NoiseReductionSettings, NotchSpec, SpectrumAnalyzer, SpectrumFrontEnd,

@@ -30,7 +30,7 @@ pub use autonotch::AutoNotch;
 pub use channel::CwChannel;
 pub use decimator::{audio_sample_rate, decimation_factor, effective_decimation, Decimator};
 pub use detector::ProductDetector;
-pub use fir::{design_gaussian_lowpass, design_lowpass, FirFilter, WindowKind};
+pub use fir::{channel_group_delay_ms, design_gaussian_lowpass, design_lowpass, FirFilter, WindowKind};
 pub use lms::{LmsPredictor, LmsStep};
 pub use nco::ComplexNco;
 pub use noiseblanker::NoiseBlanker;

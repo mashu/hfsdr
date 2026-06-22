@@ -16,8 +16,8 @@ mod view;
 
 pub use audio::{iq_to_audio, IqAudioDemod};
 pub use cw::{
-    decimation_factor, design_gaussian_lowpass, design_lowpass, effective_decimation,
-    audio_sample_rate, AgcSettings, ApfSettings,
+    channel_group_delay_ms, decimation_factor, design_gaussian_lowpass, design_lowpass,
+    effective_decimation, audio_sample_rate, AgcSettings, ApfSettings,
     AudioPeakFilter, AutoNotch, AutoNotchSettings, ComplexNco, CwAgc, CwChannel, CwChannelSettings,
     Decimator, FirFilter, IqNotch, LmsPredictor, LmsStep, NoiseBlanker, NoiseBlankerSettings,
     NoiseReduction, NoiseReductionSettings, NotchSpec, ProductDetector, WindowKind, MAX_NOTCHES,

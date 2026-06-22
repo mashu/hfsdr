@@ -16,7 +16,8 @@ use egui_extras::{Column, TableBuilder};
 use hfsdr::{
     decimation_factor, extract_view_window, spectrum_view_mapping, strongest_offset_hz, Continent,
     ContinentResolver, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
-    SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, WindowKind, MAX_NOTCHES,
+    SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, WindowKind,
+    MAX_NOTCHES,
 };
 
 use crate::audio::AudioOutput;
@@ -102,6 +103,9 @@ pub struct WaterfallApp {
     last_tex_span: f32,
     last_tex_pan: f64,
     last_tex_row_rate: f32,
+    last_spectrum_pan: f64,
+    last_spectrum_span: f32,
+    last_spectrum_zoomed: bool,
 
     ref_db: f32,
     range_db: f32,
@@ -199,6 +203,9 @@ impl WaterfallApp {
             last_tex_span: 0.0,
             last_tex_pan: 0.0,
             last_tex_row_rate: 0.0,
+            last_spectrum_pan: 0.0,
+            last_spectrum_span: 0.0,
+            last_spectrum_zoomed: false,
             ref_db: -65.0,
             range_db: crate::display_levels::DEFAULT_RANGE_DB,
             display_levels_initialized: false,
@@ -571,6 +578,22 @@ impl WaterfallApp {
         if self.fft_auto {
             self.fft_size = self.stats.spectrum_fft.max(1024);
         }
+
+        let view_span = self.plot_view.view_span_hz(self.sample_rate);
+        let view_pan = self.plot_view.pan_offset_hz;
+        let zoomed = self.stats.spectrum_zoomed;
+        if zoomed
+            && ((view_pan - self.last_spectrum_pan).abs() > 0.5
+                || (view_span - self.last_spectrum_span).abs() > 1.0
+                || zoomed != self.last_spectrum_zoomed)
+        {
+            // Zoomed rows are mix-down specific — stale pan poisons the waterfall.
+            self.rows.clear();
+            self.textures_dirty = true;
+        }
+        self.last_spectrum_pan = view_pan;
+        self.last_spectrum_span = view_span;
+        self.last_spectrum_zoomed = zoomed;
 
         if !new_rows.is_empty() {
             for row in new_rows {
@@ -1690,13 +1713,42 @@ impl WaterfallApp {
             );
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Shape").small().color(MUTED));
-                window_choice(ui, &mut self.cw.window, WindowKind::Gaussian, "Gauss");
-                window_choice(ui, &mut self.cw.window, WindowKind::RaisedCosine, "RaisedCos");
-                window_choice(ui, &mut self.cw.window, WindowKind::Blackman, "Blackman");
+                window_choice(
+                    ui,
+                    &mut self.cw.window,
+                    WindowKind::Gaussian,
+                    "Gauss",
+                    "Softest tone, gentle skirts — clean signals, minimal ringing",
+                );
+                window_choice(
+                    ui,
+                    &mut self.cw.window,
+                    WindowKind::RaisedCosine,
+                    "RaisedCos",
+                    "Balanced default — good tone with moderate adjacent rejection",
+                );
+                window_choice(
+                    ui,
+                    &mut self.cw.window,
+                    WindowKind::Blackman,
+                    "Blackman",
+                    "Steepest skirts — reject nearby QRM before narrowing bandwidth",
+                );
             });
+            let audio_rate = hfsdr::audio_sample_rate(self.sample_rate, self.cw.decimation);
+            let delay_ms = channel_group_delay_ms(audio_rate, self.cw.passband_hz);
+            ui.label(
+                egui::RichText::new(format!("Filter delay ~{delay_ms:.0} ms (linear-phase FIR)"))
+                    .small()
+                    .color(MUTED),
+            );
             section_hint(
                 ui,
-                "Gauss: purest tone · RaisedCos: sharper · Blackman: narrowest (less bleed)",
+                "Narrow BW alone rarely beats QRM — try Blackman at 200–300 Hz, then manual notches on hets.",
+            );
+            section_hint(
+                ui,
+                "APF after demod sharpens tone without smearing dits. Keep NR light (stutters if heavy).",
             );
             section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan edges");
         });
@@ -1710,8 +1762,9 @@ impl WaterfallApp {
             if self.cw.noise_blanker.enabled {
                 scroll_slider_f32(ui, &mut self.cw.noise_blanker.threshold, 2.0..=12.0, "NB threshold");
                 let mut width = self.cw.noise_blanker.width as f32;
-                scroll_slider_f32(ui, &mut width, 1.0..=30.0, "NB width");
+                scroll_slider_f32(ui, &mut width, 1.0..=30.0, "NB recovery");
                 self.cw.noise_blanker.width = width.round() as usize;
+                section_hint(ui, "Soft limiter — attenuates lightning/ignition without muting CW.");
             }
 
             ui.separator();
@@ -1731,7 +1784,8 @@ impl WaterfallApp {
             ui.separator();
             ui.checkbox(&mut self.cw.noise_reduction.enabled, "Noise reduction (R) — light LMS");
             if self.cw.noise_reduction.enabled {
-                scroll_slider_f32(ui, &mut self.cw.noise_reduction.level, 0.0..=0.9, "NR level");
+                scroll_slider_f32(ui, &mut self.cw.noise_reduction.level, 0.0..=0.5, "NR level");
+                section_hint(ui, "Keep below ~0.4 — higher values smear keying and sound underwater.");
             }
 
             ui.separator();
@@ -2069,6 +2123,7 @@ impl WaterfallApp {
         let bw_max = self.passband_max_hz();
         let mut params = crate::widgets::PlotParams {
             sample_rate: self.sample_rate,
+            center_freq_hz: self.center_khz * 1000.0,
             passband_hz: self.cw.passband_hz,
             passband_min_hz: CW_PASSBAND_MIN_HZ,
             passband_max_hz: bw_max,
@@ -2122,10 +2177,18 @@ impl WaterfallApp {
     }
 }
 
-fn window_choice(ui: &mut egui::Ui, current: &mut WindowKind, kind: WindowKind, label: &str) {
-    if ui.selectable_label(*current == kind, label).clicked() {
+fn window_choice(
+    ui: &mut egui::Ui,
+    current: &mut WindowKind,
+    kind: WindowKind,
+    label: &str,
+    tip: &str,
+) {
+    let r = ui.selectable_label(*current == kind, label);
+    if r.clicked() {
         *current = kind;
     }
+    r.on_hover_text(tip);
 }
 
 fn window_to_u8(w: WindowKind) -> u8 {
@@ -2232,14 +2295,19 @@ impl eframe::App for WaterfallApp {
 
         // Lazy texture rebuild: only when new rows arrived or the view changed.
         let view = self.spectrum_view();
+        let pan_track = if self.stats.spectrum_zoomed {
+            self.plot_view.pan_offset_hz
+        } else {
+            view.pan_offset_hz
+        };
         let view_changed = (view.view_span_hz - self.last_tex_span).abs() > 1.0
-            || (view.pan_offset_hz - self.last_tex_pan).abs() > 1.0
+            || (pan_track - self.last_tex_pan).abs() > 1.0
             || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
         if self.textures_dirty || view_changed {
             self.update_texture(&ctx);
             self.textures_dirty = false;
             self.last_tex_span = view.view_span_hz;
-            self.last_tex_pan = view.pan_offset_hz;
+            self.last_tex_pan = pan_track;
             self.last_tex_row_rate = view.row_rate_hz;
         }
 
