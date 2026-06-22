@@ -59,6 +59,7 @@ pub struct AppSettings {
     // Receiver controls.
     pub rit_hz: f32,
     pub pitch_lock: bool,
+    pub lock_ham_bands: bool,
     pub agc_rf_on: bool,
 
     // Display + performance.
@@ -149,6 +150,7 @@ impl Default for AppSettings {
             notches: vec![NotchData::default(); 4],
             rit_hz: 0.0,
             pitch_lock: false,
+            lock_ham_bands: true,
             agc_rf_on: true,
             ref_db: -65.0,
             range_db: 17.0,

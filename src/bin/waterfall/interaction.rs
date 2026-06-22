@@ -121,12 +121,6 @@ impl PlotViewState {
         self.pan_offset_hz = 0.0;
     }
 
-    /// Zoom out to the CW band segment (Kiwi: wider than IQ, padded with floor).
-    pub fn zoom_to_band_overview(&mut self, max_zoom: f32) {
-        self.zoom = max_zoom.max(1.0);
-        self.pan_offset_hz = 0.0;
-    }
-
     /// True when horizontal pan is useful (view narrower or wider than the IQ passband).
     pub fn can_pan(&self, full_span_hz: f32, max_zoom: f32) -> bool {
         let view_span = self.view_span_hz(full_span_hz, max_zoom) as f64;
@@ -163,6 +157,8 @@ impl PlotInteraction {
         view: &mut PlotViewState,
         full_span_hz: f32,
         max_zoom: f32,
+        display_view_span_hz: f32,
+        display_pan_offset_hz: f64,
         passband_hz: f32,
         passband_min_hz: f32,
         passband_max_hz: f32,
@@ -172,8 +168,8 @@ impl PlotInteraction {
         notches: &[NotchMarker],
     ) -> Vec<PlotAction> {
         let mut actions = Vec::new();
-        let view_span = view.view_span_hz(full_span_hz, max_zoom);
-        let pan = view.pan_offset_hz;
+        let view_span = display_view_span_hz;
+        let pan = display_pan_offset_hz;
         let can_pan = view.can_pan(full_span_hz, max_zoom);
         let preview_x = offset_hz_to_x(tune_preview_offset_hz, rect, view_span, pan);
         let shift = ui.input(|i| i.modifiers.shift);

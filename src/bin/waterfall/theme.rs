@@ -3,8 +3,8 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Layout, RichText, Stroke, TextStyle, Ui,
-    Visuals,
+    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, Sense,
+    Stroke, TextStyle, Ui, Vec2, Visuals,
 };
 
 pub const ACCENT: Color32 = Color32::from_rgb(56, 189, 248);
@@ -85,6 +85,73 @@ pub fn clickable_badge(ui: &mut Ui, text: &str, color: Color32) -> eframe::egui:
                 Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120),
             )),
     )
+}
+
+/// Compact padlock toggle for amateur band lock (icon-only).
+pub fn band_lock_toggle(ui: &mut Ui, on: &mut bool) -> bool {
+    let size = Vec2::splat(22.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let mut changed = false;
+    if resp.clicked() {
+        *on = !*on;
+        changed = true;
+    }
+
+    let color = if *on { ACCENT } else { MUTED };
+    let fill = if *on {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 36)
+    } else {
+        Color32::from_rgb(32, 38, 50)
+    };
+    let stroke = Stroke::new(1.5, color);
+    let painter = ui.painter();
+    painter.rect_filled(rect, 4.0, fill);
+    painter.rect_stroke(
+        rect,
+        4.0,
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 90)),
+        eframe::egui::StrokeKind::Inside,
+    );
+
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let body = Rect::from_center_size(Pos2::new(cx, cy + 2.5), Vec2::new(8.0, 6.0));
+    painter.rect_stroke(body, 1.0, stroke, eframe::egui::StrokeKind::Inside);
+
+    let shackle_left = cx - 3.0;
+    let shackle_right = cx + 3.0;
+    let shackle_top = cy - 4.5;
+    let shackle_bottom = body.top() + 1.0;
+    if *on {
+        painter.line_segment(
+            [Pos2::new(shackle_left, shackle_bottom), Pos2::new(shackle_left, shackle_top)],
+            stroke,
+        );
+        painter.line_segment(
+            [Pos2::new(shackle_left, shackle_top), Pos2::new(shackle_right, shackle_top)],
+            stroke,
+        );
+        painter.line_segment(
+            [Pos2::new(shackle_right, shackle_top), Pos2::new(shackle_right, shackle_bottom)],
+            stroke,
+        );
+    } else {
+        painter.line_segment(
+            [Pos2::new(shackle_left, shackle_bottom), Pos2::new(shackle_left, shackle_top)],
+            stroke,
+        );
+        painter.line_segment(
+            [Pos2::new(shackle_left, shackle_top), Pos2::new(shackle_right, shackle_top)],
+            stroke,
+        );
+        painter.line_segment(
+            [Pos2::new(shackle_right, shackle_top), Pos2::new(shackle_right, shackle_bottom - 2.0)],
+            stroke,
+        );
+    }
+
+    resp.on_hover_text("Lock RX to amateur bands (160m–10m, 6m)");
+    changed
 }
 
 /// Full-width DSP stage row: label, optional shortcut chip, animated pill switch.

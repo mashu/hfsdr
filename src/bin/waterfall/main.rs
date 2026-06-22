@@ -10,6 +10,7 @@ mod colormap;
 mod controls;
 mod display_levels;
 mod engine;
+mod ham_bands;
 mod interaction;
 mod iq_dialog;
 mod iq_panel;

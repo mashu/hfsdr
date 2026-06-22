@@ -32,6 +32,7 @@ use crate::display_levels::{estimate_levels, estimate_levels_from_rows};
 use crate::engine::{
     ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
 };
+use crate::ham_bands;
 use crate::popup::{
     alert_banner, chip_row, configure_popup_window, ghost_button, inline_stats, list_row,
     popup_header, popup_scroll_body, popup_section, primary_button, secondary_button,
@@ -51,10 +52,10 @@ use crate::spot_filter::{
     build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
 };
 use crate::theme::{
-    apply, clickable_badge, collapsible_section, section_card, section_heading, section_hint,
-    stat_row, stage_toggle, toggle, MUTED, OK, WARN,
+    apply, band_lock_toggle, clickable_badge, collapsible_section, section_card, section_heading,
+    section_hint, stat_row, stage_toggle, toggle, MUTED, OK, WARN,
 };
-use crate::widgets::{update_trace, SpectrumWidget, SpotLabel, TraceViewKey, WaterfallWidget};
+use crate::widgets::{show_freq_axis_bar, update_trace, SpectrumWidget, SpotLabel, TraceViewKey, WaterfallWidget, SCOPE_HEIGHT};
 
 const SMOOTH_ALPHA: f32 = 0.09;
 
@@ -151,6 +152,7 @@ pub struct WaterfallApp {
     cw: CwChannelSettings,
     rit_hz: f32,
     pitch_lock: bool,
+    lock_ham_bands: bool,
     agc_rf_on: bool,
     last_agc_rf_on: bool,
     last_snr_db: f32,
@@ -267,6 +269,7 @@ impl WaterfallApp {
             cw: CwChannelSettings::default(),
             rit_hz: 0.0,
             pitch_lock: false,
+            lock_ham_bands: true,
             agc_rf_on: true,
             last_agc_rf_on: true,
             last_snr_db: 0.0,
@@ -372,6 +375,7 @@ impl WaterfallApp {
             app.form_port = req.port;
             app.form_kiwi = req.kiwi.clone();
             app.center_khz = req.center_hz / 1000.0;
+            app.clamp_center_to_ham_bands();
             app.last_center_khz = app.center_khz;
             app.pending_connect = Some(req);
             app.show_connection_drawer = false;
@@ -489,6 +493,7 @@ impl WaterfallApp {
 
         self.rit_hz = s.rit_hz;
         self.pitch_lock = s.pitch_lock;
+        self.lock_ham_bands = s.lock_ham_bands;
         self.agc_rf_on = s.agc_rf_on;
         self.last_agc_rf_on = s.agc_rf_on;
 
@@ -531,6 +536,7 @@ impl WaterfallApp {
         self.recent_hosts = s.recent_hosts.clone();
         self.form_kiwi = s.kiwi.clone();
         self.center_khz = s.last_center_mhz * 1000.0;
+        self.clamp_center_to_ham_bands();
         self.last_center_khz = self.center_khz;
         self.iq.capture_dir = if s.iq_capture_dir.is_empty() {
             hfsdr::default_capture_dir()
@@ -576,6 +582,7 @@ impl WaterfallApp {
                 .collect(),
             rit_hz: self.rit_hz,
             pitch_lock: self.pitch_lock,
+            lock_ham_bands: self.lock_ham_bands,
             agc_rf_on: self.agc_rf_on,
             ref_db: self.ref_db,
             range_db: self.range_db,
@@ -825,6 +832,19 @@ impl WaterfallApp {
                 }
             }
         }
+        self.clamp_center_to_ham_bands();
+    }
+
+    /// Keep RX center inside amateur band allocations when band lock is enabled.
+    fn clamp_center_to_ham_bands(&mut self) {
+        if !self.lock_ham_bands {
+            return;
+        }
+        let clamped_khz = ham_bands::clamp_hz(self.center_khz * 1000.0) / 1000.0;
+        if (clamped_khz - self.center_khz).abs() > f64::EPSILON {
+            self.invalidate_waterfall_history();
+            self.center_khz = clamped_khz;
+        }
     }
 
     fn annotate_new_spots(&mut self, center_hz: f64) {
@@ -949,6 +969,7 @@ impl WaterfallApp {
                 peak
             };
             self.center_khz += (from_center - listen) as f64 / 1000.0;
+            self.clamp_center_to_ham_bands();
             self.invalidate_waterfall_history();
             self.clear_rit();
             self.tune_preview_offset_hz = None;
@@ -1175,20 +1196,18 @@ impl WaterfallApp {
     }
 
     fn apply_default_view_zoom(&mut self) {
-        let full_span = self.plot_full_span_hz();
-        let max_zoom = self.plot_max_zoom_out();
-        let segment = self.default_cw_segment_hz();
-        self.plot_view.pan_offset_hz = 0.0;
+        self.plot_view.zoom_to_full_span();
         self.plot_view
-            .zoom_to_cw_segment(segment, full_span, max_zoom);
+            .clamp_pan(self.plot_full_span_hz(), self.plot_max_zoom_out());
         self.invalidate_waterfall_history();
     }
 
     fn select_cw_band(&mut self, band: &CwBandPreset) {
         self.center_khz = band.center_hz / 1000.0;
-        self.apply_default_view_zoom();
+        self.plot_view.pan_offset_hz = 0.0;
         self.tune_preview_offset_hz = None;
         self.clear_rit();
+        self.invalidate_waterfall_history();
         self.apply_radio_settings();
     }
 
@@ -1197,6 +1216,7 @@ impl WaterfallApp {
             self.invalidate_waterfall_history();
         }
         self.center_khz = frequency_hz / 1000.0;
+        self.clamp_center_to_ham_bands();
         self.plot_view.pan_offset_hz = 0.0;
         self.tune_preview_offset_hz = None;
         self.clear_rit();
@@ -1216,6 +1236,7 @@ impl WaterfallApp {
     }
 
     fn connect_now(&mut self) {
+        self.clamp_center_to_ham_bands();
         let req = ConnectRequest {
             kind: self.form_kind,
             host: self.form_host.trim().to_string(),
@@ -1224,7 +1245,6 @@ impl WaterfallApp {
             sample_rate: 0,
             kiwi: self.form_kiwi.clone(),
         };
-        self.center_khz = req.center_hz / 1000.0;
         self.last_center_khz = self.center_khz;
         self.remember_host(&req);
         self.apply_default_view_zoom();
@@ -1346,6 +1366,7 @@ impl WaterfallApp {
         }
         if full {
             self.plot_view.zoom_to_full_span();
+            self.invalidate_waterfall_history();
         }
         if mute {
             self.audio_enabled = !self.audio_enabled;
@@ -2162,7 +2183,8 @@ impl WaterfallApp {
             let max_zoom = self.plot_max_zoom_out();
             scroll_slider_f32(ui, &mut self.plot_view.zoom, 0.04..=max_zoom, "View zoom");
             self.plot_view.clamp_pan(self.plot_full_span_hz(), max_zoom);
-            let view_khz = self.plot_view.view_span_hz(self.plot_full_span_hz(), max_zoom) / 1000.0;
+            let view = self.spectrum_view();
+            let view_khz = view.view_span_hz / 1000.0;
             ui.label(
                 egui::RichText::new(format!(
                     "Showing {view_khz:.1} kHz · zoom 1.0 = full IQ · {max_zoom:.1} = widest overview"
@@ -2173,9 +2195,15 @@ impl WaterfallApp {
             ui.horizontal(|ui| {
                 if ui.small_button("Full IQ (F)").clicked() {
                     self.plot_view.zoom_to_full_span();
+                    self.invalidate_waterfall_history();
                 }
                 if ui.small_button("CW band view").clicked() {
-                    self.plot_view.zoom_to_band_overview(max_zoom);
+                    let full_span = self.plot_full_span_hz();
+                    let max_zoom = self.plot_max_zoom_out();
+                    let segment = self.default_cw_segment_hz();
+                    self.plot_view
+                        .zoom_to_cw_segment(segment, full_span, max_zoom);
+                    self.invalidate_waterfall_history();
                 }
             });
             toggle(
@@ -2337,9 +2365,27 @@ impl WaterfallApp {
             self.band_preset_buttons(ui, &CW_HF_BAND_PRESETS);
             ui.label(egui::RichText::new("VHF+").small().color(MUTED));
             self.band_preset_buttons(ui, &CW_VHF_BAND_PRESETS);
-            if vfo_wheel_khz(ui, &mut self.center_khz) {
-                self.apply_radio_settings();
-            }
+            ui.horizontal(|ui| {
+                let mut vfo_changed = false;
+                ui.vertical(|ui| {
+                    vfo_changed = vfo_wheel_khz(ui, &mut self.center_khz);
+                });
+                ui.with_layout(
+                    egui::Layout::bottom_up(egui::Align::Min),
+                    |ui| {
+                        if band_lock_toggle(ui, &mut self.lock_ham_bands) {
+                            if self.lock_ham_bands {
+                                self.clamp_center_to_ham_bands();
+                                vfo_changed = true;
+                            }
+                        }
+                    },
+                );
+                if vfo_changed {
+                    self.clamp_center_to_ham_bands();
+                    self.apply_radio_settings();
+                }
+            });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 scroll_slider_f32_step(ui, &mut self.rit_hz, -800.0..=800.0, "RIT", 1.0);
@@ -2954,9 +3000,12 @@ impl WaterfallApp {
         };
 
         let bw_max = self.passband_max_hz();
+        let plot_width = ui.available_width();
         let mut params = crate::widgets::PlotParams {
             view_bandwidth_hz: plot_full_span,
             max_zoom,
+            view_span_hz: view.view_span_hz,
+            pan_offset_hz: view.pan_offset_hz,
             center_freq_hz: self.center_khz * 1000.0,
             passband_hz: self.cw.passband_hz,
             passband_min_hz: CW_PASSBAND_MIN_HZ,
@@ -2976,7 +3025,8 @@ impl WaterfallApp {
             show_overview: self.show_band_overview,
             ref_db: self.ref_db,
             range_db: self.range_db,
-            height: 200.0,
+            height: SCOPE_HEIGHT,
+            plot_width,
         };
 
         // Reset before drawing; whichever plot the pointer is over claims the crosshair.
@@ -2991,7 +3041,14 @@ impl WaterfallApp {
         );
         plot_actions.extend(spec_actions);
 
-        ui.add_space(4.0);
+        show_freq_axis_bar(
+            ui,
+            plot_width,
+            view.view_span_hz,
+            view.pan_offset_hz,
+            params.center_freq_hz,
+            &mut self.hover_offset_hz,
+        );
 
         if self.texture.is_some() {
             let tex = self.texture.clone().unwrap();
@@ -3124,12 +3181,14 @@ impl eframe::App for WaterfallApp {
             self.themed = true;
         }
 
-        if let Some(req) = self.pending_connect.take() {
+        if let Some(mut req) = self.pending_connect.take() {
             self.form_kind = req.kind;
             self.form_host = req.host.clone();
             self.form_port = req.port;
             self.form_kiwi = req.kiwi.clone();
             self.center_khz = req.center_hz / 1000.0;
+            self.clamp_center_to_ham_bands();
+            req.center_hz = self.center_khz * 1000.0;
             self.last_center_khz = self.center_khz;
             log::info(format!("connecting to {}", req.label()));
             self.engine.send(EngineCommand::Connect(req));

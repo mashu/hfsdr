@@ -26,11 +26,56 @@ pub struct SpotLabel {
 ///
 /// Bundling these keeps the widget API small and is the natural seam for the
 /// future node-graph compositor (one struct describes what a plot shows).
+const FREQ_AXIS_HEIGHT: f32 = 18.0;
+pub const SCOPE_HEIGHT: f32 = 200.0;
+
+/// MHz/kHz strip between the scope and waterfall (same width / freq mapping as both).
+pub fn show_freq_axis_bar(
+    ui: &mut Ui,
+    plot_width: f32,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    center_freq_hz: f64,
+    hover_offset_hz: &mut Option<f64>,
+) {
+    let (response, painter) = ui.allocate_painter(
+        Vec2::new(plot_width, FREQ_AXIS_HEIGHT),
+        Sense::hover(),
+    );
+    let rect = response.rect;
+    draw_freq_axis_bar(
+        &painter,
+        rect,
+        view_span_hz,
+        pan_offset_hz,
+        center_freq_hz,
+    );
+    if let Some(offset) = *hover_offset_hz {
+        let x = offset_hz_to_x(offset, rect, view_span_hz, pan_offset_hz);
+        if x >= rect.left() && x <= rect.right() {
+            painter.line_segment(
+                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(200, 200, 255, 90)),
+            );
+        }
+    }
+    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+        if rect.contains(pos) {
+            *hover_offset_hz =
+                Some(crate::interaction::x_to_offset_hz(pos.x, rect, view_span_hz, pan_offset_hz));
+        }
+    }
+    let _ = response;
+}
+
 pub struct PlotParams<'a> {
     /// Visible panadapter width at zoom 1.0 (Kiwi IQ passband; equals IQ rate on wideband SDRs).
     pub view_bandwidth_hz: f32,
     /// Maximum zoom-out factor (CW band overview / full_span); 1.0 on wideband SDRs.
     pub max_zoom: f32,
+    /// Visible span and pan aligned with composed spectrum/waterfall rows.
+    pub view_span_hz: f32,
+    pub pan_offset_hz: f64,
     /// Tuned carrier (Hz) — used for absolute MHz/kHz axis labels.
     pub center_freq_hz: f64,
     pub passband_hz: f32,
@@ -48,7 +93,10 @@ pub struct PlotParams<'a> {
     pub show_overview: bool,
     pub ref_db: f32,
     pub range_db: f32,
+    /// Scope trace height (frequency axis is a separate row below).
     pub height: f32,
+    /// Shared plot column width — scope, axis, and waterfall must match.
+    pub plot_width: f32,
 }
 
 pub struct SpectrumWidget;
@@ -68,15 +116,26 @@ impl SpectrumWidget {
     ) -> (Response, Vec<PlotAction>) {
         let full_span = p.view_bandwidth_hz.max(1.0);
         let max_zoom = p.max_zoom.max(1.0);
-        let view_span = view.view_span_hz(full_span, max_zoom);
-        let pan = view.pan_offset_hz;
-        let (response, painter) =
-            ui.allocate_painter(Vec2::new(ui.available_width(), p.height), Sense::click_and_drag());
+        let view_span = p.view_span_hz;
+        let pan = p.pan_offset_hz;
+        let plot_w = p.plot_width.max(1.0);
+        let (response, painter) = ui.allocate_painter(
+            Vec2::new(plot_w, p.height),
+            Sense::click_and_drag(),
+        );
         let rect = response.rect;
         draw_plot_background(&painter, rect);
 
         if p.filter_editable {
-            draw_filter_band(&painter, rect, view_span, pan, p.listen_center_hz, p.passband_hz, true);
+            draw_filter_band(
+                &painter,
+                rect,
+                view_span,
+                pan,
+                p.listen_center_hz,
+                p.passband_hz,
+                true,
+            );
         }
 
         for notch in p.notches {
@@ -93,19 +152,10 @@ impl SpectrumWidget {
         }
 
         draw_db_scale(&painter, rect, p.ref_db, p.range_db);
-        draw_freq_grid(
-            &painter,
-            rect,
-            view_span,
-            pan,
-            p.center_freq_hz,
-            true,
-        );
+        draw_freq_vertical_grid(&painter, rect, view_span, pan);
         draw_trace(
             &painter,
             rect,
-            view_span,
-            pan,
             p.trace,
             p.ref_db,
             p.range_db,
@@ -137,6 +187,8 @@ impl SpectrumWidget {
             view,
             full_span,
             max_zoom,
+            view_span,
+            pan,
             p.passband_hz,
             p.passband_min_hz,
             p.passband_max_hz,
@@ -146,8 +198,6 @@ impl SpectrumWidget {
             p.notches,
         );
 
-        // Only claim the hover crosshair when the pointer is over this plot; the
-        // shared value is reset once per frame so spectrum and waterfall agree.
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
             if rect.contains(pos) {
                 *hover_out =
@@ -192,9 +242,10 @@ impl WaterfallWidget {
     ) -> Vec<PlotAction> {
         let full_span = p.view_bandwidth_hz.max(1.0);
         let max_zoom = p.max_zoom.max(1.0);
-        let view_span = view.view_span_hz(full_span, max_zoom);
-        let pan = view.pan_offset_hz;
-        let size = Vec2::new(ui.available_width(), ui.available_height());
+        let view_span = p.view_span_hz;
+        let pan = p.pan_offset_hz;
+        let plot_w = p.plot_width.max(1.0);
+        let size = Vec2::new(plot_w, ui.available_height());
         let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
         let rect = response.rect;
 
@@ -231,14 +282,7 @@ impl WaterfallWidget {
 
         draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, false);
 
-        draw_freq_grid(
-            &painter,
-            rect,
-            view_span,
-            pan,
-            p.center_freq_hz,
-            false,
-        );
+        draw_freq_vertical_grid(&painter, rect, view_span, pan);
 
         let actions = interaction.handle(
             ui,
@@ -247,6 +291,8 @@ impl WaterfallWidget {
             view,
             full_span,
             max_zoom,
+            view_span,
+            pan,
             p.passband_hz,
             p.passband_min_hz,
             p.passband_max_hz,
@@ -347,15 +393,48 @@ fn draw_db_scale(painter: &Painter, rect: Rect, ref_db: f32, range_db: f32) {
     );
 }
 
-/// Vertical frequency grid + MHz/kHz labels along the bottom edge.
-fn draw_freq_grid(
+/// Vertical frequency grid lines (labels are on the shared axis bar).
+fn draw_freq_vertical_grid(
+    painter: &Painter,
+    rect: Rect,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+) {
+    let step = nice_freq_step_hz(view_span_hz) as f64;
+    let left_hz = pan_offset_hz - view_span_hz as f64 / 2.0;
+    let right_hz = pan_offset_hz + view_span_hz as f64 / 2.0;
+    let mut tick_hz = (left_hz / step).ceil() * step;
+
+    while tick_hz <= right_hz + step * 0.01 {
+        let x = offset_hz_to_x(tick_hz, rect, view_span_hz, pan_offset_hz);
+        if x >= rect.left() && x <= rect.right() {
+            painter.line_segment(
+                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                Stroke::new(1.0, GRID),
+            );
+        }
+        tick_hz += step;
+    }
+}
+
+/// MHz/kHz labels between the scope and waterfall.
+fn draw_freq_axis_bar(
     painter: &Painter,
     rect: Rect,
     view_span_hz: f32,
     pan_offset_hz: f64,
     center_freq_hz: f64,
-    show_rx_marker: bool,
 ) {
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(10, 12, 18));
+    painter.line_segment(
+        [Pos2::new(rect.left(), rect.top()), Pos2::new(rect.right(), rect.top())],
+        Stroke::new(1.0, Color32::from_rgb(40, 48, 64)),
+    );
+    painter.line_segment(
+        [Pos2::new(rect.left(), rect.bottom()), Pos2::new(rect.right(), rect.bottom())],
+        Stroke::new(1.0, Color32::from_rgb(40, 48, 64)),
+    );
+
     let step = nice_freq_step_hz(view_span_hz) as f64;
     let left_hz = pan_offset_hz - view_span_hz as f64 / 2.0;
     let right_hz = pan_offset_hz + view_span_hz as f64 / 2.0;
@@ -367,7 +446,7 @@ fn draw_freq_grid(
         let x = offset_hz_to_x(tick_hz, rect, view_span_hz, pan_offset_hz);
         if x >= rect.left() && x <= rect.right() {
             painter.line_segment(
-                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                [Pos2::new(x, rect.top()), Pos2::new(x, rect.top() + 4.0)],
                 Stroke::new(1.0, GRID),
             );
             let abs_hz = center_freq_hz + tick_hz;
@@ -397,25 +476,23 @@ fn draw_freq_grid(
         );
     }
 
-    if show_rx_marker {
-        let rx_x = offset_hz_to_x(0.0, rect, view_span_hz, pan_offset_hz);
-        if rx_x > rect.left() + 8.0 && rx_x < rect.right() - 8.0 {
-            painter.line_segment(
-                [
-                    Pos2::new(rx_x, rect.bottom() - 14.0),
-                    Pos2::new(rx_x, rect.bottom()),
-                ],
-                Stroke::new(1.5, Color32::from_rgba_unmultiplied(248, 113, 113, 160)),
+    let rx_x = offset_hz_to_x(0.0, rect, view_span_hz, pan_offset_hz);
+    if rx_x > rect.left() + 8.0 && rx_x < rect.right() - 8.0 {
+        painter.line_segment(
+            [
+                Pos2::new(rx_x, rect.top()),
+                Pos2::new(rx_x, rect.top() + 6.0),
+            ],
+            Stroke::new(1.5, Color32::from_rgba_unmultiplied(248, 113, 113, 160)),
+        );
+        if center_freq_hz > 0.0 {
+            painter.text(
+                Pos2::new(rx_x, rect.top() + 1.0),
+                Align2::CENTER_TOP,
+                "RX",
+                FontId::proportional(8.0),
+                Color32::from_rgba_unmultiplied(248, 113, 113, 200),
             );
-            if center_freq_hz > 0.0 {
-                painter.text(
-                    Pos2::new(rx_x, rect.bottom() - 15.0),
-                    Align2::CENTER_BOTTOM,
-                    "RX",
-                    FontId::proportional(9.0),
-                    Color32::from_rgba_unmultiplied(248, 113, 113, 200),
-                );
-            }
         }
     }
 }
@@ -588,34 +665,22 @@ fn draw_notch_marker(
     );
 }
 
-fn draw_trace(
-    painter: &Painter,
-    plot_rect: Rect,
-    view_span_hz: f32,
-    pan_offset_hz: f64,
-    trace: &[f32],
-    ref_db: f32,
-    range_db: f32,
-) {
+fn draw_trace(painter: &Painter, rect: Rect, trace: &[f32], ref_db: f32, range_db: f32) {
     let floor = ref_db - range_db;
     let n = trace.len();
-    if n < 2 || plot_rect.width() < 1.0 {
+    if n < 2 || rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
 
-    let offset_at = |i: usize| -> f64 {
-        let t = i as f64 / (n as f64 - 1.0);
-        (t - 0.5) * view_span_hz as f64
-    };
-
-    // Subsample to ~1.5 px per point — drawing 8k mesh verts buys nothing on a 1k-wide plot.
-    let max_pts = ((plot_rect.width() * 1.5).round() as usize).clamp(2, 2048);
+    // Composed rows are uniform in frequency across the view — index maps linearly
+    // to X, matching draw_freq_grid / x_to_offset_hz on the same plot rect.
+    let max_pts = ((rect.width() * 1.5).round() as usize).clamp(2, 2048);
     let mut line_pts = Vec::with_capacity(max_pts);
     if n <= max_pts {
         for (i, &db) in trace.iter().enumerate() {
-            let x = offset_hz_to_x(offset_at(i), plot_rect, view_span_hz, pan_offset_hz);
+            let x = rect.left() + rect.width() * i as f32 / (n as f32 - 1.0);
             let t = ((db - floor) / range_db).clamp(0.0, 1.0);
-            let y = plot_rect.bottom() - plot_rect.height() * t;
+            let y = rect.bottom() - rect.height() * t;
             line_pts.push(Pos2::new(x, y));
         }
     } else {
@@ -626,15 +691,14 @@ fn draw_trace(
                 .iter()
                 .copied()
                 .fold(f32::NEG_INFINITY, f32::max);
-            let mid = (start + end.saturating_sub(1)) / 2;
-            let x = offset_hz_to_x(offset_at(mid), plot_rect, view_span_hz, pan_offset_hz);
+            let x = rect.left() + rect.width() * out_i as f32 / (max_pts as f32 - 1.0);
             let t = ((peak - floor) / range_db).clamp(0.0, 1.0);
-            let y = plot_rect.bottom() - plot_rect.height() * t;
+            let y = rect.bottom() - rect.height() * t;
             line_pts.push(Pos2::new(x, y));
         }
     }
 
-    fill_under_trace(painter, plot_rect, &line_pts);
+    fill_under_trace(painter, rect, &line_pts);
     painter.add(Shape::line(line_pts.clone(), Stroke::new(2.5, TRACE_GLOW)));
     painter.add(Shape::line(line_pts, Stroke::new(1.25, TRACE)));
 }
@@ -726,15 +790,7 @@ fn draw_band_overview(
             0.0,
             Color32::from_rgba_unmultiplied(56, 189, 248, 12),
         );
-        draw_trace(
-            painter,
-            iq_rect,
-            sample_rate,
-            0.0,
-            overview_trace,
-            ref_db,
-            range_db,
-        );
+        draw_trace(painter, iq_rect, overview_trace, ref_db, range_db);
     }
 
     let view_left = pan_offset_hz - view_span_hz as f64 / 2.0;
