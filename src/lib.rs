@@ -35,13 +35,14 @@ pub use iq_record::{default_capture_dir, read_meta, timestamped_capture_path, ti
 pub use dsp::{
     auto_fft_size, bin_width_hz, channel_group_delay_ms, decimation_factor, design_gaussian_lowpass,
     design_lowpass,
-    effective_decimation, audio_sample_rate, extract_passband_view, extract_view_window, iq_to_audio, spectrum_plan, spectrum_view_mapping,
+    effective_decimation, audio_sample_rate, compose_panadapter_row, extract_passband_view,
+    extract_view_window, iq_to_audio, spectrum_plan, spectrum_view_mapping,
     AgcSettings, ApfSettings, AutoNotchSettings, CwChannel, CwChannelSettings, IqAudioDemod,
     NoiseBlankerSettings, NoiseReductionSettings, NotchSpec, SpectrumAnalyzer, SpectrumFrontEnd,
     SpectrumViewMapping, WindowKind, MAX_FFT_SIZE, MAX_NOTCHES, TARGET_BIN_HZ,
     ZOOM_DECIM_THRESHOLD,
 };
-pub use kiwi::protocol::KIWI_IQ_HALF_HZ;
+pub use kiwi::protocol::{kiwi_iq_half_hz, KIWI_IQ_HALF_HZ, KIWI_IQ_RATE};
 pub use kiwi::KiwiSource;
 pub use skimmer::{
     detect_peaks, strongest_offset_hz, AdaptiveCwDecoder, BigramCwDecoder, CwDecoder, DecoderParams,

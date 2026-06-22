@@ -4,12 +4,11 @@
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/)
 [![Documentation](https://img.shields.io/badge/docs-mdBook-blue)](docs/src/introduction.md)
 
-HF SDR client and CW panadapter for **Airspy HF+** and **KiwiSDR**. Every radio
-front end implements a single `IqSource` trait, so the DSP chain, skimmer, and
-GUI stay source-agnostic.
+A **CW-focused** HF receiver and panadapter for **KiwiSDR** and **Airspy HF+**.
+The UI is built around what CW operators actually touch: band presets, VFO, RIT,
+filter chain, and skimmer — without phone/AM/FM modes or unrelated clutter.
 
-The `hfsdr` desktop app provides a live waterfall and spectrum, CW demodulation
-with configurable bandpass filters, audio output, and a contest-style skimmer
-with MASTER.SCP callsign validation. IQ flows through lock-free rings from the
-device thread to spectrum analysis and decoding without blocking real-time
-callbacks.
+Works with KiwiSDR and Airspy through one `IqSource` interface; the same DSP
+chain, skimmer, and GUI apply to both. Live spectrum and waterfall, configurable
+CW demod and filters, audio out, and contest-style skimming with MASTER.SCP
+callsign checks.

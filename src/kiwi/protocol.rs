@@ -7,8 +7,13 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 /// Nominal Kiwi IQ sample rate (the server reports ~12001 Hz).
 pub const KIWI_IQ_RATE: u32 = 12_000;
 
-/// Default Kiwi IQ passband half-width (Hz) — full ~10 kHz panadapter view.
-pub const KIWI_IQ_HALF_HZ: i32 = 5_000;
+/// Maximum IQ half-width (Hz) at `sample_rate` — matches kiwiclient / SDRangel (rate/2 − 20).
+pub fn kiwi_iq_half_hz(sample_rate: u32) -> i32 {
+    (sample_rate as i32 / 2).saturating_sub(20).max(1_000)
+}
+
+/// Default Kiwi IQ passband half-width at [`KIWI_IQ_RATE`].
+pub const KIWI_IQ_HALF_HZ: i32 = 5_980;
 
 /// Pull `audio_rate=<n>` out of a Kiwi status line (float or integer Hz).
 pub fn audio_rate(text: &str) -> Option<u32> {
@@ -52,6 +57,7 @@ pub struct KiwiRxSetup {
     pub freq_hz: f64,
     pub agc_on: bool,
     pub compression: bool,
+    pub ar_out_hz: u32,
 }
 
 impl KiwiRxSetup {
@@ -135,6 +141,16 @@ pub fn push_iq_samples(iq: &[u8], prod: &mut Producer<Complex32>, dropped: &Atom
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kiwi_full_passband_half_width() {
+        assert_eq!(kiwi_iq_half_hz(12_000), 5_980);
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
     use rtrb::RingBuffer;
 
     fn make_snd_frame(iq_pairs: &[(i16, i16)]) -> Vec<u8> {
@@ -194,6 +210,7 @@ mod tests {
             freq_hz: 7_030_000.0,
             agc_on: true,
             compression: false,
+            ar_out_hz: 44_100,
         };
         let cmds = setup.setup_commands();
         assert!(cmds.iter().any(|c| c.contains("mod=iq")));

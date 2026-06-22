@@ -1,5 +1,37 @@
 //! Map full-span FFT rows to the frequency window shown in the panadapter.
 
+/// Maximum bins in a composed panadapter row (wgpu `create_texture` width limit).
+pub const MAX_PANADAPTER_BINS: usize = 8192;
+
+/// Peak-hold downsample for spectrum / waterfall rows.
+pub fn downsample_row_peak(src: &[f32], out_len: usize) -> Vec<f32> {
+    if out_len == 0 {
+        return Vec::new();
+    }
+    if src.len() <= out_len {
+        return src.to_vec();
+    }
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let start = i * src.len() / out_len;
+        let end = ((i + 1) * src.len() / out_len).max(start + 1).min(src.len());
+        let peak = src[start..end]
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        out.push(peak);
+    }
+    out
+}
+
+fn cap_panadapter_bins(row: Vec<f32>) -> Vec<f32> {
+    if row.len() > MAX_PANADAPTER_BINS {
+        downsample_row_peak(&row, MAX_PANADAPTER_BINS)
+    } else {
+        row
+    }
+}
+
 /// Extract a frequency slice of an fftshifted dB row for display.
 ///
 /// `span_hz` is the visible width; `center_offset_hz` shifts the window relative to tuned center.
@@ -37,6 +69,35 @@ pub fn extract_view_window(
         return &row[center.saturating_sub(1)..center + 1];
     }
     &row[start..end]
+}
+
+/// Build a display row for `view_span_hz`, padding with the noise floor when the view is
+/// wider than the available IQ (`data_span_hz`). Keeps spectrum/waterfall aligned on Kiwi
+/// when zoomed out to the CW band segment.
+pub fn compose_panadapter_row(
+    row: &[f32],
+    row_rate_hz: f32,
+    view_span_hz: f32,
+    data_span_hz: f32,
+    pan_offset_hz: f64,
+) -> Vec<f32> {
+    const FLOOR: f32 = -120.0;
+    let data_span = data_span_hz.min(row_rate_hz.max(1.0));
+    let extract_span = data_span.min(view_span_hz);
+    let data = extract_view_window(row, row_rate_hz, extract_span, pan_offset_hz);
+    if view_span_hz <= data_span + 1.0 {
+        return cap_panadapter_bins(data.to_vec());
+    }
+    let ratio = view_span_hz / data_span;
+    let out_len = ((data.len() as f32) * ratio).round() as usize;
+    let out_len = out_len.max(data.len());
+    let mut out = vec![FLOOR; out_len];
+    let start = out_len.saturating_sub(data.len()) / 2;
+    let end = start + data.len();
+    if end <= out_len {
+        out[start..end].copy_from_slice(data);
+    }
+    cap_panadapter_bins(out)
 }
 
 /// Full-span centered view (pan offset zero).
@@ -99,6 +160,24 @@ mod tests {
         let view = extract_passband_view(&row, 12_000.0, 500.0);
         assert!(view.len() < row.len());
         assert!(view.len() > 10);
+    }
+
+    #[test]
+    fn wide_view_pads_iq_row() {
+        let row: Vec<f32> = (0..1024).map(|i| -80.0 + (i as f32) * 0.01).collect();
+        let wide = compose_panadapter_row(&row, 12_000.0, 70_000.0, 12_000.0, 0.0);
+        assert!(wide.len() > 1024);
+        assert!(wide.len() <= MAX_PANADAPTER_BINS);
+        assert!(wide[0] <= -119.0);
+        let mid = &wide[wide.len() / 4..3 * wide.len() / 4];
+        assert!(mid.iter().any(|&v| v > -100.0));
+    }
+
+    #[test]
+    fn extreme_zoom_out_stays_within_gpu_limit() {
+        let row: Vec<f32> = vec![-70.0; 16_384];
+        let wide = compose_panadapter_row(&row, 12_000.0, 700_000.0, 12_000.0, 0.0);
+        assert_eq!(wide.len(), MAX_PANADAPTER_BINS);
     }
 
     #[test]

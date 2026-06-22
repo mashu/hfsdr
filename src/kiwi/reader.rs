@@ -105,7 +105,10 @@ fn handle_msg_text(
         *iq_configured = true;
     }
     if let Some(rate) = audio_rate(text) {
-        let _ = send_text(ws, &format!("SET AR OK in={rate} out=44100"));
+        let _ = send_text(
+            ws,
+            &format!("SET AR OK in={rate} out={}", rx_setup.ar_out_hz),
+        );
     }
 }
 

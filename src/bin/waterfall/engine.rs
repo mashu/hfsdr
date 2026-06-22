@@ -275,6 +275,7 @@ struct Engine {
     spectrum_scratch: Vec<Complex32>,
 
     drain: Vec<Complex32>,
+    drain_decim: Vec<Complex32>,
     audio_scratch: Vec<f32>,
     latest: Vec<f32>,
     fft_size: usize,
@@ -323,6 +324,7 @@ impl Engine {
             spectrum_front: SpectrumFrontEnd::new(12_000.0, 1, 0.0),
             spectrum_scratch: Vec::new(),
             drain: Vec::with_capacity(MAX_DRAIN),
+            drain_decim: Vec::with_capacity(MAX_DRAIN),
             audio_scratch: Vec::new(),
             latest: vec![-120.0; FFT_SIZE],
             fft_size: FFT_SIZE,
@@ -624,6 +626,21 @@ impl Engine {
                     Err(_) => break,
                 }
             }
+        }
+        let ingress_decim = self
+            .conn
+            .as_ref()
+            .map(|c| c.iq_ingress_decim)
+            .unwrap_or(1)
+            .max(1);
+        if ingress_decim > 1 {
+            self.drain_decim.clear();
+            for (i, sample) in self.drain.iter().enumerate() {
+                if i % ingress_decim == 0 {
+                    self.drain_decim.push(*sample);
+                }
+            }
+            std::mem::swap(&mut self.drain, &mut self.drain_decim);
         }
         let got = self.drain.len();
         self.last_pump_got = got;

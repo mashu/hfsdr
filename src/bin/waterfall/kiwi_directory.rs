@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 const LIST_URL: &str = "http://rx.linkfanel.net/kiwisdr_com.js";
 const GEO_URL: &str = "http://ip-api.com/json/?fields=status,country,countryCode,lat,lon";
-const CACHE_FILE: &str = "kiwi_directory.json";
+const CACHE_FILE: &str = "kiwi_directory_v2.json";
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 60);
 const NEARBY_LIMIT: usize = 12;
 
@@ -147,42 +147,43 @@ fn extract_json_array(body: &str) -> Result<String, String> {
 }
 
 /// Strip trailing commas that break strict JSON parsers (common in kiwisdr_com.js).
+/// Copies string bytes verbatim so UTF-8 locations (e.g. `Kungsängen`) stay intact.
 fn sanitize_json_array(json: &str) -> String {
-    let mut out = String::with_capacity(json.len());
+    let bytes = json.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
     let mut in_string = false;
     let mut escape = false;
-    let bytes = json.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let b = bytes[i];
         if in_string {
-            out.push(c);
+            out.push(b);
             if escape {
                 escape = false;
-            } else if c == '\\' {
+            } else if b == b'\\' {
                 escape = true;
-            } else if c == '"' {
+            } else if b == b'"' {
                 in_string = false;
             }
             i += 1;
             continue;
         }
-        if c == '"' {
+        if b == b'"' {
             in_string = true;
-            out.push(c);
+            out.push(b);
             i += 1;
             continue;
         }
-        if c == ',' {
+        if b == b',' {
             let mut j = i + 1;
             let mut trailing = false;
             while j < bytes.len() {
-                let ch = bytes[j] as char;
-                if ch.is_whitespace() {
+                let ch = bytes[j];
+                if ch.is_ascii_whitespace() {
                     j += 1;
                     continue;
                 }
-                if ch == ']' || ch == '}' {
+                if ch == b']' || ch == b'}' {
                     trailing = true;
                 }
                 break;
@@ -190,15 +191,15 @@ fn sanitize_json_array(json: &str) -> String {
             if trailing {
                 i += 1;
             } else {
-                out.push(c);
+                out.push(b);
                 i += 1;
             }
             continue;
         }
-        out.push(c);
+        out.push(b);
         i += 1;
     }
-    out
+    String::from_utf8(out).unwrap_or_else(|_| json.to_string())
 }
 
 fn parse_receiver_list(body: &str) -> Result<Vec<KiwiReceiver>, String> {
@@ -405,6 +406,26 @@ mod tests {
         };
         rank_by_proximity(&mut list, &geo);
         assert!(list[0].distance_km < 500.0);
+    }
+
+    #[test]
+    fn preserves_utf8_locations() {
+        let body = r#"var kiwisdr_com =
+[
+	{
+		"status":"active",
+		"offline":"no",
+		"name":"test",
+		"loc":"Kungsängen, Sweden",
+		"gps":"(59.5,17.7)",
+		"users":"1",
+		"users_max":"4",
+		"snr":"10,10",
+		"url":"http://example.com:8073"
+	}
+];"#;
+        let list = parse_receiver_list(body).expect("parse");
+        assert_eq!(list[0].location, "Kungsängen, Sweden");
     }
 
     #[test]

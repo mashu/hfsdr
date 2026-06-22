@@ -3,7 +3,7 @@
 use eframe::egui::{
     Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2,
 };
-use hfsdr::extract_view_window;
+use hfsdr::compose_panadapter_row;
 
 use crate::interaction::{
     center_grab_px, edge_grab_px, filter_edges, format_freq_hz, format_offset_label,
@@ -27,7 +27,10 @@ pub struct SpotLabel {
 /// Bundling these keeps the widget API small and is the natural seam for the
 /// future node-graph compositor (one struct describes what a plot shows).
 pub struct PlotParams<'a> {
-    pub sample_rate: f32,
+    /// Visible panadapter width at zoom 1.0 (Kiwi IQ passband; equals IQ rate on wideband SDRs).
+    pub view_bandwidth_hz: f32,
+    /// Maximum zoom-out factor (CW band overview / full_span); 1.0 on wideband SDRs.
+    pub max_zoom: f32,
     /// Tuned carrier (Hz) — used for absolute MHz/kHz axis labels.
     pub center_freq_hz: f64,
     pub passband_hz: f32,
@@ -39,6 +42,10 @@ pub struct PlotParams<'a> {
     pub notches: &'a [NotchMarker],
     pub labels: &'a [SpotLabel],
     pub trace: &'a [f32],
+    /// Full-span trace for the optional band overview minimap (IQ passband).
+    pub overview_trace: &'a [f32],
+    pub overview_span_hz: f32,
+    pub show_overview: bool,
     pub ref_db: f32,
     pub range_db: f32,
     pub height: f32,
@@ -59,7 +66,9 @@ impl SpectrumWidget {
         p: &PlotParams,
         hover_out: &mut Option<f64>,
     ) -> (Response, Vec<PlotAction>) {
-        let view_span = view.view_span_hz(p.sample_rate);
+        let full_span = p.view_bandwidth_hz.max(1.0);
+        let max_zoom = p.max_zoom.max(1.0);
+        let view_span = view.view_span_hz(full_span, max_zoom);
         let pan = view.pan_offset_hz;
         let (response, painter) =
             ui.allocate_painter(Vec2::new(ui.available_width(), p.height), Sense::click_and_drag());
@@ -92,7 +101,13 @@ impl SpectrumWidget {
             p.center_freq_hz,
             true,
         );
-        draw_trace(&painter, rect, p.trace, p.ref_db, p.range_db);
+        draw_trace(
+            &painter,
+            trace_data_rect(rect, full_span, view_span),
+            p.trace,
+            p.ref_db,
+            p.range_db,
+        );
 
         draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, true);
 
@@ -113,12 +128,13 @@ impl SpectrumWidget {
 
         draw_spot_labels(&painter, rect, view_span, pan, p.labels);
 
-        let actions = interaction.handle(
+        let mut actions = interaction.handle(
             ui,
             rect,
             &response,
             view,
-            p.sample_rate,
+            full_span,
+            max_zoom,
             p.passband_hz,
             p.passband_min_hz,
             p.passband_max_hz,
@@ -135,6 +151,21 @@ impl SpectrumWidget {
             } else {
                 *hover_out = None;
             }
+        }
+
+        if p.show_overview && !p.overview_trace.is_empty() {
+            actions.extend(draw_band_overview(
+                ui,
+                &painter,
+                rect,
+                full_span,
+                p.overview_span_hz,
+                view_span,
+                pan,
+                p.overview_trace,
+                p.ref_db,
+                p.range_db,
+            ));
         }
 
         (response, actions)
@@ -157,7 +188,9 @@ impl WaterfallWidget {
         p: &PlotParams,
         hover_out: &mut Option<f64>,
     ) -> Vec<PlotAction> {
-        let view_span = view.view_span_hz(p.sample_rate);
+        let full_span = p.view_bandwidth_hz.max(1.0);
+        let max_zoom = p.max_zoom.max(1.0);
+        let view_span = view.view_span_hz(full_span, max_zoom);
         let pan = view.pan_offset_hz;
         let size = Vec2::new(ui.available_width(), ui.available_height());
         let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
@@ -210,7 +243,8 @@ impl WaterfallWidget {
             rect,
             &response,
             view,
-            p.sample_rate,
+            full_span,
+            max_zoom,
             p.passband_hz,
             p.passband_min_hz,
             p.passband_max_hz,
@@ -554,6 +588,15 @@ fn draw_notch_marker(
     );
 }
 
+fn trace_data_rect(plot_rect: Rect, full_span_hz: f32, view_span_hz: f32) -> Rect {
+    let frac = (full_span_hz / view_span_hz).min(1.0);
+    if frac >= 0.999 {
+        return plot_rect;
+    }
+    let w = plot_rect.width() * frac;
+    Rect::from_center_size(plot_rect.center(), Vec2::new(w, plot_rect.height()))
+}
+
 fn draw_trace(painter: &Painter, rect: Rect, trace: &[f32], ref_db: f32, range_db: f32) {
     let floor = ref_db - range_db;
     let n = trace.len();
@@ -598,19 +641,130 @@ fn fill_under_trace(painter: &Painter, rect: Rect, line_pts: &[Pos2]) {
     }
 }
 
+fn overview_offset_to_x(offset_hz: f64, rect: Rect, overview_span_hz: f32) -> f32 {
+    let half = overview_span_hz as f64 / 2.0;
+    let t = ((offset_hz + half) / overview_span_hz as f64).clamp(0.0, 1.0) as f32;
+    rect.left() + t * rect.width()
+}
+
+fn draw_band_overview(
+    ui: &mut Ui,
+    painter: &Painter,
+    plot_rect: Rect,
+    sample_rate: f32,
+    overview_span_hz: f32,
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    overview_trace: &[f32],
+    ref_db: f32,
+    range_db: f32,
+) -> Vec<PlotAction> {
+    let mut actions = Vec::new();
+    let size = Vec2::new(156.0, 46.0);
+    let mini_rect = Rect::from_min_size(
+        Pos2::new(plot_rect.right() - size.x - 8.0, plot_rect.top() + 8.0),
+        size,
+    );
+    let response = ui.allocate_rect(mini_rect, Sense::click());
+
+    painter.rect_filled(
+        mini_rect,
+        4.0,
+        Color32::from_rgba_unmultiplied(10, 12, 18, 220),
+    );
+    painter.rect_stroke(
+        mini_rect,
+        4.0,
+        Stroke::new(1.0, Color32::from_rgb(55, 65, 85)),
+        eframe::egui::StrokeKind::Inside,
+    );
+    painter.text(
+        Pos2::new(mini_rect.left() + 6.0, mini_rect.top() + 2.0),
+        Align2::LEFT_TOP,
+        "Band overview",
+        FontId::proportional(9.0),
+        Color32::from_rgb(140, 150, 170),
+    );
+
+    let trace_rect = Rect::from_min_max(
+        Pos2::new(mini_rect.left() + 4.0, mini_rect.top() + 14.0),
+        Pos2::new(mini_rect.right() - 4.0, mini_rect.bottom() - 4.0),
+    );
+
+    let iq_half = sample_rate as f64 / 2.0;
+    let iq_left = overview_offset_to_x(-iq_half, trace_rect, overview_span_hz);
+    let iq_right = overview_offset_to_x(iq_half, trace_rect, overview_span_hz);
+    let iq_rect = Rect::from_min_max(
+        Pos2::new(iq_left, trace_rect.top()),
+        Pos2::new(iq_right, trace_rect.bottom()),
+    );
+    if iq_rect.width() > 2.0 {
+        painter.rect_filled(
+            iq_rect,
+            0.0,
+            Color32::from_rgba_unmultiplied(56, 189, 248, 12),
+        );
+        draw_trace(painter, iq_rect, overview_trace, ref_db, range_db);
+    }
+
+    let view_left = pan_offset_hz - view_span_hz as f64 / 2.0;
+    let view_right = pan_offset_hz + view_span_hz as f64 / 2.0;
+    let vp_left = overview_offset_to_x(view_left, trace_rect, overview_span_hz);
+    let vp_right = overview_offset_to_x(view_right, trace_rect, overview_span_hz);
+    let viewport = Rect::from_min_max(
+        Pos2::new(vp_left, trace_rect.top()),
+        Pos2::new(vp_right, trace_rect.bottom()),
+    );
+    painter.rect_stroke(
+        viewport,
+        2.0,
+        Stroke::new(1.5, ACCENT),
+        eframe::egui::StrokeKind::Inside,
+    );
+
+    let rx_x = overview_offset_to_x(0.0, trace_rect, overview_span_hz);
+    painter.line_segment(
+        [
+            Pos2::new(rx_x, trace_rect.top()),
+            Pos2::new(rx_x, trace_rect.bottom()),
+        ],
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(248, 113, 113, 140)),
+    );
+
+    if response.clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            if trace_rect.contains(pos) {
+                let t = ((pos.x - trace_rect.left()) / trace_rect.width()).clamp(0.0, 1.0) as f64;
+                let half = overview_span_hz as f64 / 2.0;
+                let pan = -half + t * overview_span_hz as f64;
+                actions.push(PlotAction::SetViewPanHz(pan));
+            }
+        }
+    }
+
+    actions
+}
+
 /// Build smoothed display trace from latest FFT row.
 pub fn display_trace(
     latest: &[f32],
     smoothed: &mut Vec<f32>,
-    sample_rate: f32,
+    row_rate_hz: f32,
     view_span_hz: f32,
+    data_span_hz: f32,
     center_offset_hz: f64,
     smooth_alpha: f32,
 ) -> Vec<f32> {
-    let view = extract_view_window(latest, sample_rate, view_span_hz, center_offset_hz);
+    let view = compose_panadapter_row(
+        latest,
+        row_rate_hz,
+        view_span_hz,
+        data_span_hz,
+        center_offset_hz,
+    );
     if smoothed.len() != view.len() {
         smoothed.resize(view.len(), -120.0);
     }
-    crate::smooth::ema_update(smoothed, view, smooth_alpha);
+    crate::smooth::ema_update(smoothed, &view, smooth_alpha);
     spatial_smooth(smoothed)
 }

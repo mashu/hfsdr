@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::source::ConnectRequest;
+use crate::source::{ConnectRequest, KiwiSettings};
 
 const APP_DIR: &str = "hfsdr";
 const FILE: &str = "settings.json";
@@ -65,6 +65,7 @@ pub struct AppSettings {
     pub ref_db: f32,
     pub range_db: f32,
     pub display_auto_track: bool,
+    pub show_band_overview: bool,
     pub smooth_alpha: f32,
     pub target_fps: u32,
     pub fft_size: usize,
@@ -111,6 +112,7 @@ pub struct AppSettings {
     // Connection memory.
     pub recent_hosts: Vec<ConnectRequest>,
     pub last_center_mhz: f64,
+    pub kiwi: KiwiSettings,
 
     // IQ capture / playback.
     pub iq_capture_dir: String,
@@ -149,6 +151,7 @@ impl Default for AppSettings {
             ref_db: -65.0,
             range_db: 17.0,
             display_auto_track: false,
+            show_band_overview: false,
             smooth_alpha: 0.09,
             target_fps: 30,
             fft_size: 2048,
@@ -189,6 +192,7 @@ impl Default for AppSettings {
             show_right: true,
             recent_hosts: Vec::new(),
             last_center_mhz: 14.01,
+            kiwi: KiwiSettings::default(),
             iq_capture_dir: String::new(),
             iq_playback_path: String::new(),
         }

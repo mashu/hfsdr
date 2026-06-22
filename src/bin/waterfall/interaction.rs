@@ -68,6 +68,8 @@ pub enum PlotAction {
         slot: usize,
         width_hz: f32,
     },
+    /// Center the panadapter view at this offset (Hz relative to RX).
+    SetViewPanHz(f64),
 }
 
 #[derive(Clone, Debug)]
@@ -84,25 +86,54 @@ impl PlotViewState {
         }
     }
 
-    pub fn view_span_hz(&self, sample_rate: f32) -> f32 {
-        (sample_rate * self.zoom).clamp(sample_rate * MIN_ZOOM, sample_rate)
+    /// Visible span in Hz. `zoom` 1.0 = full IQ passband; `max_zoom` = CW band overview on Kiwi.
+    pub fn view_span_hz(&self, full_span_hz: f32, max_zoom: f32) -> f32 {
+        let cap = full_span_hz * max_zoom.max(1.0);
+        (full_span_hz * self.zoom).clamp(full_span_hz * MIN_ZOOM, cap)
     }
 
-    pub fn clamp_pan(&mut self, sample_rate: f32) {
-        let half_view = self.view_span_hz(sample_rate) as f64 / 2.0;
-        let half_iq = sample_rate as f64 / 2.0;
-        let max = (half_iq - half_view).max(0.0);
+    pub fn clamp_pan(&mut self, full_span_hz: f32, max_zoom: f32) {
+        let view_span = self.view_span_hz(full_span_hz, max_zoom) as f64;
+        let half_view = view_span / 2.0;
+        let half_data = full_span_hz as f64 / 2.0;
+        let max = if half_view > half_data {
+            half_view - half_data
+        } else {
+            (half_data - half_view).max(0.0)
+        };
         self.pan_offset_hz = self.pan_offset_hz.clamp(-max, max);
     }
 
-    pub fn zoom_by(&mut self, factor: f32, sample_rate: f32) {
-        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, 1.0);
-        self.clamp_pan(sample_rate);
+    pub fn zoom_by(&mut self, factor: f32, full_span_hz: f32, max_zoom: f32) {
+        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, max_zoom.max(1.0));
+        self.clamp_pan(full_span_hz, max_zoom);
     }
 
-    /// True when the visible span is narrower than the IQ passband (horizontal pan useful).
-    pub fn can_pan(&self, sample_rate: f32) -> bool {
-        self.view_span_hz(sample_rate) < sample_rate * 0.995
+    /// Default zoom when picking a band preset.
+    pub fn zoom_to_cw_segment(&mut self, segment_hz: f32, full_span_hz: f32, max_zoom: f32) {
+        self.zoom = (segment_hz / full_span_hz).clamp(MIN_ZOOM, max_zoom.max(1.0));
+        self.pan_offset_hz = 0.0;
+        self.clamp_pan(full_span_hz, max_zoom);
+    }
+
+    /// Full IQ passband (widest data view).
+    pub fn zoom_to_full_span(&mut self) {
+        self.zoom = 1.0;
+        self.pan_offset_hz = 0.0;
+    }
+
+    /// Zoom out to the CW band segment (Kiwi: wider than IQ, padded with floor).
+    pub fn zoom_to_band_overview(&mut self, max_zoom: f32) {
+        self.zoom = max_zoom.max(1.0);
+        self.pan_offset_hz = 0.0;
+    }
+
+    /// True when horizontal pan is useful (view narrower or wider than the IQ passband).
+    pub fn can_pan(&self, full_span_hz: f32, max_zoom: f32) -> bool {
+        let view_span = self.view_span_hz(full_span_hz, max_zoom) as f64;
+        let half_view = view_span / 2.0;
+        let half_data = full_span_hz as f64 / 2.0;
+        (half_view - half_data).abs() > full_span_hz as f64 * 0.005
     }
 }
 
@@ -128,7 +159,8 @@ impl PlotInteraction {
         rect: Rect,
         response: &Response,
         view: &mut PlotViewState,
-        sample_rate: f32,
+        full_span_hz: f32,
+        max_zoom: f32,
         passband_hz: f32,
         passband_min_hz: f32,
         passband_max_hz: f32,
@@ -138,7 +170,7 @@ impl PlotInteraction {
         notches: &[NotchMarker],
     ) -> Vec<PlotAction> {
         let mut actions = Vec::new();
-        let view_span = view.view_span_hz(sample_rate);
+        let view_span = view.view_span_hz(full_span_hz, max_zoom);
         let pan = view.pan_offset_hz;
         let preview_x = offset_hz_to_x(tune_preview_offset_hz, rect, view_span, pan);
         let shift = ui.input(|i| i.modifiers.shift);
@@ -171,7 +203,7 @@ impl PlotInteraction {
             if let Some(pos) = response.interact_pointer_pos() {
                 self.drag_origin = Some(pos);
                 self.tune_drag_active = false;
-                let can_pan = view.can_pan(sample_rate);
+                let can_pan = view.can_pan(full_span_hz, max_zoom);
 
                 if let Some((slot, hit)) = pick_notch_hit(pos.x, rect, view_span, pan, notches) {
                     self.drag_mode = match hit {
@@ -502,9 +534,11 @@ mod tests {
     fn pan_available_when_zoomed_in() {
         let mut view = PlotViewState::new();
         view.zoom = 0.25;
-        assert!(view.can_pan(12_000.0));
+        assert!(view.can_pan(12_000.0, 1.0));
         view.zoom = 1.0;
-        assert!(!view.can_pan(12_000.0));
+        assert!(!view.can_pan(12_000.0, 1.0));
+        view.zoom = 5.0;
+        assert!(view.can_pan(12_000.0, 6.0));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! IQ capture and offline playback controls (connection drawer).
+//! IQ capture and offline playback controls.
 
 use std::path::PathBuf;
 
@@ -36,6 +36,28 @@ impl IqPanel {
             capture_dir,
             playback_path: String::new(),
             last_capture_path: String::new(),
+        }
+    }
+
+    /// Start a new timestamped capture in [`Self::capture_dir`].
+    pub fn start_recording(&mut self) -> IqPanelCmd {
+        let _ = std::fs::create_dir_all(&self.capture_dir);
+        let path = hfsdr::timestamped_capture_path_in(&self.capture_dir);
+        self.last_capture_path = path.display().to_string();
+        if self.playback_path.is_empty() {
+            self.playback_path = self.last_capture_path.clone();
+        }
+        IqPanelCmd::StartRecord(path)
+    }
+
+    /// Status-bar toggle: stop when recording, else start a fresh file when streaming.
+    pub fn toggle_recording(&mut self, recording: bool, streaming: bool) -> Option<IqPanelCmd> {
+        if recording {
+            Some(IqPanelCmd::StopRecord)
+        } else if streaming {
+            Some(self.start_recording())
+        } else {
+            None
         }
     }
 
@@ -94,13 +116,7 @@ impl IqPanel {
                 .on_hover_text("Start recording into the folder above")
                 .clicked()
             {
-                let _ = std::fs::create_dir_all(&self.capture_dir);
-                let path = hfsdr::timestamped_capture_path_in(&self.capture_dir);
-                self.last_capture_path = path.display().to_string();
-                if self.playback_path.is_empty() {
-                    self.playback_path = self.last_capture_path.clone();
-                }
-                cmds.push(IqPanelCmd::StartRecord(path));
+                cmds.push(self.start_recording());
             }
         });
 

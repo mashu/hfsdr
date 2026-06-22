@@ -7,10 +7,61 @@
 
 use std::fmt;
 
-use hfsdr::{Complex32, Consumer, IqSource, KiwiSource, KIWI_IQ_HALF_HZ};
+use hfsdr::{Complex32, Consumer, IqSource, kiwi_iq_half_hz, KiwiSource, KIWI_IQ_RATE};
 #[cfg(feature = "airspy")]
 use hfsdr::AirspyHf;
 use serde::{Deserialize, Serialize};
+
+/// Kiwi IQ stream options sent at connect (see kiwiclient `-L`/`-H`/`-o`/`-r`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KiwiSettings {
+    /// Expected Kiwi IQ rate in Hz (caps passband; server reports actual rate on connect).
+    pub iq_rate_hz: u32,
+    /// IQ half-bandwidth in Hz; `0` = maximum for [`iq_rate_hz`] (rate/2 − 20).
+    pub iq_half_bw_hz: u32,
+    /// Client-side IQ resample target in Hz; `0` = native server rate.
+    pub iq_resample_hz: u32,
+    /// Frequency offset in kHz subtracted from the displayed tune frequency (kiwiclient `-o`).
+    pub freq_offset_khz: f64,
+    /// `SET AR OK out=` audio resampler output rate.
+    pub ar_out_hz: u32,
+}
+
+impl Default for KiwiSettings {
+    fn default() -> Self {
+        Self {
+            iq_rate_hz: KIWI_IQ_RATE,
+            iq_half_bw_hz: 0,
+            iq_resample_hz: 0,
+            freq_offset_khz: 0.0,
+            ar_out_hz: 44_100,
+        }
+    }
+}
+
+impl KiwiSettings {
+    pub fn passband_half_hz(&self) -> i32 {
+        let max = kiwi_iq_half_hz(self.iq_rate_hz.max(1_000));
+        if self.iq_half_bw_hz == 0 {
+            max
+        } else {
+            (self.iq_half_bw_hz as i32).clamp(500, max)
+        }
+    }
+
+    pub fn ingress_decimation(&self, reported_rate: u32) -> (usize, f32) {
+        if self.iq_resample_hz == 0 || self.iq_resample_hz >= reported_rate {
+            return (1, reported_rate as f32);
+        }
+        if reported_rate.is_multiple_of(self.iq_resample_hz) {
+            let factor = (reported_rate / self.iq_resample_hz) as usize;
+            (factor.max(1), self.iq_resample_hz as f32)
+        } else {
+            (1, reported_rate as f32)
+        }
+    }
+}
 
 /// Which front end to bring up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +92,9 @@ pub struct ConnectRequest {
     pub center_hz: f64,
     /// Airspy sample rate; `0` selects the device default (ignored for Kiwi).
     pub sample_rate: u32,
+    /// Kiwi IQ passband, resample, and transverter offset (ignored for Airspy).
+    #[serde(default)]
+    pub kiwi: KiwiSettings,
 }
 
 impl Default for ConnectRequest {
@@ -51,6 +105,7 @@ impl Default for ConnectRequest {
             port: 8073,
             center_hz: 14_010_000.0,
             sample_rate: 0,
+            kiwi: KiwiSettings::default(),
         }
     }
 }
@@ -74,6 +129,8 @@ pub struct Connection {
     pub sample_rate: f32,
     pub center_hz: f64,
     pub is_kiwi: bool,
+    /// Client-side integer decimation applied after the Kiwi ring (1 = none).
+    pub iq_ingress_decim: usize,
 }
 
 /// Build, tune, and start the requested source. Blocks until the link is up
@@ -90,18 +147,23 @@ fn connect_kiwi(req: &ConnectRequest) -> Result<Connection, String> {
     if req.host.trim().is_empty() {
         return Err("KiwiSDR host is empty".to_string());
     }
+    let half = req.kiwi.passband_half_hz();
     let mut src = KiwiSource::new(req.host.clone(), req.port)
-        .with_passband(-KIWI_IQ_HALF_HZ, KIWI_IQ_HALF_HZ);
+        .with_passband(-half, half)
+        .with_freq_offset_khz(req.kiwi.freq_offset_khz)
+        .with_ar_out_hz(req.kiwi.ar_out_hz);
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
-    let sr = src.sample_rate() as f32;
+    let reported = src.sample_rate();
+    let (ingress_decim, eff_sr) = req.kiwi.ingress_decimation(reported);
     let iq = src.start().map_err(|e| e.to_string())?;
     Ok(Connection {
         source: Box::new(src),
         iq,
         iq_ring_capacity: 1 << 16,
-        sample_rate: sr,
+        sample_rate: eff_sr,
         center_hz: req.center_hz,
         is_kiwi: true,
+        iq_ingress_decim: ingress_decim,
     })
 }
 
@@ -124,6 +186,7 @@ fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
         sample_rate: sr as f32,
         center_hz: req.center_hz,
         is_kiwi: false,
+        iq_ingress_decim: 1,
     })
 }
 
@@ -144,6 +207,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 port,
                 center_hz,
                 sample_rate: 0,
+                kiwi: KiwiSettings::default(),
             })
         }
         #[cfg(feature = "airspy")]
@@ -156,6 +220,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 port: 8073,
                 center_hz,
                 sample_rate,
+                kiwi: KiwiSettings::default(),
             })
         }
         _ => None,
@@ -188,5 +253,23 @@ impl Serialize for SourceKind {
             SourceKind::Kiwi => "Kiwi",
         };
         serializer.serialize_str(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kiwi_default_passband_is_max() {
+        let s = KiwiSettings::default();
+        assert_eq!(s.passband_half_hz(), 5_980);
+    }
+
+    #[test]
+    fn kiwi_ingress_decimation_divides_evenly() {
+        let mut s = KiwiSettings::default();
+        s.iq_resample_hz = 6_000;
+        assert_eq!(s.ingress_decimation(12_000), (2, 6_000.0));
     }
 }

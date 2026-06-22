@@ -6,7 +6,7 @@ pub mod protocol;
 mod reader;
 
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
-use protocol::{KIWI_IQ_RATE, KiwiRxSetup, mod_iq_command};
+use protocol::{kiwi_iq_half_hz, KIWI_IQ_RATE, KiwiRxSetup, mod_iq_command};
 use reader::{READ_TIMEOUT, reader_loop};
 use rtrb::RingBuffer;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -28,6 +28,8 @@ pub struct KiwiSource {
     freq_hz: f64,
     low_cut: i32,
     high_cut: i32,
+    freq_offset_khz: f64,
+    ar_out_hz: u32,
     agc_on: bool,
     compression: bool,
     streaming: bool,
@@ -57,12 +59,15 @@ impl KiwiSource {
 
     /// Create a source for `ws://host:port` (the standard Kiwi port is 8073).
     pub fn new(host: impl Into<String>, port: u16) -> Self {
+        let half = kiwi_iq_half_hz(KIWI_IQ_RATE);
         Self {
             host: host.into(),
             port,
             freq_hz: 0.0,
-            low_cut: -5000,
-            high_cut: 5000,
+            low_cut: -half,
+            high_cut: half,
+            freq_offset_khz: 0.0,
+            ar_out_hz: 44_100,
             agc_on: true,
             compression: false,
             streaming: false,
@@ -89,22 +94,44 @@ impl KiwiSource {
         self
     }
 
+    /// Transverter / LNB offset in kHz subtracted from the tune frequency (kiwiclient `-o`).
+    pub fn with_freq_offset_khz(mut self, khz: f64) -> Self {
+        self.freq_offset_khz = khz;
+        self
+    }
+
+    /// `SET AR OK out=` rate (default 44100).
+    pub fn with_ar_out_hz(mut self, hz: u32) -> Self {
+        self.ar_out_hz = hz.clamp(8_000, 192_000);
+        self
+    }
+
+    /// Kiwi center frequency in kHz after transverter offset.
+    fn kiwi_freq_khz(&self) -> f64 {
+        self.freq_hz / 1000.0 - self.freq_offset_khz
+    }
+
     /// Latest S-meter reading in dBm.
     pub fn meter_dbm(&self) -> f32 {
         self.rssi_cdbm.load(Ordering::Relaxed) as f32 / 100.0
     }
 
     fn mod_cmd(&self) -> String {
-        mod_iq_command(self.low_cut, self.high_cut, self.freq_hz)
+        mod_iq_command(
+            self.low_cut,
+            self.high_cut,
+            self.kiwi_freq_khz() * 1000.0,
+        )
     }
 
     fn rx_setup(&self) -> KiwiRxSetup {
         KiwiRxSetup {
             low_cut: self.low_cut,
             high_cut: self.high_cut,
-            freq_hz: self.freq_hz,
+            freq_hz: self.kiwi_freq_khz() * 1000.0,
             agc_on: self.agc_on,
             compression: self.compression,
+            ar_out_hz: self.ar_out_hz,
         }
     }
 

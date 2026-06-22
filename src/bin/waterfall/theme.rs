@@ -3,7 +3,7 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, RichText, Stroke, TextStyle, Ui,
+    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Layout, RichText, Stroke, TextStyle, Ui,
     Visuals,
 };
 
@@ -85,6 +85,125 @@ pub fn clickable_badge(ui: &mut Ui, text: &str, color: Color32) -> eframe::egui:
                 Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120),
             )),
     )
+}
+
+/// Full-width DSP stage row: label, optional shortcut chip, animated pill switch.
+pub fn stage_toggle(
+    ui: &mut Ui,
+    on: &mut bool,
+    title: &str,
+    subtitle: Option<&str>,
+    shortcut: Option<&str>,
+) -> bool {
+    let id = ui.id().with(title);
+    let row_h = if subtitle.is_some() { 46.0 } else { 38.0 };
+    let width = ui.available_width();
+    let (rect, resp) =
+        ui.allocate_exact_size(eframe::egui::vec2(width, row_h), eframe::egui::Sense::click());
+    let mut changed = false;
+    if resp.clicked() {
+        *on = !*on;
+        changed = true;
+    }
+
+    let anim = ui.ctx().animate_bool(id, *on);
+    let bg = Color32::from_rgba_unmultiplied(
+        ACCENT.r(),
+        ACCENT.g(),
+        ACCENT.b(),
+        (eframe::egui::lerp(8.0..=36.0, anim)) as u8,
+    );
+    let border = Color32::from_rgba_unmultiplied(
+        ACCENT.r(),
+        ACCENT.g(),
+        ACCENT.b(),
+        (eframe::egui::lerp(40.0..=140.0, anim)) as u8,
+    );
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(8),
+        bg,
+        Stroke::new(1.0, border),
+        eframe::egui::StrokeKind::Inside,
+    );
+
+    let pill_w = 38.0;
+    let pill_h = 20.0;
+    let pill_rect = eframe::egui::Rect::from_min_size(
+        eframe::egui::pos2(rect.right() - pill_w - 10.0, rect.center().y - pill_h / 2.0),
+        eframe::egui::vec2(pill_w, pill_h),
+    );
+    let how_on = ui.ctx().animate_bool(id.with("pill"), *on);
+    let track = if *on {
+        ACCENT_DIM
+    } else {
+        Color32::from_rgb(48, 54, 70)
+    };
+    ui.painter().rect(
+        pill_rect,
+        CornerRadius::same(10),
+        track,
+        Stroke::NONE,
+        eframe::egui::StrokeKind::Inside,
+    );
+    let cx = eframe::egui::lerp((pill_rect.left() + 10.0)..=(pill_rect.right() - 10.0), how_on);
+    let knob = if *on { ACCENT } else { MUTED };
+    ui.painter()
+        .circle(eframe::egui::pos2(cx, pill_rect.center().y), 8.0, knob, Stroke::NONE);
+
+    let text_left = rect.left() + 12.0;
+    let title_y = if subtitle.is_some() {
+        rect.top() + 8.0
+    } else {
+        rect.center().y
+    };
+    ui.painter().text(
+        eframe::egui::pos2(text_left, title_y),
+        if subtitle.is_some() {
+            Align2::LEFT_TOP
+        } else {
+            Align2::LEFT_CENTER
+        },
+        title,
+        FontId::proportional(13.0),
+        if *on {
+            ACCENT
+        } else {
+            Color32::from_rgb(220, 228, 240)
+        },
+    );
+    if let Some(sub) = subtitle {
+        ui.painter().text(
+            eframe::egui::pos2(text_left, rect.top() + 26.0),
+            Align2::LEFT_TOP,
+            sub,
+            FontId::proportional(11.0),
+            MUTED,
+        );
+    }
+    if let Some(key) = shortcut {
+        let chip = format!("[{key}]");
+        let chip_rect = eframe::egui::Rect::from_min_size(
+            eframe::egui::pos2(pill_rect.left() - 36.0, rect.center().y - 9.0),
+            eframe::egui::vec2(28.0, 18.0),
+        );
+        ui.painter().rect(
+            chip_rect,
+            CornerRadius::same(4),
+            Color32::from_rgb(38, 44, 58),
+            Stroke::new(1.0, Color32::from_rgb(70, 80, 100)),
+            eframe::egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            chip_rect.center(),
+            Align2::CENTER_CENTER,
+            chip,
+            FontId::monospace(10.0),
+            MUTED,
+        );
+    }
+
+    changed
 }
 
 /// A compact on/off pill toggle (a nicer checkbox). Returns true if toggled.
