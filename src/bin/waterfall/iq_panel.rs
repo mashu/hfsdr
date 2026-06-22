@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 
-use eframe::egui::{self, Ui};
+use eframe::egui::Ui;
 
 use crate::engine::EngineStats;
 use crate::iq_dialog;
-use crate::theme::{section_heading, section_hint, MUTED};
+use crate::popup::{path_row, popup_section, primary_button, secondary_button};
+use crate::theme::MUTED;
 
 /// Persisted paths for IQ record / playback.
 #[derive(Clone, Debug)]
@@ -39,7 +40,6 @@ impl IqPanel {
         }
     }
 
-    /// Start a new timestamped capture in [`Self::capture_dir`].
     pub fn start_recording(&mut self) -> IqPanelCmd {
         let _ = std::fs::create_dir_all(&self.capture_dir);
         let path = hfsdr::timestamped_capture_path_in(&self.capture_dir);
@@ -50,7 +50,6 @@ impl IqPanel {
         IqPanelCmd::StartRecord(path)
     }
 
-    /// Status-bar toggle: stop when recording, else start a fresh file when streaming.
     pub fn toggle_recording(&mut self, recording: bool, streaming: bool) -> Option<IqPanelCmd> {
         if recording {
             Some(IqPanelCmd::StopRecord)
@@ -69,76 +68,47 @@ impl IqPanel {
         let mut cmds = Vec::new();
         let mut dirty = false;
 
-        section_heading(ui, "IQ capture");
-        section_hint(
-            ui,
-            "Records gzip-compressed .hiq.gz for offline replay — writer runs off the engine thread.",
-        );
-
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Save to").small().color(MUTED));
-            if ui
-                .button("Browse…")
-                .on_hover_text("Choose folder for new captures")
-                .clicked()
-            {
+        popup_section(ui, "Record", None, |ui| {
+            if path_row(
+                ui,
+                "Folder",
+                &self.capture_dir.display().to_string(),
+                "…",
+            ) {
                 if let Some(dir) = iq_dialog::pick_capture_dir(&self.capture_dir) {
                     self.capture_dir = dir;
                     dirty = true;
                 }
             }
-        });
-        ui.label(
-            egui::RichText::new(self.capture_dir.display().to_string())
-                .small()
-                .color(MUTED),
-        );
-
-        ui.horizontal(|ui| {
-            if view.stats.iq_recording {
-                if ui.button("Stop recording").clicked() {
-                    cmds.push(IqPanelCmd::StopRecord);
+            ui.horizontal(|ui| {
+                if view.stats.iq_recording {
+                    let label = view
+                        .stats
+                        .iq_capture_path
+                        .as_deref()
+                        .map(|p| {
+                            let secs = view.stats.iq_capture_samples as f32
+                                / view.stats.sample_rate.max(1.0);
+                            format!("{secs:.0}s → {p}")
+                        })
+                        .unwrap_or_else(|| "Recording…".to_string());
+                    ui.label(egui::RichText::new(label).small().color(MUTED));
+                    if secondary_button(ui, "Stop").clicked() {
+                        cmds.push(IqPanelCmd::StopRecord);
+                    }
+                } else if primary_button(ui, "Record", view.streaming).clicked() {
+                    cmds.push(self.start_recording());
                 }
-                if let Some(p) = &view.stats.iq_capture_path {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{:.1}s → {}",
-                            view.stats.iq_capture_samples as f32
-                                / view.stats.sample_rate.max(1.0),
-                            p
-                        ))
-                        .small()
-                        .color(MUTED),
-                    );
-                }
-            } else if ui
-                .add_enabled(view.streaming, egui::Button::new("Record IQ"))
-                .on_hover_text("Start recording into the folder above")
-                .clicked()
-            {
-                cmds.push(self.start_recording());
-            }
+            });
         });
 
-        if !self.last_capture_path.is_empty() && !view.stats.iq_recording {
-            ui.label(
-                egui::RichText::new(format!("Last: {}", self.last_capture_path))
-                    .small()
-                    .color(MUTED),
-            );
-        }
-
-        ui.add_space(4.0);
-        section_heading(ui, "IQ playback");
-        section_hint(ui, "Replay a saved capture without a network link — buffer stays full (disk-fed).");
-
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("File").small().color(MUTED));
-            if ui
-                .button("Browse…")
-                .on_hover_text("Open a .hiq.gz capture file")
-                .clicked()
-            {
+        popup_section(ui, "Playback", None, |ui| {
+            let playback_label = if self.playback_path.is_empty() {
+                "(none)".to_string()
+            } else {
+                self.playback_path.clone()
+            };
+            if path_row(ui, "File", &playback_label, "…") {
                 let start = if self.playback_path.is_empty() {
                     self.capture_dir.clone()
                 } else {
@@ -149,27 +119,17 @@ impl IqPanel {
                     dirty = true;
                 }
             }
-        });
-        let playback_label = if self.playback_path.is_empty() {
-            "No file selected".to_string()
-        } else {
-            self.playback_path.clone()
-        };
-        ui.label(egui::RichText::new(playback_label).small().color(MUTED));
-
-        ui.horizontal(|ui| {
-            let can_play = !self.playback_path.trim().is_empty();
-            if ui
-                .add_enabled(can_play && !view.stats.iq_playback, egui::Button::new("Play"))
-                .clicked()
-            {
-                cmds.push(IqPanelCmd::Play(PathBuf::from(
-                    self.playback_path.trim(),
-                )));
-            }
-            if view.stats.iq_playback && ui.button("Stop playback").clicked() {
-                cmds.push(IqPanelCmd::StopPlayback);
-            }
+            ui.horizontal(|ui| {
+                let can_play = !self.playback_path.trim().is_empty();
+                if primary_button(ui, "Play", can_play && !view.stats.iq_playback).clicked() {
+                    cmds.push(IqPanelCmd::Play(PathBuf::from(
+                        self.playback_path.trim(),
+                    )));
+                }
+                if view.stats.iq_playback && secondary_button(ui, "Stop").clicked() {
+                    cmds.push(IqPanelCmd::StopPlayback);
+                }
+            });
         });
 
         (cmds, dirty)

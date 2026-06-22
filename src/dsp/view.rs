@@ -2,6 +2,22 @@
 
 /// Maximum bins in a composed panadapter row (wgpu `create_texture` width limit).
 pub const MAX_PANADAPTER_BINS: usize = 8192;
+/// Band-overview rows: IQ is a narrow core in a wide padded span — fewer bins are enough.
+pub const WIDE_PANADAPTER_BINS: usize = 2048;
+
+/// Target output length for a panadapter row (before padding layout).
+pub fn panadapter_output_bins(data_len: usize, view_span_hz: f32, data_span_hz: f32) -> usize {
+    if data_len == 0 {
+        return 1;
+    }
+    let data_span = data_span_hz.max(1.0);
+    if view_span_hz <= data_span + 1.0 {
+        return data_len.min(MAX_PANADAPTER_BINS);
+    }
+    let ratio = view_span_hz / data_span;
+    let padded = (data_len as f32 * ratio).round() as usize;
+    padded.max(data_len).min(WIDE_PANADAPTER_BINS)
+}
 
 /// Peak-hold downsample for spectrum / waterfall rows.
 pub fn downsample_row_peak(src: &[f32], out_len: usize) -> Vec<f32> {
@@ -30,6 +46,22 @@ fn cap_panadapter_bins(row: Vec<f32>) -> Vec<f32> {
     } else {
         row
     }
+}
+
+/// Pad or peak-downsample a row to an exact bin count (texture rows must match).
+pub fn fit_panadapter_row_width(row: Vec<f32>, target: usize) -> Vec<f32> {
+    const FLOOR: f32 = -120.0;
+    let target = target.max(1);
+    if row.len() == target {
+        return row;
+    }
+    if row.len() > target {
+        return downsample_row_peak(&row, target);
+    }
+    let mut out = vec![FLOOR; target];
+    let start = (target - row.len()) / 2;
+    out[start..start + row.len()].copy_from_slice(&row);
+    out
 }
 
 /// Extract a frequency slice of an fftshifted dB row for display.
@@ -85,19 +117,29 @@ pub fn compose_panadapter_row(
     let data_span = data_span_hz.min(row_rate_hz.max(1.0));
     let extract_span = data_span.min(view_span_hz);
     let data = extract_view_window(row, row_rate_hz, extract_span, pan_offset_hz);
-    if view_span_hz <= data_span + 1.0 {
-        return cap_panadapter_bins(data.to_vec());
-    }
-    let ratio = view_span_hz / data_span;
-    let out_len = ((data.len() as f32) * ratio).round() as usize;
-    let out_len = out_len.max(data.len());
-    let mut out = vec![FLOOR; out_len];
-    let start = out_len.saturating_sub(data.len()) / 2;
-    let end = start + data.len();
-    if end <= out_len {
-        out[start..end].copy_from_slice(data);
-    }
-    cap_panadapter_bins(out)
+    let target = panadapter_output_bins(row.len(), view_span_hz, data_span_hz);
+    let composed = if view_span_hz <= data_span + 1.0 {
+        cap_panadapter_bins(data.to_vec())
+    } else {
+        let ratio = view_span_hz / data_span;
+        let out_len = target;
+        let data_width = ((out_len as f32 / ratio).round() as usize)
+            .clamp(1, data.len())
+            .min(out_len);
+        let core = if data.len() > data_width {
+            downsample_row_peak(data, data_width)
+        } else {
+            data.to_vec()
+        };
+        let mut out = vec![FLOOR; out_len];
+        let start = out_len.saturating_sub(core.len()) / 2;
+        let end = start + core.len();
+        if end <= out_len {
+            out[start..end].copy_from_slice(&core);
+        }
+        out
+    };
+    fit_panadapter_row_width(composed, target)
 }
 
 /// Full-span centered view (pan offset zero).
@@ -177,7 +219,27 @@ mod tests {
     fn extreme_zoom_out_stays_within_gpu_limit() {
         let row: Vec<f32> = vec![-70.0; 16_384];
         let wide = compose_panadapter_row(&row, 12_000.0, 700_000.0, 12_000.0, 0.0);
-        assert_eq!(wide.len(), MAX_PANADAPTER_BINS);
+        assert_eq!(wide.len(), WIDE_PANADAPTER_BINS);
+    }
+
+    #[test]
+    fn wide_overview_avoids_full_pad_allocation() {
+        let row: Vec<f32> = vec![-70.0; 2048];
+        let wide = compose_panadapter_row(&row, 12_000.0, 70_000.0, 12_000.0, 0.0);
+        assert_eq!(wide.len(), WIDE_PANADAPTER_BINS);
+        let active = wide.iter().filter(|&&v| v > -119.0).count();
+        assert!(active < WIDE_PANADAPTER_BINS / 2);
+    }
+
+    #[test]
+    fn fit_width_normalizes_mismatched_rows() {
+        let narrow = vec![-70.0; 2042];
+        let wide = vec![-70.0; 2048];
+        let a = compose_panadapter_row(&narrow, 12_000.0, 12_000.0, 12_000.0, 0.0);
+        let b = compose_panadapter_row(&wide, 12_000.0, 12_000.0, 12_000.0, 0.0);
+        let target = panadapter_output_bins(2048, 12_000.0, 12_000.0);
+        assert_eq!(fit_panadapter_row_width(a, target).len(), target);
+        assert_eq!(fit_panadapter_row_width(b, target).len(), target);
     }
 
     #[test]

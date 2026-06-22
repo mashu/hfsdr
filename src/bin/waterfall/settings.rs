@@ -67,6 +67,8 @@ pub struct AppSettings {
     pub display_auto_track: bool,
     pub show_band_overview: bool,
     pub smooth_alpha: f32,
+    /// Waterfall time averaging: 1 = none, 2 or 4 = frames per line.
+    pub waterfall_avg: u8,
     pub target_fps: u32,
     pub fft_size: usize,
     pub fft_auto: bool,
@@ -153,6 +155,7 @@ impl Default for AppSettings {
             display_auto_track: false,
             show_band_overview: false,
             smooth_alpha: 0.09,
+            waterfall_avg: 1,
             target_fps: 30,
             fft_size: 2048,
             fft_auto: true,

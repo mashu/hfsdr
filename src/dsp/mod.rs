@@ -29,4 +29,8 @@ pub use spectrum_plan::{
     auto_fft_size, bin_width_hz, spectrum_plan, spectrum_zoom_decimation, MAX_FFT_SIZE,
     TARGET_BIN_HZ, ZOOM_DECIM_THRESHOLD,
 };
-pub use view::{compose_panadapter_row, extract_passband_view, extract_view_window, spectrum_view_mapping, SpectrumViewMapping};
+pub use view::{
+    compose_panadapter_row, downsample_row_peak, extract_passband_view, extract_view_window,
+    fit_panadapter_row_width, panadapter_output_bins, spectrum_view_mapping, MAX_PANADAPTER_BINS, WIDE_PANADAPTER_BINS,
+    SpectrumViewMapping,
+};

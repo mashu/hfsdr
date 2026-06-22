@@ -14,7 +14,8 @@ use eframe::egui;
 use egui::Color32;
 use egui_extras::{Column, TableBuilder};
 use hfsdr::{
-    decimation_factor, compose_panadapter_row, kiwi_iq_half_hz, spectrum_view_mapping,
+    decimation_factor, compose_panadapter_row, fit_panadapter_row_width, kiwi_iq_half_hz,
+    panadapter_output_bins, spectrum_view_mapping,
     strongest_offset_hz, Continent,
     ContinentResolver, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, WindowKind,
@@ -30,6 +31,11 @@ use crate::controls::{
 use crate::display_levels::{estimate_levels, estimate_levels_from_rows};
 use crate::engine::{
     ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
+};
+use crate::popup::{
+    alert_banner, chip_row, configure_popup_window, ghost_button, inline_stats, list_row,
+    popup_header, popup_scroll_body, popup_section, primary_button, secondary_button,
+    segment_choice, PopupHeader,
 };
 use crate::iq_panel::{IqPanel, IqPanelCmd, IqPanelView};
 use crate::interaction::{
@@ -168,6 +174,7 @@ pub struct WaterfallApp {
     display_auto_track: bool,
     show_band_overview: bool,
     smooth_alpha: f32,
+    waterfall_avg: u8,
     waterfall_rows: usize,
     target_fps: u32,
     fft_size: usize,
@@ -271,6 +278,7 @@ impl WaterfallApp {
             display_auto_track: false,
             show_band_overview: false,
             smooth_alpha: SMOOTH_ALPHA,
+            waterfall_avg: 1,
             waterfall_rows: 0,
             target_fps: 30,
             fft_size: FFT_SIZE,
@@ -447,6 +455,7 @@ impl WaterfallApp {
             self.display_levels_initialized = false;
         }
         self.smooth_alpha = s.smooth_alpha;
+        self.waterfall_avg = normalize_waterfall_avg(s.waterfall_avg);
         self.target_fps = s.target_fps.clamp(10, 60);
         self.fft_size = s.fft_size.clamp(1024, 65_536);
         self.fft_auto = s.fft_auto;
@@ -528,6 +537,7 @@ impl WaterfallApp {
             display_auto_track: self.display_auto_track,
             show_band_overview: self.show_band_overview,
             smooth_alpha: self.smooth_alpha,
+            waterfall_avg: self.waterfall_avg,
             target_fps: self.target_fps,
             fft_size: self.fft_size,
             fft_auto: self.fft_auto,
@@ -678,14 +688,15 @@ impl WaterfallApp {
         if !new_rows.is_empty() {
             for row in new_rows {
                 let mut stored = if self.rows.len() >= WATERFALL_ROWS {
-                    self.rows.pop_back().unwrap_or_else(|| vec![0.0; row.len()])
+                    self.rows.pop_back().unwrap_or_else(|| vec![-120.0; row.len()])
                 } else {
-                    vec![0.0; row.len()]
+                    vec![-120.0; row.len()]
                 };
-                if stored.len() == row.len() {
-                    stored.copy_from_slice(&row);
-                    self.rows.push_front(stored);
+                if stored.len() != row.len() {
+                    stored.resize(row.len(), -120.0);
                 }
+                stored.copy_from_slice(&row);
+                self.rows.push_front(stored);
             }
             self.waterfall_rows = self.rows.len();
             self.textures_dirty = true;
@@ -1301,29 +1312,15 @@ impl WaterfallApp {
     fn update_texture(&mut self, ctx: &egui::Context) {
         let view = self.spectrum_view();
         let data_span = self.plot_full_span_hz();
-        let row = compose_panadapter_row(
-            &self.latest,
-            view.row_rate_hz,
-            view.view_span_hz,
-            data_span,
-            view.pan_offset_hz,
-        );
-        let w = row.len().max(1);
+        let w = panadapter_output_bins(self.latest.len(), view.view_span_hz, data_span).max(1);
         let h = WATERFALL_ROWS;
+        let avg = self.waterfall_avg.max(1) as usize;
         let mut pixels = vec![Color32::BLACK; w * h];
-        for (y, row_data) in self.rows.iter().enumerate() {
-            let row_view = compose_panadapter_row(
-                row_data,
-                view.row_rate_hz,
-                view.view_span_hz,
-                data_span,
-                view.pan_offset_hz,
-            );
+        for y in 0..h {
+            let row_view = self.waterfall_texture_row(y, &view, data_span, w, avg);
             let base = y * w;
-            for (x, &db) in row_view.iter().enumerate() {
-                if x < w {
-                    pixels[base + x] = db_to_colour(db, self.ref_db, self.range_db);
-                }
+            for (x, &db) in row_view.iter().enumerate().take(w) {
+                pixels[base + x] = db_to_colour(db, self.ref_db, self.range_db);
             }
         }
         let image = egui::ColorImage::new([w, h], pixels);
@@ -1394,35 +1391,49 @@ impl WaterfallApp {
             });
     }
 
+    fn connection_status_pill(&self) -> (String, Color32) {
+        match &self.conn_state {
+            ConnState::Streaming if self.connection_unstable() => ("UNSTABLE".to_string(), WARN),
+            ConnState::Streaming => ("STREAMING".to_string(), OK),
+            ConnState::Reconnecting { attempt, retry_in_s } => {
+                (format!("RECONNECT #{attempt} ({retry_in_s:.0}s)"), WARN)
+            }
+            ConnState::Connecting { .. } => ("CONNECTING".to_string(), WARN),
+            ConnState::Disconnected => ("OFFLINE".to_string(), MUTED),
+        }
+    }
+
     fn connection_popup(&mut self, ctx: &egui::Context) {
         if !self.show_connection_drawer {
             return;
         }
         let screen = ctx.content_rect();
-        let win_h = (screen.height() * 0.72).clamp(280.0, 520.0);
-        egui::Window::new("Connection")
-            .id(egui::Id::new("connection_popup"))
-            .collapsible(false)
-            .resizable(true)
-            .default_width(540.0)
-            .default_height(win_h)
-            .default_pos([screen.left() + 10.0, screen.top() + 34.0])
-            .max_height(win_h)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    section_heading(ui, "Connection");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Close").clicked() {
-                            self.show_connection_drawer = false;
-                        }
-                    });
-                });
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.connection_card(ui);
-                    });
+        let max_h = (screen.height() - 48.0).max(320.0);
+        let win_h = (screen.height() * 0.58).clamp(360.0, max_h);
+        let mut open = self.show_connection_drawer;
+        let (status_label, status_color) = self.connection_status_pill();
+        configure_popup_window(
+            "connection_popup",
+            [screen.left() + 12.0, screen.top() + 36.0],
+            500.0,
+            win_h,
+            max_h,
+        )
+        .show(ctx, |ui| {
+            popup_header(
+                ui,
+                PopupHeader {
+                    title: "Connection",
+                    subtitle: None,
+                    status: Some((status_label, status_color)),
+                },
+                &mut open,
+            );
+            popup_scroll_body(ui, |ui| {
+                self.connection_card(ui);
             });
+        });
+        self.show_connection_drawer = open;
     }
 
     fn iq_popup(&mut self, ctx: &egui::Context) {
@@ -1430,24 +1441,40 @@ impl WaterfallApp {
             return;
         }
         let screen = ctx.content_rect();
-        let win_h = (screen.height() * 0.55).clamp(220.0, 420.0);
-        egui::Window::new("IQ buffer")
-            .id(egui::Id::new("iq_popup"))
-            .collapsible(false)
-            .resizable(true)
-            .default_width(480.0)
-            .default_height(win_h)
-            .default_pos([screen.left() + 180.0, screen.top() + 34.0])
-            .max_height(win_h)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    section_heading(ui, "IQ buffer");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Close").clicked() {
-                            self.show_iq_drawer = false;
-                        }
-                    });
-                });
+        let win_h = 200.0;
+        let mut open = self.show_iq_drawer;
+        let subtitle = format!(
+            "{:.0}% · {:.2}s queued",
+            self.stats.iq_buffer_fill * 100.0,
+            self.stats.iq_buffer_secs,
+        );
+        let status = if self.stats.iq_recording {
+            let secs =
+                self.stats.iq_capture_samples as f32 / self.stats.sample_rate.max(1.0);
+            Some((format!("REC {secs:.0}s"), WARN))
+        } else if self.stats.iq_playback {
+            Some(("PLAYBACK".to_string(), OK))
+        } else {
+            None
+        };
+        configure_popup_window(
+            "iq_popup",
+            [screen.left() + 200.0, screen.top() + 36.0],
+            420.0,
+            win_h,
+            win_h,
+        )
+        .show(ctx, |ui| {
+            popup_header(
+                ui,
+                PopupHeader {
+                    title: "IQ I/O",
+                    subtitle: Some(&subtitle),
+                    status,
+                },
+                &mut open,
+            );
+            popup_scroll_body(ui, |ui| {
                 let streaming = matches!(self.conn_state, ConnState::Streaming);
                 let (cmds, dirty) = self.iq.show(
                     ui,
@@ -1461,6 +1488,8 @@ impl WaterfallApp {
                 }
                 self.process_iq_cmds(cmds);
             });
+        });
+        self.show_iq_drawer = open;
     }
 
     fn process_iq_cmds(&mut self, cmds: Vec<IqPanelCmd>) {
@@ -1680,289 +1709,285 @@ impl WaterfallApp {
 
     fn connection_card(&mut self, ui: &mut egui::Ui) {
         if self.connection_unstable() {
-                ui.add_space(4.0);
-                ui.colored_label(
-                    WARN,
-                    "Link slow or reconnecting — spectrum may be frozen; tuning is kept.",
-                );
-                if let Some(err) = &self.last_error {
-                    ui.label(
-                        egui::RichText::new(err)
-                            .small()
-                            .color(Color32::from_rgb(248, 113, 113)),
-                    );
-                }
-            }
-
-            ui.add_space(6.0);
-            egui::Grid::new("connect_form")
-                .num_columns(2)
-                .spacing([8.0, 6.0])
-                .show(ui, |ui| {
-                    ui.label(egui::RichText::new("Source").small().color(MUTED));
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.form_kind, SourceKind::Kiwi, "KiwiSDR");
-                        #[cfg(feature = "airspy")]
-                        ui.selectable_value(&mut self.form_kind, SourceKind::Airspy, "Airspy");
-                    });
-                    ui.end_row();
-
-                    if self.form_kind == SourceKind::Kiwi {
-                        ui.label(egui::RichText::new("Host").small().color(MUTED));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.form_host)
-                                .hint_text("kiwi.example.com")
-                                .desired_width(f32::INFINITY),
-                        );
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Port").small().color(MUTED));
-                        ui.add(egui::DragValue::new(&mut self.form_port).range(1..=65535));
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("IQ rate").small().color(MUTED));
-                        preset_combo_u32(
-                            ui,
-                            "kiwi_iq_rate",
-                            &mut self.form_kiwi.iq_rate_hz,
-                            KIWI_IQ_RATE_PRESETS,
-                            "Hz ",
-                            4_000..=30_000,
-                        );
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("IQ bandwidth").small().color(MUTED));
-                        preset_combo_u32(
-                            ui,
-                            "kiwi_bw",
-                            &mut self.form_kiwi.iq_half_bw_hz,
-                            KIWI_BW_PRESETS,
-                            "±Hz ",
-                            0..=30_000,
-                        );
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Resample").small().color(MUTED));
-                        preset_combo_u32(
-                            ui,
-                            "kiwi_resample",
-                            &mut self.form_kiwi.iq_resample_hz,
-                            KIWI_RESAMPLE_PRESETS,
-                            "Hz ",
-                            0..=48_000,
-                        );
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("LNB LO").small().color(MUTED));
-                        preset_combo_f64(
-                            ui,
-                            "kiwi_lo",
-                            &mut self.form_kiwi.freq_offset_khz,
-                            KIWI_LO_PRESETS,
-                            "kHz ",
-                            0.0..=1_000_000.0,
-                        );
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("AR out").small().color(MUTED));
-                        preset_combo_u32(
-                            ui,
-                            "kiwi_ar",
-                            &mut self.form_kiwi.ar_out_hz,
-                            KIWI_AR_OUT_PRESETS,
-                            "Hz ",
-                            8_000..=192_000,
-                        );
-                        ui.end_row();
-
-                        ui.label("");
-                        {
-                            let half = self.form_kiwi.passband_half_hz();
-                            let span = half as f32 * 2.0 / 1000.0;
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Requests ±{half} Hz IQ passband ({span:.2} kHz span) on connect"
-                                ))
-                                .small()
-                                .color(MUTED),
-                            );
-                        }
-                        ui.end_row();
-                    }
-
-                    ui.label(egui::RichText::new("RX frequency").small().color(MUTED));
-                    ui.label(
-                        egui::RichText::new(format!("{:.6} MHz", self.center_khz / 1000.0))
-                            .monospace(),
-                    );
-                    ui.end_row();
-                    ui.label("");
-                    ui.label(
-                        egui::RichText::new("Set in Operator panel (left) — band presets zoom to CW segment")
-                            .small()
-                            .color(MUTED),
-                    );
-                    ui.end_row();
-                });
-
-            let connecting = matches!(
-                self.conn_state,
-                ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
+            let detail = self.last_error.as_deref();
+            alert_banner(
+                ui,
+                "Link slow or reconnecting — spectrum may freeze; tuning is kept.",
+                detail,
             );
-            ui.horizontal(|ui| {
-                let can_connect = {
+        }
+
+        popup_section(ui, "Source", Some("Hardware or networked IQ front-end"), |ui| {
+            #[cfg(feature = "airspy")]
+            let labels = ["KiwiSDR", "Airspy"];
+            #[cfg(not(feature = "airspy"))]
+            let labels = ["KiwiSDR"];
+            let selected = match self.form_kind {
+                SourceKind::Kiwi => 0,
+                #[cfg(feature = "airspy")]
+                SourceKind::Airspy => 1,
+            };
+            if let Some(i) = segment_choice(ui, "source_kind", selected, &labels) {
+                self.form_kind = match i {
+                    0 => SourceKind::Kiwi,
                     #[cfg(feature = "airspy")]
-                    {
-                        self.form_kind == SourceKind::Airspy || !self.form_host.trim().is_empty()
-                    }
+                    _ => SourceKind::Airspy,
                     #[cfg(not(feature = "airspy"))]
-                    {
-                        !self.form_host.trim().is_empty()
-                    }
+                    _ => SourceKind::Kiwi,
                 };
-                if ui
-                    .add_enabled(can_connect && !connecting, egui::Button::new("Connect"))
-                    .clicked()
-                {
-                    self.connect_now();
-                }
-                if connecting && ui.button("Cancel").clicked() {
-                    self.engine.send(EngineCommand::Disconnect);
-                }
-                if matches!(self.conn_state, ConnState::Streaming | ConnState::Reconnecting { .. } | ConnState::Connecting { .. })
-                    && ui.button("Disconnect").clicked()
-                {
-                    self.engine.send(EngineCommand::Disconnect);
-                }
+            }
+        });
+
+        if self.form_kind == SourceKind::Kiwi {
+            popup_section(ui, "Endpoint", Some("KiwiSDR host and port"), |ui| {
+                labeled_row(ui, "Host", |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.form_host)
+                            .hint_text("kiwi.example.com")
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                labeled_row(ui, "Port", |ui| {
+                    ui.add(egui::DragValue::new(&mut self.form_port).range(1..=65535));
+                });
             });
 
-            if let Some(err) = &self.last_error {
-                if matches!(
-                    self.conn_state,
-                    ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
-                ) {
-                    ui.colored_label(WARN, err);
-                }
-            }
+            popup_section(
+                ui,
+                "Kiwi IQ",
+                Some("Sample rate, passband, and audio-rate options applied on connect"),
+                |ui| {
+                    egui::Grid::new("connect_kiwi_grid")
+                        .num_columns(2)
+                        .spacing([12.0, 10.0])
+                        .min_col_width(120.0)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("IQ rate").small().color(MUTED));
+                            preset_combo_u32(
+                                ui,
+                                "kiwi_iq_rate",
+                                &mut self.form_kiwi.iq_rate_hz,
+                                KIWI_IQ_RATE_PRESETS,
+                                "Hz ",
+                                4_000..=30_000,
+                            );
+                            ui.end_row();
 
-            if self.form_kind == SourceKind::Kiwi {
-                ui.add_space(6.0);
-                if self.kiwi_directory_rx.is_some() {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(
-                            egui::RichText::new("Loading public KiwiSDRs…")
-                                .small()
-                                .color(MUTED),
-                        );
-                    });
-                } else if !self.kiwi_nearby.is_empty() {
-                    let header = if let Some(geo) = &self.kiwi_geo {
-                        format!(
-                            "Nearby ({}, sorted by distance)",
-                            geo.country_code
-                        )
-                    } else {
-                        "Public KiwiSDRs (sorted by distance)".to_string()
-                    };
-                    ui.label(egui::RichText::new(header).small().color(MUTED));
+                            ui.label(egui::RichText::new("IQ bandwidth").small().color(MUTED));
+                            preset_combo_u32(
+                                ui,
+                                "kiwi_bw",
+                                &mut self.form_kiwi.iq_half_bw_hz,
+                                KIWI_BW_PRESETS,
+                                "±Hz ",
+                                0..=30_000,
+                            );
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("Resample").small().color(MUTED));
+                            preset_combo_u32(
+                                ui,
+                                "kiwi_resample",
+                                &mut self.form_kiwi.iq_resample_hz,
+                                KIWI_RESAMPLE_PRESETS,
+                                "Hz ",
+                                0..=48_000,
+                            );
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("LNB LO").small().color(MUTED));
+                            preset_combo_f64(
+                                ui,
+                                "kiwi_lo",
+                                &mut self.form_kiwi.freq_offset_khz,
+                                KIWI_LO_PRESETS,
+                                "kHz ",
+                                0.0..=1_000_000.0,
+                            );
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("AR out").small().color(MUTED));
+                            preset_combo_u32(
+                                ui,
+                                "kiwi_ar",
+                                &mut self.form_kiwi.ar_out_hz,
+                                KIWI_AR_OUT_PRESETS,
+                                "Hz ",
+                                8_000..=192_000,
+                            );
+                            ui.end_row();
+                        });
+                    let half = self.form_kiwi.passband_half_hz();
+                    let span = half as f32 * 2.0 / 1000.0;
                     section_hint(
                         ui,
-                        "Receivers marked FULL have no free slots — pick one with open users.",
+                        &format!("Requests ±{half} Hz IQ passband ({span:.2} kHz span) on connect"),
                     );
-                    let mut nearby = self.kiwi_nearby.clone();
-                    nearby.sort_by(|a, b| {
-                        let af = a.users >= a.users_max;
-                        let bf = b.users >= b.users_max;
-                        af.cmp(&bf)
-                            .then_with(|| a.distance_km.partial_cmp(&b.distance_km).unwrap_or(std::cmp::Ordering::Equal))
-                    });
-                    egui::ScrollArea::vertical()
-                        .max_height(160.0)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for rx in nearby {
-                                let full = rx.users >= rx.users_max;
-                                let dist = if rx.distance_km > 0.0 {
-                                    format!("{:.0} km · ", rx.distance_km)
-                                } else {
-                                    String::new()
-                                };
-                                let users = if full {
-                                    format!("FULL {}/{}", rx.users, rx.users_max)
-                                } else {
-                                    format!("{}/{} users", rx.users, rx.users_max)
-                                };
-                                let label = format!(
-                                    "{}:{} · {}{} · {}",
-                                    rx.host,
-                                    rx.port,
-                                    dist,
-                                    users,
-                                    rx.location,
-                                );
-                                let btn = egui::Button::new(
-                                    egui::RichText::new(label)
-                                        .small()
-                                        .color(if full { MUTED } else { Color32::WHITE }),
-                                );
-                                if ui
-                                    .add_enabled(!full, btn)
-                                    .on_hover_text(if full {
-                                        "All slots busy on this Kiwi"
-                                    } else {
-                                        "Connect to this receiver"
-                                    })
-                                    .clicked()
-                                {
-                                    self.form_host = rx.host;
-                                    self.form_port = rx.port;
-                                    self.connect_now();
-                                }
-                            }
-                        });
-                    if ui.small_button("Refresh list").clicked() {
-                        self.start_kiwi_directory_fetch(true);
-                    }
-                } else if let Some(err) = &self.kiwi_directory_error {
-                    ui.colored_label(WARN, err);
-                    if ui.small_button("Retry directory").clicked() {
-                        self.kiwi_directory_error = None;
-                        self.start_kiwi_directory_fetch(true);
-                    }
-                } else {
-                    ui.label(
-                        egui::RichText::new("No receivers in cache — use Refresh")
-                            .small()
-                            .color(MUTED),
-                    );
-                    if ui.small_button("Refresh list").clicked() {
-                        self.start_kiwi_directory_fetch(true);
-                    }
-                }
-            }
+                },
+            );
+        }
 
-            if !self.recent_hosts.is_empty() {
+        popup_section(
+            ui,
+            "RX frequency",
+            Some("Tune from the Operator panel on the left — band presets zoom the CW segment"),
+            |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{:.6} MHz", self.center_khz / 1000.0))
+                        .size(20.0)
+                        .strong()
+                        .monospace()
+                        .color(Color32::from_rgb(220, 228, 240)),
+                );
+            },
+        );
+
+        let connecting = matches!(
+            self.conn_state,
+            ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
+        );
+        let can_connect = {
+            #[cfg(feature = "airspy")]
+            {
+                self.form_kind == SourceKind::Airspy || !self.form_host.trim().is_empty()
+            }
+            #[cfg(not(feature = "airspy"))]
+            {
+                !self.form_host.trim().is_empty()
+            }
+        };
+        ui.horizontal(|ui| {
+            if primary_button(ui, "Connect", can_connect && !connecting).clicked() {
+                self.connect_now();
+            }
+            if connecting && secondary_button(ui, "Cancel").clicked() {
+                self.engine.send(EngineCommand::Disconnect);
+            }
+            if matches!(
+                self.conn_state,
+                ConnState::Streaming
+                    | ConnState::Reconnecting { .. }
+                    | ConnState::Connecting { .. }
+            ) && secondary_button(ui, "Disconnect").clicked()
+            {
+                self.engine.send(EngineCommand::Disconnect);
+            }
+        });
+
+        if let Some(err) = &self.last_error {
+            if matches!(
+                self.conn_state,
+                ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
+            ) {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Recent").small().color(MUTED));
-                let recents = self.recent_hosts.clone();
-                for req in recents {
-                    if ui.button(req.label()).clicked() {
-                        self.form_kind = req.kind;
-                        self.form_host = req.host.clone();
-                        self.form_port = req.port;
-                        self.form_kiwi = req.kiwi.clone();
-                        self.connect_now();
-                    }
-                }
+                alert_banner(ui, err, None);
             }
+        }
 
-            ui.add_space(6.0);
-            stat_row(ui, "Effective", format!("{:.1} kS/s", self.stats.effective_sps / 1000.0));
-            stat_row(ui, "Dropped", self.stats.dropped.to_string());
-            if let Some(rssi) = self.stats.rssi_dbm {
-                stat_row(ui, "S-meter", format!("{rssi:.1} dBm"));
-            }
+        if self.form_kind == SourceKind::Kiwi {
+            popup_section(
+                ui,
+                "Public receivers",
+                Some("Sorted by distance · FULL means no free user slots"),
+                |ui| {
+                    if self.kiwi_directory_rx.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                egui::RichText::new("Loading public KiwiSDRs…")
+                                    .small()
+                                    .color(MUTED),
+                            );
+                        });
+                    } else if !self.kiwi_nearby.is_empty() {
+                        let mut nearby = self.kiwi_nearby.clone();
+                        nearby.sort_by(|a, b| {
+                            let af = a.users >= a.users_max;
+                            let bf = b.users >= b.users_max;
+                            af.cmp(&bf).then_with(|| {
+                                a.distance_km
+                                    .partial_cmp(&b.distance_km)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                        });
+                        egui::ScrollArea::vertical()
+                            .max_height(200.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for rx in nearby {
+                                    let full = rx.users >= rx.users_max;
+                                    let dist = if rx.distance_km > 0.0 {
+                                        format!("{:.0} km", rx.distance_km)
+                                    } else {
+                                        String::new()
+                                    };
+                                    let users = if full {
+                                        format!("FULL {}/{}", rx.users, rx.users_max)
+                                    } else {
+                                        format!("{}/{} users", rx.users, rx.users_max)
+                                    };
+                                    let title = format!("{}:{}", rx.host, rx.port);
+                                    let subtitle = if dist.is_empty() {
+                                        format!("{users} · {}", rx.location)
+                                    } else {
+                                        format!("{dist} · {users} · {}", rx.location)
+                                    };
+                                    let resp = list_tile(ui, &title, Some(&subtitle), !full);
+                                    if resp.clicked() {
+                                        self.form_host = rx.host;
+                                        self.form_port = rx.port;
+                                        self.connect_now();
+                                    }
+                                    ui.add_space(4.0);
+                                }
+                            });
+                        if ghost_button(ui, "Refresh list").clicked() {
+                            self.start_kiwi_directory_fetch(true);
+                        }
+                    } else if let Some(err) = &self.kiwi_directory_error {
+                        alert_banner(ui, err, None);
+                        if ghost_button(ui, "Retry directory").clicked() {
+                            self.kiwi_directory_error = None;
+                            self.start_kiwi_directory_fetch(true);
+                        }
+                    } else {
+                        section_hint(ui, "No receivers in cache yet.");
+                        if ghost_button(ui, "Refresh list").clicked() {
+                            self.start_kiwi_directory_fetch(true);
+                        }
+                    }
+                },
+            );
+        }
+
+        if !self.recent_hosts.is_empty() {
+            popup_section(ui, "Recent", Some("One-click reconnect to previous hosts"), |ui| {
+                let labels: Vec<String> = self.recent_hosts.iter().map(|r| r.label()).collect();
+                let recents = self.recent_hosts.clone();
+                if let Some(i) = chip_row(ui, &labels) {
+                    let req = &recents[i];
+                    self.form_kind = req.kind;
+                    self.form_host = req.host.clone();
+                    self.form_port = req.port;
+                    self.form_kiwi = req.kiwi.clone();
+                    self.connect_now();
+                }
+            });
+        }
+
+        let mut stats = vec![
+            (
+                "Effective",
+                format!("{:.1} kS/s", self.stats.effective_sps / 1000.0),
+            ),
+            ("Dropped", self.stats.dropped.to_string()),
+        ];
+        if let Some(rssi) = self.stats.rssi_dbm {
+            stats.push(("S-meter", format!("{rssi:.1} dBm")));
+        }
+        popup_section(ui, "Link stats", None, |ui| {
+            stat_grid(ui, &stats);
+        });
     }
 
     fn display_section(&mut self, ui: &mut egui::Ui) {
@@ -2027,8 +2052,64 @@ impl WaterfallApp {
                 self.display_levels_initialized = true;
                 self.display_auto_track = false;
             }
-            scroll_slider_f32(ui, &mut self.smooth_alpha, 0.05..=0.45, "Smoothing");
+            scroll_slider_f32(ui, &mut self.smooth_alpha, 0.05..=0.45, "Spectrum smooth");
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Waterfall avg").small().color(MUTED));
+                for (label, n) in [("None", 1_u8), ("2×", 2), ("4×", 4)] {
+                    if ui
+                        .selectable_label(self.waterfall_avg == n, label)
+                        .on_hover_text("Time-average consecutive FFT rows in the waterfall")
+                        .clicked()
+                    {
+                        self.waterfall_avg = n;
+                        self.textures_dirty = true;
+                    }
+                }
+            });
         });
+    }
+
+    fn waterfall_texture_row(
+        &self,
+        y: usize,
+        view: &SpectrumViewMapping,
+        data_span: f32,
+        width: usize,
+        avg: usize,
+    ) -> Vec<f32> {
+        if self.rows.is_empty() {
+            return vec![-120.0; width];
+        }
+        let mut acc = vec![0.0f32; width];
+        let mut count = 0usize;
+        for k in 0..avg {
+            let Some(row_data) = self.rows.get(y.saturating_add(k)) else {
+                break;
+            };
+            let row_view = fit_panadapter_row_width(
+                compose_panadapter_row(
+                    row_data,
+                    view.row_rate_hz,
+                    view.view_span_hz,
+                    data_span,
+                    view.pan_offset_hz,
+                ),
+                width,
+            );
+            let n = row_view.len().min(width);
+            for (i, &db) in row_view.iter().take(n).enumerate() {
+                acc[i] += db;
+            }
+            count += 1;
+        }
+        if count == 0 {
+            return vec![-120.0; width];
+        }
+        let inv = 1.0 / count as f32;
+        for v in &mut acc {
+            *v *= inv;
+        }
+        acc
     }
 
     fn passband_max_hz(&self) -> f32 {
@@ -2906,8 +2987,10 @@ impl eframe::App for WaterfallApp {
         } else {
             view.pan_offset_hz
         };
-        let view_changed = (view.view_span_hz - self.last_tex_span).abs() > 1.0
-            || (pan_track - self.last_tex_pan).abs() > 1.0
+        let view_changed = (view.view_span_hz - self.last_tex_span).abs()
+            > (view.view_span_hz * 0.003).max(2.0)
+            || (pan_track - self.last_tex_pan).abs()
+                > (view.view_span_hz as f64 * 0.003).max(2.0)
             || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
         if self.textures_dirty || view_changed {
             self.update_texture(&ctx);
@@ -2965,5 +3048,13 @@ impl eframe::App for WaterfallApp {
 
     fn on_exit(&mut self) {
         self.current_settings().save();
+    }
+}
+
+fn normalize_waterfall_avg(value: u8) -> u8 {
+    match value {
+        2 => 2,
+        4 => 4,
+        _ => 1,
     }
 }

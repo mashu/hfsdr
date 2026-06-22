@@ -16,6 +16,7 @@ mod iq_panel;
 mod kiwi_directory;
 mod log;
 mod scp_fetch;
+mod popup;
 mod settings;
 mod skimmer;
 mod smooth;

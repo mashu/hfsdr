@@ -600,16 +600,33 @@ fn trace_data_rect(plot_rect: Rect, full_span_hz: f32, view_span_hz: f32) -> Rec
 fn draw_trace(painter: &Painter, rect: Rect, trace: &[f32], ref_db: f32, range_db: f32) {
     let floor = ref_db - range_db;
     let n = trace.len();
-    if n < 2 {
+    if n < 2 || rect.width() < 1.0 {
         return;
     }
 
-    let mut line_pts = Vec::with_capacity(n);
-    for (i, &db) in trace.iter().enumerate() {
-        let x = rect.left() + rect.width() * i as f32 / (n as f32 - 1.0);
-        let t = ((db - floor) / range_db).clamp(0.0, 1.0);
-        let y = rect.bottom() - rect.height() * t;
-        line_pts.push(Pos2::new(x, y));
+    // Subsample to ~1.5 px per point — drawing 8k mesh verts buys nothing on a 1k-wide plot.
+    let max_pts = ((rect.width() * 1.5).round() as usize).clamp(2, 2048);
+    let mut line_pts = Vec::with_capacity(max_pts);
+    if n <= max_pts {
+        for (i, &db) in trace.iter().enumerate() {
+            let x = rect.left() + rect.width() * i as f32 / (n as f32 - 1.0);
+            let t = ((db - floor) / range_db).clamp(0.0, 1.0);
+            let y = rect.bottom() - rect.height() * t;
+            line_pts.push(Pos2::new(x, y));
+        }
+    } else {
+        for out_i in 0..max_pts {
+            let start = out_i * n / max_pts;
+            let end = ((out_i + 1) * n / max_pts).max(start + 1).min(n);
+            let peak = trace[start..end]
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let x = rect.left() + rect.width() * out_i as f32 / (max_pts as f32 - 1.0);
+            let t = ((peak - floor) / range_db).clamp(0.0, 1.0);
+            let y = rect.bottom() - rect.height() * t;
+            line_pts.push(Pos2::new(x, y));
+        }
     }
 
     fill_under_trace(painter, rect, &line_pts);
@@ -766,5 +783,9 @@ pub fn display_trace(
         smoothed.resize(view.len(), -120.0);
     }
     crate::smooth::ema_update(smoothed, &view, smooth_alpha);
-    spatial_smooth(smoothed)
+    if smoothed.len() <= 1024 {
+        spatial_smooth(smoothed)
+    } else {
+        smoothed.to_vec()
+    }
 }
