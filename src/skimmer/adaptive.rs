@@ -2,18 +2,12 @@
 //!
 //! A sample-by-sample state machine: rectify the tone into an envelope, threshold
 //! it with an adaptive noise/peak tracker, time the mark/space runs, and classify
-//! them against a continuously-updated dot length. Marks become dits/dahs;
-//! character and word gaps flush the accumulated element string through the
-//! [`morse`](super::morse) table.
-//!
-//! This is intentionally a robust, dependency-free baseline. The [`CwDecoder`]
-//! trait lets a fancier beam-search/bigram decoder drop in later unchanged.
+//! them against a continuously-updated dot length.
 
+use super::config::DecoderParams;
 use super::decoder::{wpm_from_dot_seconds, CwDecoder};
+use super::envelope::KeyingEnvelope;
 use super::morse::decode_elements;
-
-/// Default seed speed before adaptation kicks in.
-const DEFAULT_WPM: f32 = 22.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Key {
@@ -25,9 +19,8 @@ enum Key {
 #[derive(Clone, Debug)]
 pub struct AdaptiveCwDecoder {
     sample_rate: f32,
-    env: f32,
-    peak: f32,
-    noise: f32,
+    params: DecoderParams,
+    envelope: KeyingEnvelope,
     key: Key,
     run: usize,
     dot_samples: f32,
@@ -39,67 +32,46 @@ pub struct AdaptiveCwDecoder {
 
 impl Default for AdaptiveCwDecoder {
     fn default() -> Self {
-        Self::new(12_000.0)
+        Self::with_params(12_000.0, DecoderParams::default())
     }
 }
 
 impl AdaptiveCwDecoder {
     pub fn new(sample_rate: f32) -> Self {
-        let mut d = Self {
-            sample_rate: sample_rate.max(1.0),
-            env: 0.0,
-            peak: 0.0,
-            noise: 0.0,
+        Self::with_params(sample_rate, DecoderParams::default())
+    }
+
+    pub fn with_params(sample_rate: f32, params: DecoderParams) -> Self {
+        let params = params.clamped();
+        let sample_rate = sample_rate.max(1.0);
+        let dot_samples = dot_length(sample_rate, params.initial_wpm);
+        Self {
+            sample_rate,
+            params,
+            envelope: KeyingEnvelope::new(params.envelope),
             key: Key::Up,
             run: 0,
-            dot_samples: 0.0,
+            dot_samples,
             symbol: String::new(),
             space_phase: 2,
             ends_with_space: true,
             emitted_any: false,
-        };
-        d.dot_samples = d.seed_dot();
-        d
-    }
-
-    fn seed_dot(&self) -> f32 {
-        (1.2 / DEFAULT_WPM) * self.sample_rate
+        }
     }
 
     fn clamp_dot(&self, dot: f32) -> f32 {
-        // ~6..60 WPM.
         dot.clamp(0.02 * self.sample_rate, 0.20 * self.sample_rate)
     }
 
     fn process_sample(&mut self, x: f32, out: &mut String) {
-        let inst = x.abs();
-        // Rectify the BFO tone into an envelope (fast attack, slower release).
-        let a = if inst > self.env { 0.05 } else { 0.01 };
-        self.env += a * (inst - self.env);
+        let step = self.envelope.update(x);
 
-        // Track on/off levels.
-        if self.env > self.peak {
-            self.peak = self.env;
-        } else {
-            self.peak *= 0.99995;
-        }
-        if self.env < self.noise {
-            self.noise += 0.02 * (self.env - self.noise);
-        } else {
-            self.noise += 0.0002 * (self.env - self.noise);
-        }
-
-        let span = self.peak - self.noise;
-        let signal_present = span > 0.02 * self.peak.max(1e-6) && self.peak > 1e-5;
-        let thr_high = self.noise + 0.6 * span;
-        let thr_low = self.noise + 0.4 * span;
-
-        let want = if !signal_present {
+        let want = if !step.signal_present {
             Key::Up
         } else {
             match self.key {
-                Key::Up if self.env > thr_high => Key::Down,
-                Key::Down if self.env < thr_low => Key::Up,
+                Key::Up if step.env > step.thr_high => Key::Down,
+                Key::Down if step.env < step.thr_low => Key::Up,
                 k => k,
             }
         };
@@ -123,7 +95,7 @@ impl AdaptiveCwDecoder {
     fn end_mark(&mut self) {
         let run = self.run as f32;
         if run < 0.35 * self.dot_samples {
-            return; // ignore noise spike
+            return;
         }
         if run < 2.0 * self.dot_samples {
             self.symbol.push('.');
@@ -161,6 +133,10 @@ impl AdaptiveCwDecoder {
     }
 }
 
+fn dot_length(sample_rate: f32, wpm: f32) -> f32 {
+    (1.2 / wpm.max(1.0)) * sample_rate
+}
+
 impl CwDecoder for AdaptiveCwDecoder {
     fn push_audio(&mut self, audio: &[f32], sample_rate: f32) -> String {
         if (sample_rate - self.sample_rate).abs() > 1.0 && sample_rate > 0.0 {
@@ -179,8 +155,7 @@ impl CwDecoder for AdaptiveCwDecoder {
     }
 
     fn reset(&mut self) {
-        let sr = self.sample_rate;
-        *self = Self::new(sr);
+        *self = Self::with_params(self.sample_rate, self.params);
     }
 }
 
@@ -190,7 +165,6 @@ mod tests {
     use crate::skimmer::morse::encode_char;
     use std::f32::consts::TAU;
 
-    /// Render text as a keyed BFO tone at `wpm`.
     fn keyed_tone(text: &str, wpm: f32, sample_rate: f32, pitch: f32) -> Vec<f32> {
         let dot = (1.2 / wpm * sample_rate) as usize;
         let mut samples = Vec::new();
@@ -201,7 +175,6 @@ mod tests {
                 out.push(if on { phase.sin() } else { 0.0 });
             }
         };
-        // lead-in silence so the tracker settles
         push(false, dot * 8, &mut phase, &mut samples);
         for (wi, word) in text.split(' ').enumerate() {
             if wi > 0 {

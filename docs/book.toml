@@ -1,0 +1,20 @@
+[book]
+title = "hfsdr documentation"
+authors = ["Mateusz Kaduk (SO5KM)"]
+description = "HF SDR / CW panadapter — architecture, filters, skimmer (see docs/ mdBook)"
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/mashu/hfsdr"
+edit-url-template = "https://github.com/mashu/hfsdr/edit/main/docs/{path}"
+
+[output.html.playground]
+editable = false

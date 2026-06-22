@@ -16,7 +16,7 @@ use egui_extras::{Column, TableBuilder};
 use hfsdr::{
     decimation_factor, extract_view_window, spectrum_view_mapping, strongest_offset_hz, Continent,
     ContinentResolver, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
-    SpotKind, SpotSort, WindowKind, MAX_NOTCHES,
+    SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, WindowKind, MAX_NOTCHES,
 };
 
 use crate::audio::AudioOutput;
@@ -118,10 +118,7 @@ pub struct WaterfallApp {
     volume: f32,
 
     skimmer_enabled: bool,
-    skimmer_min_snr_db: f32,
-    skimmer_max_channels: usize,
-    skimmer_bucket_hz: f32,
-    skimmer_min_separation_bins: usize,
+    skimmer: SkimmerConfig,
     skimmer_channels: usize,
     skimmer_spots: Vec<Spot>,
     spot_sort: SpotSort,
@@ -133,7 +130,6 @@ pub struct WaterfallApp {
     spot_max_age_secs: f32,
     spot_callsign_filter: String,
     spot_label_limit: usize,
-    scp_require: bool,
     scp_notice: Option<String>,
     scp_download_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
     filter_wide: bool,
@@ -207,10 +203,7 @@ impl WaterfallApp {
             audio_enabled: true,
             volume: 1.0,
             skimmer_enabled: false,
-            skimmer_min_snr_db: 14.0,
-            skimmer_max_channels: 24,
-            skimmer_bucket_hz: 80.0,
-            skimmer_min_separation_bins: 6,
+            skimmer: SkimmerConfig::default(),
             skimmer_channels: 0,
             skimmer_spots: Vec::new(),
             spot_sort: SpotSort::SnrDesc,
@@ -222,7 +215,6 @@ impl WaterfallApp {
             spot_max_age_secs: 90.0,
             spot_callsign_filter: String::new(),
             spot_label_limit: 40,
-            scp_require: true,
             scp_notice: None,
             scp_download_rx: None,
             filter_wide: false,
@@ -317,17 +309,13 @@ impl WaterfallApp {
         self.volume = s.volume;
 
         self.skimmer_enabled = s.skimmer_enabled;
-        self.skimmer_min_snr_db = s.skimmer_min_snr_db;
-        self.skimmer_max_channels = s.skimmer_max_channels.max(1);
-        self.skimmer_bucket_hz = s.skimmer_bucket_hz.clamp(20.0, 200.0);
-        self.skimmer_min_separation_bins = s.skimmer_min_separation_bins.clamp(1, 32);
+        self.skimmer = skimmer_config_from_settings(s);
         self.min_spot_snr = s.min_spot_snr;
         self.spot_cq_only = s.spot_cq_only;
         self.spot_hide_heard_labels = s.spot_hide_heard_labels;
         self.spot_max_age_secs = s.spot_max_age_secs.max(0.0);
         self.spot_callsign_filter = s.spot_callsign_filter.clone();
         self.spot_label_limit = s.spot_label_limit.clamp(8, 80);
-        self.scp_require = s.scp_require;
         self.spot_sort = spot_sort_from_u8(s.spot_sort);
         self.continent_filter = s.continent_filter;
         self.show_continents = s.show_continents;
@@ -390,17 +378,27 @@ impl WaterfallApp {
             audio_enabled: self.audio_enabled,
             volume: self.volume,
             skimmer_enabled: self.skimmer_enabled,
-            skimmer_min_snr_db: self.skimmer_min_snr_db,
-            skimmer_max_channels: self.skimmer_max_channels,
-            skimmer_bucket_hz: self.skimmer_bucket_hz,
-            skimmer_min_separation_bins: self.skimmer_min_separation_bins,
+            skimmer_min_snr_db: self.skimmer.min_snr_db,
+            skimmer_max_channels: self.skimmer.max_channels,
+            skimmer_bucket_hz: self.skimmer.bucket_hz,
+            skimmer_min_separation_bins: self.skimmer.min_separation_bins,
+            skimmer_decoder: skimmer_decoder_to_u8(self.skimmer.decoder),
+            skimmer_beam_width: self.skimmer.decoder_params.beam_width,
+            skimmer_lpf_cutoff_hz: self.skimmer.lpf_cutoff_hz,
+            skimmer_target_audio_rate_hz: self.skimmer.target_audio_rate_hz,
+            skimmer_initial_wpm: self.skimmer.decoder_params.initial_wpm,
+            skimmer_thr_low: self.skimmer.decoder_params.envelope.thr_low,
+            skimmer_thr_high: self.skimmer.decoder_params.envelope.thr_high,
+            skimmer_channel_timeout_secs: self.skimmer.channel_timeout_secs,
+            skimmer_store_max_age_secs: self.skimmer.spot_store_max_age_secs,
+            skimmer_max_decode_chars: self.skimmer.decoder_params.max_text_chars,
             min_spot_snr: self.min_spot_snr,
             spot_cq_only: self.spot_cq_only,
             spot_hide_heard_labels: self.spot_hide_heard_labels,
             spot_max_age_secs: self.spot_max_age_secs,
             spot_callsign_filter: self.spot_callsign_filter.clone(),
             spot_label_limit: self.spot_label_limit,
-            scp_require: self.scp_require,
+            scp_require: self.skimmer.require_scp,
             spot_sort: spot_sort_to_u8(self.spot_sort),
             continent_filter: self.continent_filter,
             show_continents: self.show_continents,
@@ -434,16 +432,13 @@ impl WaterfallApp {
         self.cw.listen_offset_hz = self.listen_offset_hz() as f32;
         self.plot_view.clamp_pan(self.sample_rate);
         let view = self.spectrum_view();
+        self.skimmer = self.skimmer.clone().clamped();
         self.engine.set_params(EngineParams {
             cw: self.cw.clone(),
             audio_enabled: self.audio_enabled,
             volume: self.volume,
             skimmer_enabled: self.skimmer_enabled,
-            skimmer_min_snr_db: self.skimmer_min_snr_db,
-            skimmer_max_channels: self.skimmer_max_channels,
-            skimmer_bucket_hz: self.skimmer_bucket_hz,
-            skimmer_min_separation_bins: self.skimmer_min_separation_bins,
-            scp_require: self.scp_require,
+            skimmer: self.skimmer.clone(),
             fft_size: self.fft_size,
             fft_auto: self.fft_auto,
             view_span_hz: view.view_span_hz,
@@ -679,7 +674,7 @@ impl WaterfallApp {
             center_hz,
             &SpotLabelConfig {
                 hide_heard: self.spot_hide_heard_labels,
-                bucket_hz: self.skimmer_bucket_hz,
+                bucket_hz: self.skimmer.bucket_hz,
                 label_limit: self.spot_label_limit,
             },
         )
@@ -1493,7 +1488,117 @@ impl WaterfallApp {
             return;
         }
 
-        collapsible_section(ui, "spots", "Spots", true, |ui| {
+        collapsible_section(ui, "skim-decoder", "Decoder & channel DSP", true, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Algorithm").small().color(MUTED));
+                if ui
+                    .selectable_label(
+                        self.skimmer.decoder == SkimmerDecoderKind::Bigram,
+                        "Bigram beam",
+                    )
+                    .clicked()
+                {
+                    self.skimmer.decoder = SkimmerDecoderKind::Bigram;
+                }
+                if ui
+                    .selectable_label(
+                        self.skimmer.decoder == SkimmerDecoderKind::Adaptive,
+                        "Adaptive",
+                    )
+                    .clicked()
+                {
+                    self.skimmer.decoder = SkimmerDecoderKind::Adaptive;
+                }
+            });
+            section_hint(
+                ui,
+                "Bigram: best copy on pileups · Adaptive: lighter CPU",
+            );
+            scroll_slider_f32(ui, &mut self.skimmer.min_snr_db, 6.0..=30.0, "Peak min SNR");
+            scroll_slider_f32(ui, &mut self.skimmer.bucket_hz, 20.0..=200.0, "Bucket Hz");
+            let mut sep = self.skimmer.min_separation_bins as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Peak separation").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut sep).range(1..=32).speed(1));
+                ui.label(egui::RichText::new("bins").small().color(MUTED));
+            });
+            self.skimmer.min_separation_bins = sep as usize;
+            let mut max_ch = self.skimmer.max_channels as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Max decoders").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut max_ch).range(4..=64).speed(1));
+            });
+            self.skimmer.max_channels = max_ch as usize;
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer.lpf_cutoff_hz,
+                40.0..=800.0,
+                "Channel LPF Hz",
+            );
+            scroll_slider_log_f32(
+                ui,
+                &mut self.skimmer.target_audio_rate_hz,
+                4_000.0..=48_000.0,
+                "Target audio rate",
+            );
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer.decoder_params.initial_wpm,
+                8.0..=60.0,
+                "Initial WPM",
+            );
+            if self.skimmer.decoder == SkimmerDecoderKind::Bigram {
+                let mut beam = self.skimmer.decoder_params.beam_width as i32;
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Beam width").small().color(MUTED));
+                    ui.add(egui::DragValue::new(&mut beam).range(1..=64).speed(1));
+                });
+                self.skimmer.decoder_params.beam_width = beam as usize;
+            }
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer.decoder_params.envelope.thr_low,
+                0.05..=0.9,
+                "Key thr low",
+            );
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer.decoder_params.envelope.thr_high,
+                0.1..=0.99,
+                "Key thr high",
+            );
+            if self.skimmer.decoder_params.envelope.thr_high
+                <= self.skimmer.decoder_params.envelope.thr_low
+            {
+                self.skimmer.decoder_params.envelope.thr_high =
+                    self.skimmer.decoder_params.envelope.thr_low + 0.05;
+            }
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer.channel_timeout_secs,
+                1.0..=120.0,
+                "Channel timeout (s)",
+            );
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer.spot_store_max_age_secs,
+                0.0..=600.0,
+                "Store max age (s, 0=keep)",
+            );
+            let mut max_txt = self.skimmer.decoder_params.max_text_chars as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Max decode chars").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut max_txt).range(16..=256).speed(1));
+            });
+            self.skimmer.decoder_params.max_text_chars = max_txt as usize;
+            toggle(
+                ui,
+                &mut self.skimmer.require_scp,
+                "Require MASTER.SCP match",
+            );
+        });
+
+        collapsible_section(ui, "spots", "Spot display", true, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Clear spots").clicked() {
                     self.clear_spots();
@@ -1505,21 +1610,6 @@ impl WaterfallApp {
                         .color(MUTED),
                 );
             });
-            scroll_slider_f32(ui, &mut self.skimmer_min_snr_db, 6.0..=30.0, "Peak min SNR");
-            scroll_slider_f32(ui, &mut self.skimmer_bucket_hz, 20.0..=200.0, "Bucket Hz");
-            let mut sep = self.skimmer_min_separation_bins as i32;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Peak separation").small().color(MUTED));
-                ui.add(egui::DragValue::new(&mut sep).range(1..=32).speed(1));
-                ui.label(egui::RichText::new("bins").small().color(MUTED));
-            });
-            self.skimmer_min_separation_bins = sep as usize;
-            let mut max_ch = self.skimmer_max_channels as i32;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Max decoders").small().color(MUTED));
-                ui.add(egui::DragValue::new(&mut max_ch).range(4..=64).speed(1));
-            });
-            self.skimmer_max_channels = max_ch as usize;
             scroll_slider_f32(ui, &mut self.min_spot_snr, 0.0..=40.0, "Table min SNR");
             scroll_slider_f32(ui, &mut self.spot_max_age_secs, 0.0..=300.0, "Max age (s, 0=all)");
             let mut label_lim = self.spot_label_limit as i32;
@@ -1538,11 +1628,6 @@ impl WaterfallApp {
             });
             toggle(ui, &mut self.spot_cq_only, "CQ only");
             toggle(ui, &mut self.spot_hide_heard_labels, "Hide unconfirmed on plot");
-            toggle(
-                ui,
-                &mut self.scp_require,
-                "Require MASTER.SCP match",
-            );
             ui.checkbox(&mut self.continent_filter, "Filter by continent");
             if self.continent_filter {
                 ui.horizontal_wrapped(|ui| {
@@ -1798,6 +1883,47 @@ fn spot_sort_from_u8(v: u8) -> SpotSort {
         3 => SpotSort::Callsign,
         _ => SpotSort::SnrDesc,
     }
+}
+
+fn skimmer_decoder_to_u8(d: SkimmerDecoderKind) -> u8 {
+    match d {
+        SkimmerDecoderKind::Bigram => 0,
+        SkimmerDecoderKind::Adaptive => 1,
+    }
+}
+
+fn skimmer_decoder_from_u8(v: u8) -> SkimmerDecoderKind {
+    match v {
+        1 => SkimmerDecoderKind::Adaptive,
+        _ => SkimmerDecoderKind::Bigram,
+    }
+}
+
+fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
+    use hfsdr::{DecoderParams, EnvelopeSettings};
+    SkimmerConfig {
+        bucket_hz: s.skimmer_bucket_hz,
+        min_snr_db: s.skimmer_min_snr_db,
+        min_separation_bins: s.skimmer_min_separation_bins,
+        max_channels: s.skimmer_max_channels.max(1),
+        channel_timeout_secs: s.skimmer_channel_timeout_secs,
+        spot_store_max_age_secs: s.skimmer_store_max_age_secs,
+        source_label: "rx".to_string(),
+        require_scp: s.scp_require,
+        decoder: skimmer_decoder_from_u8(s.skimmer_decoder),
+        lpf_cutoff_hz: s.skimmer_lpf_cutoff_hz,
+        target_audio_rate_hz: s.skimmer_target_audio_rate_hz,
+        decoder_params: DecoderParams {
+            initial_wpm: s.skimmer_initial_wpm,
+            beam_width: s.skimmer_beam_width.max(1),
+            envelope: EnvelopeSettings {
+                thr_low: s.skimmer_thr_low,
+                thr_high: s.skimmer_thr_high,
+            },
+            max_text_chars: s.skimmer_max_decode_chars.max(16),
+        },
+    }
+    .clamped()
 }
 
 

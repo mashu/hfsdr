@@ -1,57 +1,18 @@
 //! In-band skimmer engine: a peak-driven bank of narrowband CW decoders.
-//!
-//! Given a spectrum row (to find signals) and the matching IQ block (to demod
-//! them), the engine spins a decoder up per peak, decodes every signal across
-//! the span, validates callsigns/CQ, and folds results into a [`SpotStore`].
-//! Decoders retire when their peak vanishes.
-//!
-//! Each channel uses a cheap NCO + decimator + 2-pole complex lowpass so a
-//! whole bank stays affordable; the per-channel envelope drives
-//! [`AdaptiveCwDecoder`]. Heavier matched filtering lives in the listen chain
-//! ([`crate::dsp::cw`]); the skimmer favours breadth over per-signal fidelity.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::source::Complex32;
 
+use super::adaptive::AdaptiveCwDecoder;
 use super::bigram::BigramCwDecoder;
+use super::config::{DecoderParams, SkimmerConfig, SkimmerDecoderKind};
 use super::decoder::CwDecoder;
 use super::patterns::analyze;
 use super::peaks::detect_peaks;
 use super::scp::MasterScp;
 use super::spots::{SpotKind, SpotStore};
-
-const MAX_TEXT: usize = 64;
-
-/// Configuration for the skimmer bank.
-#[derive(Clone, Debug)]
-pub struct SkimmerConfig {
-    pub bucket_hz: f32,
-    pub min_snr_db: f32,
-    pub min_separation_bins: usize,
-    pub max_channels: usize,
-    pub channel_timeout: Duration,
-    pub spot_max_age: Duration,
-    pub source_label: String,
-    /// When true and SCP is loaded, only MASTER.SCP-validated calls become spots.
-    pub require_scp: bool,
-}
-
-impl Default for SkimmerConfig {
-    fn default() -> Self {
-        Self {
-            bucket_hz: 80.0,
-            min_snr_db: 14.0,
-            min_separation_bins: 6,
-            max_channels: 24,
-            channel_timeout: Duration::from_secs(8),
-            spot_max_age: Duration::from_secs(120),
-            source_label: "rx".to_string(),
-            require_scp: true,
-        }
-    }
-}
 
 /// Cheap 2-pole complex lowpass for channel isolation.
 #[derive(Clone, Copy, Debug)]
@@ -80,6 +41,38 @@ impl ComplexLowpass {
     }
 }
 
+enum ChannelDecoder {
+    Adaptive(AdaptiveCwDecoder),
+    Bigram(BigramCwDecoder),
+}
+
+impl ChannelDecoder {
+    fn new(kind: SkimmerDecoderKind, audio_rate: f32, params: DecoderParams) -> Self {
+        match kind {
+            SkimmerDecoderKind::Adaptive => {
+                Self::Adaptive(AdaptiveCwDecoder::with_params(audio_rate, params))
+            }
+            SkimmerDecoderKind::Bigram => {
+                Self::Bigram(BigramCwDecoder::with_params(audio_rate, params))
+            }
+        }
+    }
+
+    fn push_audio(&mut self, audio: &[f32], sample_rate: f32) -> String {
+        match self {
+            Self::Adaptive(d) => d.push_audio(audio, sample_rate),
+            Self::Bigram(d) => d.push_audio(audio, sample_rate),
+        }
+    }
+
+    fn wpm(&self) -> f32 {
+        match self {
+            Self::Adaptive(d) => d.wpm(),
+            Self::Bigram(d) => d.wpm(),
+        }
+    }
+}
+
 struct DecoderChannel {
     offset_hz: f32,
     phase: f32,
@@ -87,7 +80,7 @@ struct DecoderChannel {
     decim_counter: usize,
     filter: ComplexLowpass,
     audio_rate: f32,
-    decoder: BigramCwDecoder,
+    decoder: ChannelDecoder,
     audio: Vec<f32>,
     text: String,
     last_seen: Instant,
@@ -95,17 +88,18 @@ struct DecoderChannel {
 }
 
 impl DecoderChannel {
-    fn new(offset_hz: f32, iq_rate: f32, snr_db: f32) -> Self {
-        let decim_factor = (iq_rate / 12_000.0).round().clamp(1.0, 256.0) as usize;
+    fn new(offset_hz: f32, iq_rate: f32, snr_db: f32, config: &SkimmerConfig) -> Self {
+        let target = config.target_audio_rate_hz.max(1_000.0);
+        let decim_factor = (iq_rate / target).round().clamp(1.0, 256.0) as usize;
         let audio_rate = iq_rate / decim_factor as f32;
         Self {
             offset_hz,
             phase: 0.0,
             decim_factor,
             decim_counter: 0,
-            filter: ComplexLowpass::new(audio_rate, 150.0),
+            filter: ComplexLowpass::new(audio_rate, config.lpf_cutoff_hz),
             audio_rate,
-            decoder: BigramCwDecoder::new(audio_rate),
+            decoder: ChannelDecoder::new(config.decoder, audio_rate, config.decoder_params),
             audio: Vec::new(),
             text: String::new(),
             last_seen: Instant::now(),
@@ -113,7 +107,6 @@ impl DecoderChannel {
         }
     }
 
-    /// Demodulate the block into the channel's envelope, decode, return new text.
     fn process(&mut self, iq: &[Complex32], iq_rate: f32) -> String {
         self.audio.clear();
         let inc = std::f32::consts::TAU * self.offset_hz / iq_rate;
@@ -151,7 +144,7 @@ pub struct Skimmer {
 impl Skimmer {
     pub fn new(config: SkimmerConfig) -> Self {
         Self {
-            config,
+            config: config.clamped(),
             scp: MasterScp::discover(),
             channels: HashMap::new(),
             store: SpotStore::new(),
@@ -169,6 +162,10 @@ impl Skimmer {
     }
 
     pub fn set_config(&mut self, config: SkimmerConfig) {
+        let config = config.clamped();
+        if self.config.channel_dsp_changed(&config) {
+            self.channels.clear();
+        }
         self.config = config;
     }
 
@@ -210,10 +207,6 @@ impl Skimmer {
         (offset_hz / self.config.bucket_hz).round() as i64
     }
 
-    /// Run one block: `spectrum` (fftshifted dB) finds peaks, `iq` feeds decoders.
-    ///
-    /// `spectrum_rate` is the FFT row's sample rate (may differ from `iq_rate` when zoom-decimated).
-    /// `spectrum_pan_hz` is the mix-down offset applied before that FFT (0 when full-span).
     pub fn process(
         &mut self,
         iq: &[Complex32],
@@ -245,21 +238,24 @@ impl Skimmer {
                 ch.last_seen = Instant::now();
                 ch.snr_db = p.snr_db;
             } else if self.channels.len() < self.config.max_channels {
-                self.channels
-                    .insert(key, DecoderChannel::new(offset_hz, iq_rate, p.snr_db));
+                self.channels.insert(
+                    key,
+                    DecoderChannel::new(offset_hz, iq_rate, p.snr_db, &self.config),
+                );
             }
         }
 
         let center = self.center_hz;
         let label = self.config.source_label.clone();
+        let max_chars = self.config.decoder_params.max_text_chars;
         for ch in self.channels.values_mut() {
             let delta = ch.process(iq, iq_rate);
             if delta.is_empty() {
                 continue;
             }
             ch.text.push_str(&delta);
-            if ch.text.len() > MAX_TEXT {
-                let cut = ch.text.len() - MAX_TEXT;
+            if ch.text.len() > max_chars {
+                let cut = ch.text.len() - max_chars;
                 ch.text.drain(..cut);
             }
             if let Some(m) = analyze(
@@ -277,10 +273,10 @@ impl Skimmer {
             }
         }
 
-        let timeout = self.config.channel_timeout;
+        let timeout = self.config.channel_timeout();
         self.channels
             .retain(|_, ch| ch.last_seen.elapsed() <= timeout);
-        self.store.prune(self.config.spot_max_age);
+        self.store.prune(self.config.spot_store_max_age());
     }
 }
 
@@ -346,5 +342,22 @@ mod tests {
             sk.process(chunk, rate, &spectrum, rate, 0.0, 7_030_000.0);
         }
         assert!(!sk.store().is_empty(), "no spot produced");
+    }
+
+    #[test]
+    fn adaptive_decoder_produces_spot() {
+        let rate = 12_000.0;
+        let offset = 1_000.0;
+        let iq = keyed_iq("CQ", 25.0, rate, offset);
+        let spectrum = spectrum_with_peak(offset, rate, 2048);
+        let mut sk = Skimmer::new(SkimmerConfig {
+            decoder: SkimmerDecoderKind::Adaptive,
+            require_scp: false,
+            ..SkimmerConfig::default()
+        });
+        for chunk in iq.chunks(1024) {
+            sk.process(chunk, rate, &spectrum, rate, 0.0, 7_030_000.0);
+        }
+        assert!(!sk.store().is_empty(), "adaptive decoder produced no spot");
     }
 }

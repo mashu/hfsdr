@@ -1,4 +1,10 @@
 //! DSP building blocks for the panadapter and CW receiver paths.
+//!
+//! - **Spectrum:** [`SpectrumAnalyzer`], [`SpectrumFrontEnd`], [`spectrum_plan`].
+//! - **CW listen:** [`CwChannel`], [`CwChannelSettings`], and submodules under `cw/`.
+//! - **View:** [`extract_view_window`] maps FFT bins to zoom/pan.
+//!
+//! See the mdBook chapters *Spectrum and waterfall* and *CW receive chain* in `docs/`.
 
 mod audio;
 mod biquad;

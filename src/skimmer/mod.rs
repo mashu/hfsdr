@@ -1,16 +1,11 @@
-//! In-band CW skimmer scaffolding (build-order item 3) and shared spectral tools.
-//!
-//! Implemented today:
-//! - [`peaks`] — peak picking + noise-floor/SNR estimation (also drives the
-//!   receiver's zero-beat and pitch-lock features).
-//! - [`spots`] — the spot store / contest dashboard model, with per-source SNR.
-//! - [`scp`] — MASTER.SCP callsign dictionary (super check partial).
-//! - [`decoder`] — the [`CwDecoder`] trait, the seam for the decoder bank.
+//! In-band CW skimmer scaffolding and shared spectral tools.
 
 pub mod adaptive;
 pub mod bigram;
+pub mod config;
 pub mod decoder;
 pub mod engine;
+pub mod envelope;
 pub mod morse;
 pub mod patterns;
 pub mod peaks;
@@ -19,8 +14,11 @@ pub mod spots;
 
 pub use adaptive::AdaptiveCwDecoder;
 pub use bigram::BigramCwDecoder;
+pub use config::{
+    DecoderParams, EnvelopeSettings, SkimmerConfig, SkimmerDecoderKind,
+};
 pub use decoder::{dot_seconds_from_wpm, wpm_from_dot_seconds, CwDecoder};
-pub use engine::{Skimmer, SkimmerConfig};
+pub use engine::Skimmer;
 pub use morse::{decode_elements, encode_char};
 pub use patterns::{analyze, looks_like_callsign, PatternMatch};
 pub use scp::{MasterScp, MASTER_SCP_URL};

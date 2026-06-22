@@ -3,6 +3,12 @@ name = "hfsdr"
 version = "0.1.0"
 edition = "2021"
 description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, KiwiSDR)"
+license = "MIT"
+authors = ["Mateusz Kaduk (SO5KM)"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [build-dependencies]
 pkg-config = "0.3"

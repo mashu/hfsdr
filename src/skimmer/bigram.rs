@@ -1,15 +1,9 @@
 //! Beam-search CW decoder with a callsign-oriented bigram language model.
-//!
-//! Each hypothesis tracks its own timing estimate (dot length) and morse
-//! element string. On ambiguous mark lengths the beam branches; after each
-//! character is flushed, hypotheses are rescored with digram log-probabilities
-//! tuned for amateur callsigns and contest traffic, then pruned to a fixed width.
 
+use super::config::DecoderParams;
 use super::decoder::{wpm_from_dot_seconds, CwDecoder};
+use super::envelope::KeyingEnvelope;
 use super::morse::decode_elements;
-
-const BEAM_WIDTH: usize = 12;
-const DEFAULT_WPM: f32 = 22.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Key {
@@ -29,8 +23,8 @@ struct Hypothesis {
 }
 
 impl Hypothesis {
-    fn new(sample_rate: f32) -> Self {
-        let dot = (1.2 / DEFAULT_WPM) * sample_rate;
+    fn new(sample_rate: f32, initial_wpm: f32) -> Self {
+        let dot = (1.2 / initial_wpm.max(1.0)) * sample_rate;
         Self {
             dot_samples: dot,
             symbol: String::new(),
@@ -47,51 +41,12 @@ impl Hypothesis {
     }
 }
 
-/// Shared envelope tracker feeding all beam hypotheses.
-#[derive(Clone, Debug)]
-struct Envelope {
-    env: f32,
-    peak: f32,
-    noise: f32,
-}
-
-impl Default for Envelope {
-    fn default() -> Self {
-        Self {
-            env: 0.0,
-            peak: 0.0,
-            noise: 0.0,
-        }
-    }
-}
-
-impl Envelope {
-    fn update(&mut self, x: f32) -> (f32, f32, f32) {
-        let inst = x.abs();
-        let a = if inst > self.env { 0.05 } else { 0.01 };
-        self.env += a * (inst - self.env);
-        if self.env > self.peak {
-            self.peak = self.env;
-        } else {
-            self.peak *= 0.99995;
-        }
-        if self.env < self.noise {
-            self.noise += 0.02 * (self.env - self.noise);
-        } else {
-            self.noise += 0.0002 * (self.env - self.noise);
-        }
-        let span = self.peak - self.noise;
-        let thr_high = self.noise + 0.6 * span;
-        let thr_low = self.noise + 0.4 * span;
-        (span, thr_high, thr_low)
-    }
-}
-
 /// Beam-search decoder with callsign-biased bigram scoring.
 #[derive(Clone, Debug)]
 pub struct BigramCwDecoder {
     sample_rate: f32,
-    envelope: Envelope,
+    params: DecoderParams,
+    envelope: KeyingEnvelope,
     key: Key,
     run: usize,
     beams: Vec<Hypothesis>,
@@ -100,19 +55,26 @@ pub struct BigramCwDecoder {
 
 impl Default for BigramCwDecoder {
     fn default() -> Self {
-        Self::new(12_000.0)
+        Self::with_params(12_000.0, DecoderParams::default())
     }
 }
 
 impl BigramCwDecoder {
     pub fn new(sample_rate: f32) -> Self {
+        Self::with_params(sample_rate, DecoderParams::default())
+    }
+
+    pub fn with_params(sample_rate: f32, params: DecoderParams) -> Self {
+        let params = params.clamped();
+        let sample_rate = sample_rate.max(1.0);
         Self {
-            sample_rate: sample_rate.max(1.0),
-            envelope: Envelope::default(),
+            sample_rate,
+            envelope: KeyingEnvelope::new(params.envelope),
             key: Key::Up,
             run: 0,
-            beams: vec![Hypothesis::new(sample_rate.max(1.0))],
+            beams: vec![Hypothesis::new(sample_rate, params.initial_wpm)],
             emitted_len: 0,
+            params,
         }
     }
 
@@ -134,15 +96,14 @@ impl BigramCwDecoder {
     }
 
     fn process_sample(&mut self, x: f32) {
-        let (span, thr_high, thr_low) = self.envelope.update(x);
-        let signal_present = span > 0.02 * self.envelope.peak.max(1e-6) && self.envelope.peak > 1e-5;
+        let step = self.envelope.update(x);
 
-        let want = if !signal_present {
+        let want = if !step.signal_present {
             Key::Up
         } else {
             match self.key {
-                Key::Up if self.env_above(thr_high) => Key::Down,
-                Key::Down if self.env_below(thr_low) => Key::Up,
+                Key::Up if step.env > step.thr_high => Key::Down,
+                Key::Down if step.env < step.thr_low => Key::Up,
                 k => k,
             }
         };
@@ -166,21 +127,13 @@ impl BigramCwDecoder {
         self.run = 1;
     }
 
-    fn env_above(&self, thr: f32) -> bool {
-        self.envelope.env > thr
-    }
-
-    fn env_below(&self, thr: f32) -> bool {
-        self.envelope.env < thr
-    }
-
     fn end_mark_all(&mut self) {
         let run = self.run as f32;
         let mut next = Vec::new();
         for h in self.beams.drain(..) {
             next.extend(branch_mark(h, run, self.sample_rate));
         }
-        self.beams = prune_beams(next);
+        self.beams = prune_beams(next, self.params.beam_width, self.sample_rate, self.params.initial_wpm);
     }
 
     fn advance_space_all(&mut self) {
@@ -226,7 +179,6 @@ impl BigramCwDecoder {
     }
 }
 
-/// Branch a hypothesis on ambiguous mark length (dit vs dah).
 fn branch_mark(h: Hypothesis, run: f32, sample_rate: f32) -> Vec<Hypothesis> {
     if run < 0.35 * h.dot_samples {
         return vec![h];
@@ -249,7 +201,6 @@ fn branch_mark(h: Hypothesis, run: f32, sample_rate: f32) -> Vec<Hypothesis> {
     } else if run > dit_hi {
         push_branch('-', 0.2, run / 3.0);
     } else {
-        // Ambiguous zone: beam both interpretations.
         push_branch('.', 0.0, run);
         let mut dah = h;
         dah.symbol.push('-');
@@ -259,25 +210,29 @@ fn branch_mark(h: Hypothesis, run: f32, sample_rate: f32) -> Vec<Hypothesis> {
     out
 }
 
-fn prune_beams(mut beams: Vec<Hypothesis>) -> Vec<Hypothesis> {
+fn prune_beams(
+    mut beams: Vec<Hypothesis>,
+    beam_width: usize,
+    sample_rate: f32,
+    initial_wpm: f32,
+) -> Vec<Hypothesis> {
     beams.sort_by(|a, b| b.score.total_cmp(&a.score));
-    beams.truncate(BEAM_WIDTH);
+    beams.truncate(beam_width.max(1));
     if beams.is_empty() {
-        beams.push(Hypothesis::new(12_000.0));
+        beams.push(Hypothesis::new(sample_rate, initial_wpm));
     }
     beams
 }
 
-/// Log-probability style score for letter pairs common in callsigns / contest CW.
 fn bigram_log(prev: Option<char>, ch: char) -> f32 {
     let p = prev.unwrap_or(' ');
     let c = ch.to_ascii_uppercase();
     match (p, c) {
-        (' ', 'C') => 1.2, // CQ
+        (' ', 'C') => 1.2,
         (' ', 'Q') => 0.8,
         ('C', 'Q') => 1.5,
         ('Q', ' ') => 0.6,
-        (' ', 'D') => 0.5, // DE
+        (' ', 'D') => 0.5,
         ('D', 'E') => 0.8,
         ('E', ' ') => 0.4,
         (' ', 'W') | (' ', 'K') | (' ', 'N') | (' ', 'V') | (' ', 'G') => 0.9,
@@ -311,8 +266,7 @@ impl CwDecoder for BigramCwDecoder {
     }
 
     fn reset(&mut self) {
-        let sr = self.sample_rate;
-        *self = Self::new(sr);
+        *self = Self::with_params(self.sample_rate, self.params);
     }
 }
 

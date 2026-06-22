@@ -116,3 +116,34 @@ jobs:
               ;;
           esac
         shell: bash
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install mdBook
+        run: cargo install mdbook --locked --version 0.4.40
+
+      - name: Install libairspyhf
+        run: sudo apt-get update && sudo apt-get install -y libairspyhf-dev
+
+      - name: Build documentation
+        run: ./scripts/build-docs.sh
+
+      - name: Upload book artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hfsdr-book
+          path: docs/book/
+
+      - name: Upload API docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hfsdr-api-docs
+          path: target/doc/

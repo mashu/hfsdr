@@ -63,6 +63,11 @@ impl PlotViewState {
         self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, 1.0);
         self.clamp_pan(sample_rate);
     }
+
+    /// True when the visible span is narrower than the IQ passband (horizontal pan useful).
+    pub fn can_pan(&self, sample_rate: f32) -> bool {
+        self.view_span_hz(sample_rate) < sample_rate * 0.995
+    }
 }
 
 pub struct PlotInteraction {
@@ -129,9 +134,8 @@ impl PlotInteraction {
             if let Some(pos) = response.interact_pointer_pos() {
                 self.drag_origin = Some(pos);
                 self.tune_drag_active = false;
-                if shift {
-                    self.drag_mode = DragMode::PanView;
-                } else if pos.x >= center_x - CENTER_GRAB_PX && pos.x <= center_x + CENTER_GRAB_PX {
+                let can_pan = view.can_pan(sample_rate);
+                if pos.x >= center_x - CENTER_GRAB_PX && pos.x <= center_x + CENTER_GRAB_PX {
                     self.drag_mode = DragMode::DragCenter;
                 } else if filter_editable {
                     let (left, right) =
@@ -140,9 +144,13 @@ impl PlotInteraction {
                         self.drag_mode = DragMode::ResizeLeft;
                     } else if pos.x >= right - EDGE_GRAB_PX && pos.x <= right + EDGE_GRAB_PX {
                         self.drag_mode = DragMode::ResizeRight;
+                    } else if shift || can_pan {
+                        self.drag_mode = DragMode::PanView;
                     } else {
                         self.drag_mode = DragMode::Tune;
                     }
+                } else if shift || can_pan {
+                    self.drag_mode = DragMode::PanView;
                 } else {
                     self.drag_mode = DragMode::Tune;
                 }
@@ -273,5 +281,14 @@ mod tests {
         assert!((bw - 300.0).abs() < 1.0);
         let bw = passband_from_edge(-100.0, 150.0, 50.0, 500.0);
         assert!((bw - 500.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn pan_available_when_zoomed_in() {
+        let mut view = PlotViewState::new();
+        view.zoom = 0.25;
+        assert!(view.can_pan(12_000.0));
+        view.zoom = 1.0;
+        assert!(!view.can_pan(12_000.0));
     }
 }

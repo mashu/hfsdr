@@ -97,11 +97,7 @@ pub struct EngineParams {
     pub audio_enabled: bool,
     pub volume: f32,
     pub skimmer_enabled: bool,
-    pub skimmer_min_snr_db: f32,
-    pub skimmer_max_channels: usize,
-    pub skimmer_bucket_hz: f32,
-    pub skimmer_min_separation_bins: usize,
-    pub scp_require: bool,
+    pub skimmer: SkimmerConfig,
     pub fft_size: usize,
     pub fft_auto: bool,
     pub view_span_hz: f32,
@@ -115,11 +111,7 @@ impl Default for EngineParams {
             audio_enabled: true,
             volume: 1.0,
             skimmer_enabled: false,
-            skimmer_min_snr_db: 14.0,
-            skimmer_max_channels: 24,
-            skimmer_bucket_hz: 80.0,
-            skimmer_min_separation_bins: 6,
-            scp_require: true,
+            skimmer: SkimmerConfig::default(),
             fft_size: FFT_SIZE,
             fft_auto: true,
             view_span_hz: 12_000.0,
@@ -505,15 +497,9 @@ impl Engine {
 
         self.skimmer.set_enabled(params.skimmer_enabled);
         if params.skimmer_enabled {
-            self.skimmer.set_config(SkimmerConfig {
-                bucket_hz: params.skimmer_bucket_hz,
-                min_snr_db: params.skimmer_min_snr_db,
-                min_separation_bins: params.skimmer_min_separation_bins,
-                max_channels: params.skimmer_max_channels,
-                require_scp: params.scp_require,
-                source_label: "rx".to_string(),
-                ..SkimmerConfig::default()
-            });
+            let mut cfg = params.skimmer.clone();
+            cfg.source_label = "rx".to_string();
+            self.skimmer.set_config(cfg);
             self.skimmer.submit(
                 &self.drain,
                 &self.latest,
