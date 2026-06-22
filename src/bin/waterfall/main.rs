@@ -11,6 +11,7 @@ mod controls;
 mod display_levels;
 mod engine;
 mod interaction;
+mod iq_dialog;
 mod kiwi_directory;
 mod log;
 mod scp_fetch;

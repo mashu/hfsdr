@@ -110,6 +110,10 @@ pub struct AppSettings {
     // Connection memory.
     pub recent_hosts: Vec<ConnectRequest>,
     pub last_center_mhz: f64,
+
+    // IQ capture / playback.
+    pub iq_capture_dir: String,
+    pub iq_playback_path: String,
 }
 
 impl Default for AppSettings {
@@ -172,7 +176,7 @@ impl Default for AppSettings {
             spot_max_age_secs: 90.0,
             spot_callsign_filter: String::new(),
             spot_label_limit: 40,
-            scp_require: false,
+            scp_require: true,
             spot_sort: 0,
             continent_filter: false,
             show_continents: [true; 7],
@@ -183,6 +187,8 @@ impl Default for AppSettings {
             show_right: true,
             recent_hosts: Vec::new(),
             last_center_mhz: 7.03,
+            iq_capture_dir: String::new(),
+            iq_playback_path: String::new(),
         }
     }
 }

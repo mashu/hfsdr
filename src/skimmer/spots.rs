@@ -30,6 +30,8 @@ pub struct Spot {
     pub last_heard: Instant,
     /// Per-source SNR ("what heard it"): (source label, SNR dB).
     pub sources: Vec<(String, f32)>,
+    /// SCP/heuristic quality — higher wins when multiple decodes collide.
+    pub callsign_rank: u32,
 }
 
 impl Spot {
@@ -71,6 +73,7 @@ impl SpotStore {
         &mut self,
         frequency_hz: f64,
         callsign: Option<String>,
+        callsign_rank: u32,
         kind: SpotKind,
         snr_db: f32,
         wpm: f32,
@@ -87,14 +90,18 @@ impl SpotStore {
             first_heard: now,
             last_heard: now,
             sources: Vec::new(),
+            callsign_rank: 0,
         });
         entry.frequency_hz = frequency_hz;
         entry.kind = kind;
         entry.snr_db = snr_db;
         entry.wpm = wpm;
         entry.last_heard = now;
-        if callsign.is_some() {
-            entry.callsign = callsign;
+        if let Some(ref new_call) = callsign {
+            if callsign_rank >= entry.callsign_rank {
+                entry.callsign = Some(new_call.clone());
+                entry.callsign_rank = callsign_rank;
+            }
         }
         match entry.sources.iter_mut().find(|(s, _)| s == source) {
             Some((_, s)) => *s = snr_db,
@@ -142,16 +149,16 @@ mod tests {
     #[test]
     fn merges_nearby_frequencies() {
         let mut store = SpotStore::new();
-        store.observe(7_030_000.0, Some("AA1A".into()), SpotKind::CallingCq, 20.0, 28.0, "rx1");
-        store.observe(7_030_010.0, Some("AA1A".into()), SpotKind::CallingCq, 22.0, 28.0, "rx1");
+        store.observe(7_030_000.0, Some("AA1A".into()), 100, SpotKind::CallingCq, 20.0, 28.0, "rx1");
+        store.observe(7_030_010.0, Some("AA1A".into()), 100, SpotKind::CallingCq, 22.0, 28.0, "rx1");
         assert_eq!(store.len(), 1);
     }
 
     #[test]
     fn tracks_multiple_sources() {
         let mut store = SpotStore::new();
-        store.observe(7_030_000.0, Some("AA1A".into()), SpotKind::Heard, 20.0, 28.0, "rx1");
-        store.observe(7_030_000.0, Some("AA1A".into()), SpotKind::Heard, 15.0, 28.0, "rx2");
+        store.observe(7_030_000.0, Some("AA1A".into()), 100, SpotKind::Heard, 20.0, 28.0, "rx1");
+        store.observe(7_030_000.0, Some("AA1A".into()), 50, SpotKind::Heard, 15.0, 28.0, "rx2");
         let spot = &store.sorted(SpotSort::SnrDesc)[0];
         assert_eq!(spot.sources.len(), 2);
     }

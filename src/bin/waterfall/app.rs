@@ -157,6 +157,9 @@ pub struct WaterfallApp {
     kiwi_directory_rx: Option<Receiver<Result<(Option<GeoLocation>, Vec<KiwiReceiver>), String>>>,
     kiwi_directory_error: Option<String>,
     show_connection_drawer: bool,
+    iq_capture_dir: std::path::PathBuf,
+    iq_playback_path: String,
+    last_capture_path: String,
 
     last_settings_json: String,
     settings_dirty_at: Option<std::time::Instant>,
@@ -253,6 +256,9 @@ impl WaterfallApp {
             kiwi_directory_rx: None,
             kiwi_directory_error: None,
             show_connection_drawer: false,
+            iq_capture_dir: hfsdr::default_capture_dir(),
+            iq_playback_path: String::new(),
+            last_capture_path: String::new(),
             last_settings_json: String::new(),
             settings_dirty_at: None,
             spectrum_widget: SpectrumWidget::new(),
@@ -412,6 +418,12 @@ impl WaterfallApp {
         self.recent_hosts = s.recent_hosts.clone();
         self.center_khz = s.last_center_mhz * 1000.0;
         self.last_center_khz = self.center_khz;
+        self.iq_capture_dir = if s.iq_capture_dir.is_empty() {
+            hfsdr::default_capture_dir()
+        } else {
+            std::path::PathBuf::from(&s.iq_capture_dir)
+        };
+        self.iq_playback_path = s.iq_playback_path.clone();
     }
 
     fn current_settings(&self) -> AppSettings {
@@ -493,6 +505,8 @@ impl WaterfallApp {
             show_right: self.show_right,
             recent_hosts: self.recent_hosts.clone(),
             last_center_mhz: self.center_khz / 1000.0,
+            iq_capture_dir: self.iq_capture_dir.display().to_string(),
+            iq_playback_path: self.iq_playback_path.clone(),
         }
     }
 
@@ -1195,6 +1209,13 @@ impl WaterfallApp {
             );
             ui.separator();
             ui.label(format!("{:.0} kS/s", self.stats.effective_sps / 1000.0));
+            if self.stats.iq_recording {
+                ui.separator();
+                ui.colored_label(WARN, format!("REC {:.1}s", self.stats.iq_capture_samples as f32 / self.stats.sample_rate.max(1.0)));
+            } else if self.stats.iq_playback {
+                ui.separator();
+                ui.colored_label(OK, "PLAYBACK");
+            }
             if self.stats.dropped > 0 {
                 ui.separator();
                 ui.colored_label(WARN, format!("drops {}", self.stats.dropped));
@@ -1534,11 +1555,107 @@ impl WaterfallApp {
             }
 
             ui.add_space(6.0);
+            self.iq_capture_card(ui);
+
+            ui.add_space(6.0);
             stat_row(ui, "Effective", format!("{:.1} kS/s", self.stats.effective_sps / 1000.0));
             stat_row(ui, "Dropped", self.stats.dropped.to_string());
             if let Some(rssi) = self.stats.rssi_dbm {
                 stat_row(ui, "S-meter", format!("{rssi:.1} dBm"));
             }
+    }
+
+    fn iq_capture_card(&mut self, ui: &mut egui::Ui) {
+        section_heading(ui, "IQ capture");
+        section_hint(
+            ui,
+            "Records gzip-compressed .hiq.gz for offline replay — writer runs off the engine thread.",
+        );
+        let streaming = matches!(self.conn_state, ConnState::Streaming);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Save to").small().color(MUTED));
+            if ui.button("Browse…").on_hover_text("Choose folder for new captures").clicked() {
+                if let Some(dir) = crate::iq_dialog::pick_capture_dir(&self.iq_capture_dir) {
+                    self.iq_capture_dir = dir;
+                    self.settings_dirty_at = Some(Instant::now());
+                }
+            }
+        });
+        ui.label(
+            egui::RichText::new(self.iq_capture_dir.display().to_string())
+                .small()
+                .color(MUTED),
+        );
+        ui.horizontal(|ui| {
+            if self.stats.iq_recording {
+                if ui.button("Stop recording").clicked() {
+                    self.engine.send(EngineCommand::StopIqRecord);
+                }
+                if let Some(p) = &self.stats.iq_capture_path {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{:.1}s → {}",
+                            self.stats.iq_capture_samples as f32 / self.stats.sample_rate.max(1.0),
+                            p
+                        ))
+                        .small()
+                        .color(MUTED),
+                    );
+                }
+            } else if ui
+                .add_enabled(streaming, egui::Button::new("Record IQ"))
+                .on_hover_text("Start recording into the folder above")
+                .clicked()
+            {
+                let _ = std::fs::create_dir_all(&self.iq_capture_dir);
+                let path = hfsdr::timestamped_capture_path_in(&self.iq_capture_dir);
+                self.last_capture_path = path.display().to_string();
+                if self.iq_playback_path.is_empty() {
+                    self.iq_playback_path = self.last_capture_path.clone();
+                }
+                self.engine.send(EngineCommand::StartIqRecord(path));
+            }
+        });
+        if !self.last_capture_path.is_empty() && !self.stats.iq_recording {
+            ui.label(
+                egui::RichText::new(format!("Last: {}", self.last_capture_path))
+                    .small()
+                    .color(MUTED),
+            );
+        }
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Playback").small().color(MUTED));
+            if ui.button("Browse…").on_hover_text("Open a .hiq.gz capture file").clicked() {
+                let start = if self.iq_playback_path.is_empty() {
+                    self.iq_capture_dir.clone()
+                } else {
+                    std::path::PathBuf::from(&self.iq_playback_path)
+                };
+                if let Some(path) = crate::iq_dialog::pick_playback_file(&start) {
+                    self.iq_playback_path = path.display().to_string();
+                    self.settings_dirty_at = Some(Instant::now());
+                }
+            }
+        });
+        let playback_label = if self.iq_playback_path.is_empty() {
+            "No file selected".to_string()
+        } else {
+            self.iq_playback_path.clone()
+        };
+        ui.label(egui::RichText::new(playback_label).small().color(MUTED));
+        ui.horizontal(|ui| {
+            let can_play = !self.iq_playback_path.trim().is_empty();
+            if ui
+                .add_enabled(can_play && !self.stats.iq_playback, egui::Button::new("Play IQ file"))
+                .clicked()
+            {
+                let path = std::path::PathBuf::from(self.iq_playback_path.trim());
+                self.engine.send(EngineCommand::PlayIqFile(path));
+            }
+            if self.stats.iq_playback && ui.button("Stop playback").clicked() {
+                self.engine.send(EngineCommand::StopIqPlayback);
+            }
+        });
     }
 
     fn display_section(&mut self, ui: &mut egui::Ui) {

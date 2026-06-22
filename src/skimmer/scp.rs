@@ -138,6 +138,58 @@ impl MasterScp {
         None
     }
 
+    /// Best SCP-validated callsign embedded in decoded text (longest exact match wins).
+    pub fn find_in_text(&self, text: &str) -> Option<String> {
+        if !self.is_loaded() {
+            return None;
+        }
+        let upper = text.to_ascii_uppercase();
+        let mut best_exact: Option<String> = None;
+        let mut best_partial: Option<String> = None;
+        for run in alnum_runs(&upper) {
+            if run.len() < 3 {
+                continue;
+            }
+            let max_len = run.len().min(12);
+            for len in (3..=max_len).rev() {
+                for start in 0..=run.len() - len {
+                    let sub = &run[start..start + len];
+                    let Some(call) = self.resolve(sub) else {
+                        continue;
+                    };
+                    if call == sub {
+                        if best_exact
+                            .as_ref()
+                            .is_none_or(|b| call.len() > b.len())
+                        {
+                            best_exact = Some(call);
+                        }
+                    } else if call.len() > sub.len()
+                        && best_partial
+                            .as_ref()
+                            .is_none_or(|b| call.len() > b.len())
+                    {
+                        best_partial = Some(call);
+                    }
+                }
+            }
+        }
+        best_exact.or(best_partial)
+    }
+
+    /// Quality score for choosing which callsign to keep on a spot.
+    pub fn callsign_rank(&self, call: &str) -> u32 {
+        let t = call.trim().to_ascii_uppercase();
+        if t.is_empty() {
+            return 0;
+        }
+        match self.resolve(&t) {
+            Some(c) if c == t => 2_000 + t.len() as u32,
+            Some(c) => 1_000 + c.len() as u32,
+            None => 0,
+        }
+    }
+
     fn ingest_line(&mut self, line: &str) {
         let t = line.trim();
         if t.is_empty() {
@@ -211,6 +263,22 @@ fn prefix_key(call: &str) -> String {
     call[..end].to_string()
 }
 
+fn alnum_runs(text: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut cur = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '/' {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            runs.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        runs.push(cur);
+    }
+    runs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +310,16 @@ G0ABC
         let scp = MasterScp::from_text(SAMPLE);
         assert_eq!(scp.resolve("OH2"), Some("OH2BH".into()));
         assert_eq!(scp.resolve("W1A"), Some("W1AW".into()));
+    }
+
+    #[test]
+    fn find_in_text_prefers_longest_exact() {
+        let scp = MasterScp::from_text("VER20240101\nSM5DAJ\nW1AW\n");
+        assert_eq!(
+            scp.find_in_text("DE SM5DAJ SM5DAJ K"),
+            Some("SM5DAJ".into())
+        );
+        assert_eq!(scp.find_in_text("CQ SM5DA"), Some("SM5DAJ".into()));
     }
 
     #[test]

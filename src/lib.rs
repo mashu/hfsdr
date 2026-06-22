@@ -21,6 +21,7 @@ pub mod airspyhf;
 pub mod cty;
 pub mod dsp;
 pub mod history;
+pub mod iq_record;
 pub mod kiwi;
 pub mod multisource;
 pub mod skimmer;
@@ -30,6 +31,7 @@ pub mod source;
 pub use airspyhf::AirspyHf;
 pub use cty::{Continent, ContinentResolver};
 pub use history::{Annotation, RowFold, SlowWaterfall};
+pub use iq_record::{default_capture_dir, read_meta, timestamped_capture_path, timestamped_capture_path_in, IqCaptureMeta, IqPlayback, IqRecorder};
 pub use dsp::{
     auto_fft_size, bin_width_hz, channel_group_delay_ms, decimation_factor, design_gaussian_lowpass,
     design_lowpass,

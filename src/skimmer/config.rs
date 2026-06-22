@@ -103,14 +103,14 @@ impl Default for SkimmerConfig {
             min_decode_snr_db: 8.0,
             min_separation_bins: 5,
             max_channels: 16,
-            channel_timeout_secs: 8.0,
+            channel_timeout_secs: 20.0,
             spot_store_max_age_secs: 120.0,
             source_label: "rx".to_string(),
-            require_scp: false,
-            decoder: SkimmerDecoderKind::Adaptive,
-            lpf_cutoff_hz: 150.0,
+            require_scp: true,
+            decoder: SkimmerDecoderKind::Bigram,
+            lpf_cutoff_hz: 100.0,
             target_audio_rate_hz: 12_000.0,
-            decode_gate_ms: 45.0,
+            decode_gate_ms: 80.0,
             decoder_params: DecoderParams::default(),
         }
     }
@@ -162,7 +162,8 @@ mod tests {
     #[test]
     fn defaults_are_valid() {
         let c = SkimmerConfig::default().clamped();
-        assert_eq!(c.decoder, SkimmerDecoderKind::Adaptive);
+        assert_eq!(c.decoder, SkimmerDecoderKind::Bigram);
+        assert!(c.decode_gate_ms >= 60.0);
         assert!(c.decoder_params.envelope.thr_high > c.decoder_params.envelope.thr_low);
     }
 
@@ -170,7 +171,7 @@ mod tests {
     fn channel_dsp_change_detects_decoder_switch() {
         let a = SkimmerConfig::default();
         let mut b = a.clone();
-        b.decoder = SkimmerDecoderKind::Bigram;
+        b.decoder = SkimmerDecoderKind::Adaptive;
         assert!(a.channel_dsp_changed(&b));
     }
 }

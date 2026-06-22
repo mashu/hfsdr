@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::dsp::{design_gaussian_lowpass, FirFilter};
 use crate::source::Complex32;
 
 use super::adaptive::AdaptiveCwDecoder;
@@ -15,30 +16,34 @@ use super::peaks::detect_peaks;
 use super::scp::MasterScp;
 use super::spots::{SpotKind, SpotStore};
 
-/// Cheap 2-pole complex lowpass for channel isolation.
-#[derive(Clone, Copy, Debug)]
-struct ComplexLowpass {
-    y1: Complex32,
-    y2: Complex32,
-    a: f32,
+/// Gaussian FIR channel filter for skimmer isolation (replaces 2-pole IIR).
+struct ChannelFilter {
+    fir: FirFilter,
+    last_rate: f32,
+    last_cutoff: f32,
 }
 
-impl ComplexLowpass {
+impl ChannelFilter {
     fn new(sample_rate: f32, cutoff_hz: f32) -> Self {
-        let a = 1.0 - (-std::f32::consts::TAU * cutoff_hz / sample_rate.max(1.0)).exp();
         Self {
-            y1: Complex32 { re: 0.0, im: 0.0 },
-            y2: Complex32 { re: 0.0, im: 0.0 },
-            a: a.clamp(0.0, 1.0),
+            fir: design_gaussian_lowpass(sample_rate, cutoff_hz * 2.0),
+            last_rate: sample_rate,
+            last_cutoff: cutoff_hz,
         }
     }
 
-    fn process(&mut self, x: Complex32) -> Complex32 {
-        self.y1.re += self.a * (x.re - self.y1.re);
-        self.y1.im += self.a * (x.im - self.y1.im);
-        self.y2.re += self.a * (self.y1.re - self.y2.re);
-        self.y2.im += self.a * (self.y1.im - self.y2.im);
-        self.y2
+    fn sync(&mut self, sample_rate: f32, cutoff_hz: f32) {
+        if (sample_rate - self.last_rate).abs() > 1.0
+            || (cutoff_hz - self.last_cutoff).abs() > 1.0
+        {
+            self.fir = design_gaussian_lowpass(sample_rate, cutoff_hz * 2.0);
+            self.last_rate = sample_rate;
+            self.last_cutoff = cutoff_hz;
+        }
+    }
+
+    fn process(&mut self, sample: Complex32) -> Complex32 {
+        self.fir.process_complex(sample)
     }
 }
 
@@ -79,7 +84,8 @@ struct DecoderChannel {
     phase: f32,
     decim_factor: usize,
     decim_counter: usize,
-    filter: ComplexLowpass,
+    filter: ChannelFilter,
+    lpf_cutoff_hz: f32,
     audio_rate: f32,
     gate_env: KeyingEnvelope,
     gate: DecodeGate,
@@ -101,7 +107,8 @@ impl DecoderChannel {
             phase: 0.0,
             decim_factor,
             decim_counter: 0,
-            filter: ComplexLowpass::new(audio_rate, config.lpf_cutoff_hz),
+            filter: ChannelFilter::new(audio_rate, config.lpf_cutoff_hz),
+            lpf_cutoff_hz: config.lpf_cutoff_hz,
             audio_rate,
             gate_env: KeyingEnvelope::new(config.decoder_params.envelope),
             gate: DecodeGate::new(audio_rate, config.decode_gate_ms),
@@ -114,11 +121,13 @@ impl DecoderChannel {
         }
     }
 
-    fn process(&mut self, iq: &[Complex32], iq_rate: f32) -> String {
+    fn process(&mut self, iq: &[Complex32], iq_rate: f32, lpf_cutoff_hz: f32) -> String {
         if self.snr_db < self.min_decode_snr_db {
             self.gate.reset();
             return String::new();
         }
+        self.filter.sync(self.audio_rate, lpf_cutoff_hz);
+        self.lpf_cutoff_hz = lpf_cutoff_hz;
         self.audio.clear();
         let inc = std::f32::consts::TAU * self.offset_hz / iq_rate;
         for &s in iq {
@@ -134,7 +143,8 @@ impl DecoderChannel {
             self.decim_counter += 1;
             if self.decim_counter >= self.decim_factor {
                 self.decim_counter = 0;
-                let mag = self.filter.process(shifted).norm();
+                let filtered = self.filter.process(shifted);
+                let mag = filtered.norm();
                 self.audio.push(mag);
             }
         }
@@ -273,8 +283,10 @@ impl Skimmer {
         let center = self.center_hz;
         let label = self.config.source_label.clone();
         let max_chars = self.config.decoder_params.max_text_chars;
+        let lpf = self.config.lpf_cutoff_hz;
+        let require_scp = self.config.require_scp && self.scp.is_loaded();
         for ch in self.channels.values_mut() {
-            let delta = ch.process(iq, iq_rate);
+            let delta = ch.process(iq, iq_rate, lpf);
             if delta.is_empty() {
                 continue;
             }
@@ -286,12 +298,26 @@ impl Skimmer {
             if let Some(m) = analyze(
                 &ch.text,
                 Some(&self.scp),
-                self.config.require_scp && self.scp.is_loaded(),
+                require_scp,
             ) {
                 let freq = center + ch.offset_hz as f64;
                 let wpm = ch.decoder.wpm();
-                self.store
-                    .observe(freq, m.callsign, m.kind, ch.snr_db, wpm, &label);
+                let rank = m
+                    .callsign
+                    .as_ref()
+                    .map(|c| {
+                        let scp_rank = self.scp.callsign_rank(c);
+                        if scp_rank > 0 {
+                            scp_rank
+                        } else {
+                            super::patterns::looks_like_callsign(c) as u32 * c.len() as u32
+                        }
+                    })
+                    .unwrap_or(0);
+                if m.callsign.is_some() || matches!(m.kind, SpotKind::CallingCq) {
+                    self.store
+                        .observe(freq, m.callsign, rank, m.kind, ch.snr_db, wpm, &label);
+                }
                 if matches!(m.kind, SpotKind::CallingCq) {
                     ch.text.clear();
                 }

@@ -18,9 +18,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hfsdr::{Complex32, CwChannelSettings, IqAudioDemod, SpectrumAnalyzer, SpectrumFrontEnd, Spot, spectrum_plan};
+use hfsdr::{Complex32, CwChannelSettings, IqAudioDemod, IqPlayback, IqRecorder, SpectrumAnalyzer, SpectrumFrontEnd, Spot, spectrum_plan};
 
 use crate::audio::AudioOutput;
+use crate::log;
 use crate::skimmer::{ScpStatus, SkimmerHandle};
 use crate::source::{connect, Connection, ConnectRequest, SourceKind};
 use hfsdr::SkimmerConfig;
@@ -68,6 +69,10 @@ pub struct EngineStats {
     pub spectrum_decim: usize,
     pub spectrum_zoomed: bool,
     pub scp: ScpStatus,
+    pub iq_recording: bool,
+    pub iq_playback: bool,
+    pub iq_capture_samples: u64,
+    pub iq_capture_path: Option<String>,
 }
 
 impl Default for EngineStats {
@@ -89,6 +94,10 @@ impl Default for EngineStats {
             spectrum_decim: 1,
             spectrum_zoomed: false,
             scp: ScpStatus::default(),
+            iq_recording: false,
+            iq_playback: false,
+            iq_capture_samples: 0,
+            iq_capture_path: None,
         }
     }
 }
@@ -159,6 +168,10 @@ pub enum EngineCommand {
     ClearSkimmerSpots,
     ReloadScp,
     ReloadScpFrom(std::path::PathBuf),
+    StartIqRecord(std::path::PathBuf),
+    StopIqRecord,
+    PlayIqFile(std::path::PathBuf),
+    StopIqPlayback,
     Shutdown,
 }
 
@@ -273,6 +286,10 @@ struct Engine {
     cached_rate: f32,
     slow_since: Option<Instant>,
     running: bool,
+
+    recorder: Option<IqRecorder>,
+    recorder_samples: u64,
+    playback: Option<IqPlayback>,
 }
 
 impl Engine {
@@ -311,6 +328,9 @@ impl Engine {
             cached_rate: 0.0,
             slow_since: None,
             running: true,
+            recorder: None,
+            recorder_samples: 0,
+            playback: None,
         }
     }
 
@@ -321,7 +341,7 @@ impl Engine {
                 break;
             }
 
-            let streaming = self.conn.is_some();
+            let streaming = self.conn.is_some() || self.playback.is_some();
             if streaming {
                 self.poll_handshake();
                 let got = self.pump_stream();
@@ -399,6 +419,64 @@ impl Engine {
                 self.skimmer.reload_scp_from(path);
                 self.publish_stats(0);
             }
+            EngineCommand::StartIqRecord(path) => {
+                if self.recorder.is_some() {
+                    return;
+                }
+                let (sr, center) = self
+                    .conn
+                    .as_ref()
+                    .map(|c| (c.sample_rate as u32, c.center_hz))
+                    .or_else(|| {
+                        self.playback
+                            .as_ref()
+                            .map(|p| (p.meta().sample_rate, p.meta().center_hz))
+                    })
+                    .unwrap_or((12_000, 0.0));
+                match IqRecorder::start(path.clone(), sr, center) {
+                    Ok(rec) => {
+                        self.recorder_samples = 0;
+                        self.recorder = Some(rec);
+                        log::info(format!("IQ recording → {}", path.display()));
+                    }
+                    Err(e) => self.set_error(Some(format!("IQ record failed: {e}"))),
+                }
+            }
+            EngineCommand::StopIqRecord => {
+                self.stop_recorder();
+            }
+            EngineCommand::PlayIqFile(path) => {
+                self.teardown();
+                self.request = None;
+                match IqPlayback::open(path.clone()) {
+                    Ok(pb) => {
+                        let meta = pb.meta();
+                        self.demod = IqAudioDemod::new();
+                        self.audio_device_open(meta.sample_rate);
+                        self.first_iq_received = true;
+                        self.last_data = Instant::now();
+                        self.rate_window_start = Instant::now();
+                        self.rate_window_count = 0;
+                        self.playback = Some(pb);
+                        self.set_state(ConnState::Streaming);
+                        self.set_error(None);
+                        log::info(format!(
+                            "IQ playback: {} ({:.1}s @ {} Hz)",
+                            path.display(),
+                            meta.duration_secs(),
+                            meta.sample_rate
+                        ));
+                    }
+                    Err(e) => {
+                        self.set_error(Some(format!("IQ playback failed: {e}")));
+                        self.set_state(ConnState::Disconnected);
+                    }
+                }
+            }
+            EngineCommand::StopIqPlayback => {
+                self.playback = None;
+                self.set_state(ConnState::Disconnected);
+            }
             EngineCommand::Shutdown => {
                 self.teardown();
                 self.running = false;
@@ -449,6 +527,24 @@ impl Engine {
             let _ = conn.source.stop();
         }
         self.conn = None;
+        self.playback = None;
+        self.stop_recorder();
+    }
+
+    fn stop_recorder(&mut self) {
+        if let Some(rec) = self.recorder.take() {
+            match rec.stop() {
+                Ok(meta) => {
+                    self.recorder_samples = meta.sample_count;
+                    log::info(format!(
+                        "IQ capture saved: {} samples ({:.1}s)",
+                        meta.sample_count,
+                        meta.duration_secs()
+                    ));
+                }
+                Err(e) => log::error(format!("IQ capture finalize failed: {e}")),
+            }
+        }
     }
 
     fn audio_device_open(&mut self, source_rate: u32) {
@@ -473,7 +569,19 @@ impl Engine {
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
 
         self.drain.clear();
-        if let Some(conn) = &mut self.conn {
+        if let Some(pb) = &mut self.playback {
+            while self.drain.len() < MAX_DRAIN {
+                match pb.pop() {
+                    Some(s) => self.drain.push(s),
+                    None => break,
+                }
+            }
+            if pb.finished() && self.drain.is_empty() {
+                self.playback = None;
+                self.set_state(ConnState::Disconnected);
+                log::info("IQ playback finished");
+            }
+        } else if let Some(conn) = &mut self.conn {
             while self.drain.len() < MAX_DRAIN {
                 match conn.iq.pop() {
                     Ok(s) => self.drain.push(s),
@@ -486,6 +594,10 @@ impl Engine {
             self.publish_stats(0);
             return 0;
         }
+        if let Some(rec) = &self.recorder {
+            rec.push(&self.drain);
+            self.recorder_samples += got as u64;
+        }
         if !self.first_iq_received {
             self.first_iq_received = true;
             self.rate_window_start = Instant::now();
@@ -495,8 +607,15 @@ impl Engine {
         self.last_data = Instant::now();
         self.rate_window_count += got as u64;
 
-        let sample_rate = self.conn.as_ref().map(|c| c.sample_rate).unwrap_or(12_000.0);
-        let center_hz = self.conn.as_ref().map(|c| c.center_hz).unwrap_or(0.0);
+        let (sample_rate, center_hz, _is_kiwi) = if let Some(pb) = &self.playback {
+            let m = pb.meta();
+            (m.sample_rate as f32, m.center_hz, false)
+        } else {
+            self.conn
+                .as_ref()
+                .map(|c| (c.sample_rate, c.center_hz, c.is_kiwi))
+                .unwrap_or((12_000.0, 0.0, false))
+        };
 
         self.sync_spectrum_chain(sample_rate, &params);
 
@@ -573,11 +692,8 @@ impl Engine {
         let channels = self.skimmer.active_channels();
         let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
-        let (sample_rate, is_kiwi) = self
-            .conn
-            .as_ref()
-            .map(|c| (c.sample_rate, c.is_kiwi))
-            .unwrap_or((12_000.0, false));
+        let (sample_rate, _, is_kiwi) = self.link_meta();
+        let (iq_recording, iq_playback, iq_capture_samples, iq_capture_path) = self.capture_ui();
         let effective = self.effective_rate(sample_rate);
         let slow = self.update_slow_flag(sample_rate, effective);
         let (audio_device, audio_rate) = self
@@ -617,19 +733,42 @@ impl Engine {
                 spectrum_decim: self.spectrum_decim,
                 spectrum_zoomed: self.spectrum_decim > 1,
                 scp,
+                iq_recording,
+                iq_playback,
+                iq_capture_samples,
+                iq_capture_path,
             };
         }
+    }
+
+    fn link_meta(&self) -> (f32, f64, bool) {
+        if let Some(pb) = &self.playback {
+            let m = pb.meta();
+            (m.sample_rate as f32, m.center_hz, false)
+        } else if let Some(c) = &self.conn {
+            (c.sample_rate, c.center_hz, c.is_kiwi)
+        } else {
+            (12_000.0, 0.0, false)
+        }
+    }
+
+    fn capture_ui(&self) -> (bool, bool, u64, Option<String>) {
+        (
+            self.recorder.is_some(),
+            self.playback.is_some(),
+            self.recorder_samples,
+            self.recorder
+                .as_ref()
+                .map(|r| r.path().display().to_string()),
+        )
     }
 
     fn publish_stats(&mut self, got: usize) {
         let scp = self.skimmer.scp_status();
         let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
-        let (sample_rate, is_kiwi) = self
-            .conn
-            .as_ref()
-            .map(|c| (c.sample_rate, c.is_kiwi))
-            .unwrap_or((12_000.0, false));
+        let (sample_rate, _, is_kiwi) = self.link_meta();
+        let (iq_recording, iq_playback, iq_capture_samples, iq_capture_path) = self.capture_ui();
         let effective = self.effective_rate(sample_rate);
         let slow = self.update_slow_flag(sample_rate, effective);
         let (audio_device, audio_rate) = self
@@ -655,6 +794,10 @@ impl Engine {
                 spectrum_decim: self.spectrum_decim,
                 spectrum_zoomed: self.spectrum_decim > 1,
                 scp,
+                iq_recording,
+                iq_playback,
+                iq_capture_samples,
+                iq_capture_path,
             };
         }
     }

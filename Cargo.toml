@@ -24,6 +24,8 @@ egui_extras = { version = "0.34", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 dirs = "5"
+flate2 = "1.0"
+rfd = { version = "0.15", optional = true }
 ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
 
 [features]
@@ -31,7 +33,7 @@ default = ["airspy"]
 # Links libairspyhf (system package). Disable on platforms without the library
 # (e.g. Windows CI builds use `--no-default-features --features gui` for Kiwi-only).
 airspy = []
-gui = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq"]
+gui = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd"]
 
 [[bin]]
 name = "hfsdr"

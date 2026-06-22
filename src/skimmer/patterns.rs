@@ -22,7 +22,7 @@ pub struct PatternMatch {
 pub fn looks_like_callsign(token: &str) -> bool {
     let t = token.trim();
     let core = t.split('/').max_by_key(|s| s.len()).unwrap_or(t);
-    if core.len() < 3 || core.len() > 10 {
+    if core.len() < 4 || core.len() > 10 {
         return false;
     }
     if STOPWORDS.contains(&t) {
@@ -40,6 +40,14 @@ pub fn looks_like_callsign(token: &str) -> bool {
     has_alpha && has_digit
 }
 
+fn validate_token_heuristic(token: &str) -> Option<String> {
+    if looks_like_callsign(token) {
+        Some(token.trim().to_ascii_uppercase())
+    } else {
+        None
+    }
+}
+
 fn validate_token(token: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option<String> {
     if let Some(db) = scp {
         if db.is_loaded() {
@@ -51,10 +59,10 @@ fn validate_token(token: &str, scp: Option<&MasterScp>, require_scp: bool) -> Op
             }
         }
     }
-    if looks_like_callsign(token) {
-        return Some(token.trim().to_ascii_uppercase());
+    if require_scp {
+        return None;
     }
-    None
+    validate_token_heuristic(token)
 }
 
 /// Scan decoded text for a CQ/run flag and the most likely callsign.
@@ -65,10 +73,14 @@ pub fn analyze(text: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option
         return None;
     }
 
-    let calling_cq = tokens.iter().any(|&t| t == "CQ" || t == "QRZ");
+    let calling_cq = tokens.iter().any(|&t| t == "CQ" || t == "QRZ")
+        || upper.contains(" CQ ")
+        || upper.starts_with("CQ ");
 
-    let mut callsign = None;
-    if calling_cq {
+    // SCP full-text scan first — catches callsigns glued to decoder garbage.
+    let mut callsign = scp.and_then(|db| db.find_in_text(&upper));
+
+    if callsign.is_none() && calling_cq {
         if let Some(pos) = tokens.iter().position(|&t| t == "CQ" || t == "QRZ") {
             callsign = tokens
                 .iter()
@@ -101,11 +113,12 @@ mod tests {
     use super::*;
     use crate::skimmer::scp::MasterScp;
 
-    const SAMPLE_SCP: &str = "VER20260202\nW1AW\nOH2BH\nK3LR\n";
+    const SAMPLE_SCP: &str = "VER20260202\nW1AW\nOH2BH\nK3LR\nSM5DAJ\n";
 
     #[test]
     fn validates_callsigns_heuristic() {
         assert!(looks_like_callsign("W1AW"));
+        assert!(!looks_like_callsign("ES5"));
         assert!(!looks_like_callsign("CQ"));
     }
 
@@ -121,6 +134,14 @@ mod tests {
     fn scp_rejects_garbage() {
         let scp = MasterScp::from_text(SAMPLE_SCP);
         assert!(analyze("5B63BO DE TEST", Some(&scp), true).is_none());
+        assert!(analyze("ES5 DE EE5", Some(&scp), true).is_none());
+    }
+
+    #[test]
+    fn scp_finds_embedded_call() {
+        let scp = MasterScp::from_text(SAMPLE_SCP);
+        let m = analyze("DE SM5DAJ SM5DAJ AR", Some(&scp), true).expect("match");
+        assert_eq!(m.callsign.as_deref(), Some("SM5DAJ"));
     }
 
     #[test]
