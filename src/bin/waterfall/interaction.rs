@@ -109,7 +109,7 @@ impl PlotViewState {
         self.clamp_pan(full_span_hz, max_zoom);
     }
 
-    /// Default zoom when picking a band preset.
+    /// Zoom to the CW band segment for the current center (default on startup / band pick).
     pub fn zoom_to_cw_segment(&mut self, segment_hz: f32, full_span_hz: f32, max_zoom: f32) {
         self.zoom = (segment_hz / full_span_hz).clamp(MIN_ZOOM, max_zoom.max(1.0));
         self.pan_offset_hz = 0.0;
@@ -172,6 +172,7 @@ impl PlotInteraction {
         let mut actions = Vec::new();
         let view_span = view.view_span_hz(full_span_hz, max_zoom);
         let pan = view.pan_offset_hz;
+        let can_pan = view.can_pan(full_span_hz, max_zoom);
         let preview_x = offset_hz_to_x(tune_preview_offset_hz, rect, view_span, pan);
         let shift = ui.input(|i| i.modifiers.shift);
         let ctrl = ui.input(|i| i.modifiers.ctrl);
@@ -203,7 +204,6 @@ impl PlotInteraction {
             if let Some(pos) = response.interact_pointer_pos() {
                 self.drag_origin = Some(pos);
                 self.tune_drag_active = false;
-                let can_pan = view.can_pan(full_span_hz, max_zoom);
 
                 if let Some((slot, hit)) = pick_notch_hit(pos.x, rect, view_span, pan, notches) {
                     self.drag_mode = match hit {
@@ -224,7 +224,7 @@ impl PlotInteraction {
                         self.drag_mode = DragMode::DragCenter;
                     } else if in_passband_body(pos.x, left, right) {
                         self.drag_mode = DragMode::ShiftPassband;
-                    } else if shift || can_pan {
+                    } else if shift {
                         self.drag_mode = DragMode::PanView;
                     } else {
                         self.drag_mode = DragMode::Tune;
@@ -233,7 +233,7 @@ impl PlotInteraction {
                     && pos.x <= preview_x + CENTER_GRAB_PX
                 {
                     self.drag_mode = DragMode::DragCenter;
-                } else if shift || can_pan {
+                } else if shift {
                     self.drag_mode = DragMode::PanView;
                 } else {
                     self.drag_mode = DragMode::Tune;
@@ -259,7 +259,11 @@ impl PlotInteraction {
                             let delta_hz =
                                 -response.drag_delta().x as f64 / rect.width() as f64 * view_span as f64;
                             if delta_hz.abs() > f64::EPSILON {
-                                actions.push(PlotAction::TuneDeltaHz(delta_hz));
+                                if can_pan {
+                                    actions.push(PlotAction::PanViewDeltaHz(delta_hz));
+                                } else {
+                                    actions.push(PlotAction::TuneDeltaHz(delta_hz));
+                                }
                             }
                         }
                     }
@@ -528,6 +532,14 @@ mod tests {
         assert!((bw - 300.0).abs() < 1.0);
         let bw = passband_from_edge(-100.0, 150.0, 50.0, 500.0);
         assert!((bw - 500.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn x_to_offset_maps_plot_edges_to_span() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        assert!((x_to_offset_hz(500.0, rect, 70_000.0, 0.0) - 0.0).abs() < 1.0);
+        assert!((x_to_offset_hz(0.0, rect, 70_000.0, 0.0) - (-35_000.0)).abs() < 1.0);
+        assert!((x_to_offset_hz(1000.0, rect, 70_000.0, 0.0) - 35_000.0).abs() < 1.0);
     }
 
     #[test]

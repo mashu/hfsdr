@@ -7,7 +7,7 @@ use eframe::egui::{
     StrokeKind, Ui, Vec2,
 };
 
-use crate::theme::{section_hint, ACCENT, MUTED, PANEL, SURFACE, WARN};
+use crate::theme::{ACCENT, MUTED, PANEL, SURFACE, WARN};
 
 pub fn popup_window_frame() -> Frame {
     Frame::new()
@@ -127,16 +127,6 @@ pub fn alert_banner(ui: &mut Ui, text: &str, detail: Option<&str>) {
     ui.add_space(6.0);
 }
 
-pub fn labeled_row<R>(ui: &mut Ui, label: &str, add_field: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.horizontal(|ui| {
-        ui.allocate_ui_with_layout(Vec2::new(72.0, 0.0), Layout::top_down(Align::Min), |ui| {
-            ui.label(RichText::new(label).small().color(MUTED));
-        });
-        ui.vertical(|ui| add_field(ui)).inner
-    })
-    .inner
-}
-
 /// Label + truncated path + browse — one row.
 pub fn path_row(ui: &mut Ui, label: &str, path: &str, browse: &str) -> bool {
     let mut picked = false;
@@ -169,19 +159,6 @@ pub fn inline_stats(ui: &mut Ui, parts: &[(&str, String)]) {
             );
         }
     });
-}
-
-pub fn stat_grid(ui: &mut Ui, rows: &[(&str, String)]) {
-    egui::Grid::new(ui.id().with("stat_grid"))
-        .num_columns(2)
-        .spacing([8.0, 2.0])
-        .show(ui, |ui| {
-            for (label, value) in rows {
-                ui.label(RichText::new(*label).small().color(MUTED));
-                ui.label(RichText::new(value).small().strong());
-                ui.end_row();
-            }
-        });
 }
 
 pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {

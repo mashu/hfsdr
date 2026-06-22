@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use eframe::egui::Ui;
+use eframe::egui::{self, Ui};
 
 use crate::engine::EngineStats;
 use crate::iq_dialog;
