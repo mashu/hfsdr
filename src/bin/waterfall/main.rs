@@ -15,6 +15,7 @@ mod interaction;
 mod iq_dialog;
 mod iq_panel;
 mod kiwi_directory;
+mod pipeline_flow;
 mod log;
 mod scp_fetch;
 mod popup;

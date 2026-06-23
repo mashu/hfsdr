@@ -194,7 +194,7 @@ impl PlotInteraction {
         // Click-to-tune: let egui decide click vs drag (distance + time aware) so a
         // steady-enough tap always jumps, instead of a brittle pixel threshold that
         // turned small hand movement into a pan when zoomed in.
-        if response.clicked() || response.double_clicked() {
+        if (response.clicked() || response.double_clicked()) && !self.is_dragging() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let mode = classify_press(
                     pos,
@@ -208,21 +208,13 @@ impl PlotInteraction {
                     shift,
                     notches,
                 );
-                // Tune on click unless the user grabbed a resize/notch handle.
-                let click_tunes = !matches!(
+                // Tune on empty-spectrum clicks only; handles (edges, center, notches) need drags.
+                if matches!(
                     mode,
-                    DragMode::ResizeLeft
-                        | DragMode::ResizeRight
-                        | DragMode::ResizeNotchLeft(_)
-                        | DragMode::ResizeNotchRight(_)
-                        | DragMode::DragNotch(_)
-                );
-                if click_tunes {
+                    DragMode::Tune | DragMode::PanView | DragMode::ShiftPassband
+                ) {
                     let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
                     actions.push(PlotAction::CenterOnOffsetHz(offset));
-                    // Clicks always tune; do not leave a stale drag mode from passband/notch hits.
-                    self.drag_mode = DragMode::None;
-                    self.drag_origin = None;
                 }
             }
         }
@@ -315,6 +307,30 @@ impl PlotInteraction {
         if response.drag_stopped() {
             match self.drag_mode {
                 DragMode::DragCenter => actions.push(PlotAction::CommitTunePreview),
+                DragMode::ResizeLeft | DragMode::ResizeRight => {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
+                        let bw = passband_from_edge(
+                            listen_center_hz,
+                            offset,
+                            passband_min_hz,
+                            passband_max_hz,
+                        );
+                        actions.push(PlotAction::SetPassbandHz(bw));
+                    }
+                    actions.push(PlotAction::ClearTunePreview);
+                }
+                DragMode::ResizeNotchLeft(slot) | DragMode::ResizeNotchRight(slot) => {
+                    if let (Some(pos), Some(n)) = (
+                        response.interact_pointer_pos(),
+                        notches.iter().find(|n| n.slot == slot),
+                    ) {
+                        let edge = x_to_offset_hz(pos.x, rect, view_span, pan);
+                        let width = notch_width_from_edge(n.offset_hz, edge);
+                        actions.push(PlotAction::SetNotchWidth { slot, width_hz: width });
+                    }
+                    actions.push(PlotAction::ClearTunePreview);
+                }
                 _ => actions.push(PlotAction::ClearTunePreview),
             }
             self.drag_mode = DragMode::None;

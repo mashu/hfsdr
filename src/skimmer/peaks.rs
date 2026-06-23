@@ -26,15 +26,35 @@ pub fn offset_hz_to_bin(offset_hz: f32, len: usize, sample_rate: f32) -> usize {
     bin.clamp(0.0, len as f32 - 1.0) as usize
 }
 
+const FLOOR_PERCENTILE: f32 = 0.25;
+
+fn floor_index(len: usize) -> usize {
+    ((len as f32 * FLOOR_PERCENTILE) as usize).min(len.saturating_sub(1))
+}
+
 /// Robust noise-floor estimate: a low percentile of the row (excludes peaks).
 pub fn noise_floor_db(row: &[f32]) -> f32 {
     if row.is_empty() {
         return -120.0;
     }
     let mut scratch: Vec<f32> = row.to_vec();
-    scratch.sort_by(f32::total_cmp);
-    let idx = (scratch.len() as f32 * 0.25) as usize;
-    scratch[idx.min(scratch.len() - 1)]
+    noise_floor_from_sorted_scratch(&mut scratch)
+}
+
+/// Reusable-buffer variant — avoids allocating when the caller keeps scratch space.
+pub fn noise_floor_db_into(row: &[f32], scratch: &mut Vec<f32>) -> f32 {
+    if row.is_empty() {
+        return -120.0;
+    }
+    scratch.clear();
+    scratch.extend_from_slice(row);
+    noise_floor_from_sorted_scratch(scratch)
+}
+
+fn noise_floor_from_sorted_scratch(scratch: &mut [f32]) -> f32 {
+    let idx = floor_index(scratch.len());
+    scratch.select_nth_unstable_by(idx, f32::total_cmp);
+    scratch[idx]
 }
 
 /// Find local maxima at least `min_snr_db` above the noise floor.
@@ -46,11 +66,22 @@ pub fn detect_peaks(
     min_snr_db: f32,
     min_separation_bins: usize,
 ) -> Vec<Peak> {
+    let floor = noise_floor_db(row);
+    detect_peaks_with_floor(row, sample_rate, min_snr_db, min_separation_bins, floor)
+}
+
+/// Like [`detect_peaks`] but reuses a precomputed noise floor (one sort per frame).
+pub fn detect_peaks_with_floor(
+    row: &[f32],
+    sample_rate: f32,
+    min_snr_db: f32,
+    min_separation_bins: usize,
+    floor: f32,
+) -> Vec<Peak> {
     let n = row.len();
     if n < 3 {
         return Vec::new();
     }
-    let floor = noise_floor_db(row);
     let sep = min_separation_bins.max(1);
 
     let mut peaks: Vec<Peak> = Vec::new();
@@ -92,6 +123,18 @@ pub fn strongest_offset_hz(
     around_hz: f32,
     window_hz: f32,
 ) -> Option<f32> {
+    let floor = noise_floor_db(row);
+    strongest_offset_hz_with_floor(row, sample_rate, around_hz, window_hz, floor)
+}
+
+/// Like [`strongest_offset_hz`] but reuses a precomputed noise floor.
+pub fn strongest_offset_hz_with_floor(
+    row: &[f32],
+    sample_rate: f32,
+    around_hz: f32,
+    window_hz: f32,
+    floor: f32,
+) -> Option<f32> {
     let n = row.len();
     if n < 3 || sample_rate <= 0.0 {
         return None;
@@ -104,7 +147,6 @@ pub fn strongest_offset_hz(
         return None;
     }
 
-    let floor = noise_floor_db(row);
     let mut best_bin = lo as usize;
     let mut best_val = f32::NEG_INFINITY;
     for b in lo..=hi {
@@ -153,5 +195,27 @@ mod tests {
         row[600] = -25.0;
         let peaks = detect_peaks(&row, sr, 20.0, 4);
         assert_eq!(peaks.len(), 2);
+    }
+
+    #[test]
+    fn noise_floor_into_matches_allocating() {
+        let row: Vec<f32> = (0..4096).map(|i| -90.0 + (i % 17) as f32).collect();
+        let mut scratch = Vec::new();
+        let a = noise_floor_db(&row);
+        let b = noise_floor_db_into(&row, &mut scratch);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn detect_peaks_with_floor_matches() {
+        let n = 1024;
+        let sr = 12_000.0;
+        let mut row = vec![-100.0f32; n];
+        row[400] = -30.0;
+        row[600] = -25.0;
+        let floor = noise_floor_db(&row);
+        let a = detect_peaks(&row, sr, 20.0, 4);
+        let b = detect_peaks_with_floor(&row, sr, 20.0, 4, floor);
+        assert_eq!(a, b);
     }
 }

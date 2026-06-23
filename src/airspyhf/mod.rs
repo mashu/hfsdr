@@ -195,23 +195,47 @@ impl AirspyHf {
 
     /// Frontend option flags (`sys::FLAGS_*`). Discovery/Ranger band-tracking
     /// preselectors are automatic; these tune VHF Band-III and PLL behavior.
+    /// Requires libairspyhf >= 1.8.
     pub fn set_frontend_options(&mut self, flags: u32) -> Result<()> {
-        check("airspyhf_set_frontend_options", unsafe {
-            sys::airspyhf_set_frontend_options(self.dev, flags)
-        })
+        #[cfg(airspyhf_extended_api)]
+        {
+            return check("airspyhf_set_frontend_options", unsafe {
+                sys::airspyhf_set_frontend_options(self.dev, flags)
+            });
+        }
+        #[cfg(not(airspyhf_extended_api))]
+        {
+            let _ = flags;
+            Err(extended_api_unsupported("frontend options"))
+        }
     }
 
+    /// Requires libairspyhf >= 1.8.
     pub fn frontend_options(&self) -> Result<u32> {
-        let mut flags = 0u32;
-        let rc = unsafe { sys::airspyhf_get_frontend_options(self.dev, &mut flags) };
-        check("airspyhf_get_frontend_options", rc).map(|_| flags)
+        #[cfg(airspyhf_extended_api)]
+        {
+            let mut flags = 0u32;
+            let rc = unsafe { sys::airspyhf_get_frontend_options(self.dev, &mut flags) };
+            return check("airspyhf_get_frontend_options", rc).map(|_| flags);
+        }
+        #[cfg(not(airspyhf_extended_api))]
+        Err(extended_api_unsupported("frontend options"))
     }
 
     /// Antenna-port bias tee: powers external preamps/upconverters (0 = off, 1 = on).
+    /// Requires libairspyhf >= 1.8.
     pub fn set_bias_tee(&mut self, on: bool) -> Result<()> {
-        check("airspyhf_set_bias_tee", unsafe {
-            sys::airspyhf_set_bias_tee(self.dev, on as i8)
-        })
+        #[cfg(airspyhf_extended_api)]
+        {
+            return check("airspyhf_set_bias_tee", unsafe {
+                sys::airspyhf_set_bias_tee(self.dev, on as i8)
+            });
+        }
+        #[cfg(not(airspyhf_extended_api))]
+        {
+            let _ = on;
+            Err(extended_api_unsupported("bias tee"))
+        }
     }
 
     /// Whether the current sample rate runs the radio in Low-IF mode.
@@ -396,4 +420,11 @@ fn check(op: &'static str, rc: c_int) -> Result<()> {
     } else {
         Err(SourceError::Backend { op, code: rc })
     }
+}
+
+#[cfg(not(airspyhf_extended_api))]
+fn extended_api_unsupported(feature: &'static str) -> SourceError {
+    SourceError::Unsupported(format!(
+        "{feature} requires libairspyhf >= 1.8 (upgrade libairspyhf-dev / brew install airspyhf)"
+    ))
 }

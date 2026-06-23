@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 use std::collections::VecDeque;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -42,10 +42,14 @@ const MAX_SPECTRUM_ROWS_WIDEBAND: usize = 8;
 /// Catch-up pumps when the IQ ring is backing up (Airspy at 384 kHz).
 const MAX_CATCHUP_PUMPS: usize = 8;
 const MAX_CATCHUP_PUMPS_LIGHT: usize = 2;
+/// Max time the UI thread waits for the engine to exit on close (then detach).
+const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
 /// Wideband demod/FFT only need the freshest samples — not the full drain batch.
 const WIDEBAND_IQ_THRESHOLD: f32 = 96_000.0;
 const MAX_AUDIO_SAMPLES_WB: usize = 8192;
 const MAX_FFT_INPUT_WB: usize = 20_480;
+/// Slow decay on live peak-hold so stale carriers fade after tune-away.
+const SKIMMER_PEAK_HOLD_DECAY_DB: f32 = 0.25;
 /// Drop stale ring data when fill exceeds this (stay real-time under CPU pressure).
 const RING_CATCHUP_FILL: f32 = 0.55;
 const RING_CATCHUP_TARGET: f32 = 0.25;
@@ -140,8 +144,6 @@ pub struct EngineParams {
     pub skimmer: SkimmerConfig,
     pub fft_size: usize,
     pub fft_auto: bool,
-    pub view_span_hz: f32,
-    pub view_pan_offset_hz: f64,
     /// Feed the full IQ drain batch to the spectrum analyzer (not just the recent tail).
     pub full_drain_spectrum: bool,
 }
@@ -156,8 +158,6 @@ impl Default for EngineParams {
             skimmer: SkimmerConfig::default(),
             fft_size: FFT_SIZE,
             fft_auto: true,
-            view_span_hz: 12_000.0,
-            view_pan_offset_hz: 0.0,
             full_drain_spectrum: false,
         }
     }
@@ -195,11 +195,26 @@ pub enum EngineCommand {
     Disconnect,
     Tune(f64),
     SetRfAgc(bool),
+    #[cfg(feature = "airspy")]
     SetAirspyAtt(u8),
+    #[cfg(feature = "airspy")]
     SetAirspyLna(bool),
+    #[cfg(feature = "airspy")]
     SetAirspyAgcThreshold(bool),
+    #[cfg(feature = "airspy")]
     SetAirspyFrontendOptions(u32),
+    #[cfg(feature = "airspy")]
     SetAirspyBiasTee(bool),
+    #[cfg(feature = "rtlsdr")]
+    SetRtlSdrRtlAgc(bool),
+    #[cfg(feature = "rtlsdr")]
+    SetRtlSdrManualGain(bool),
+    #[cfg(feature = "rtlsdr")]
+    SetRtlSdrTunerGain(i32),
+    #[cfg(feature = "rtlsdr")]
+    SetRtlSdrBiasTee(bool),
+    #[cfg(feature = "rtlsdr")]
+    SetRtlSdrPpm(i32),
     SetAudioDevice(Option<String>),
     ClearSkimmerSpots,
     ReloadScp,
@@ -283,7 +298,15 @@ impl Drop for EngineHandle {
     fn drop(&mut self) {
         self.send(EngineCommand::Shutdown);
         if let Some(h) = self.join.take() {
-            let _ = h.join();
+            let deadline = Instant::now() + SHUTDOWN_JOIN_TIMEOUT;
+            while !h.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(16));
+            }
+            if h.is_finished() {
+                let _ = h.join();
+            } else {
+                log::warn("engine thread did not exit in time; detaching on close");
+            }
         }
     }
 }
@@ -312,6 +335,9 @@ struct Engine {
     ingress_worker: Option<IngressWorker>,
     audio_scratch: Vec<f32>,
     latest: Vec<f32>,
+    /// Max-hold spectrum for skimmer peak picking (CW carriers are intermittent).
+    skimmer_peak_hold: Vec<f32>,
+    last_skimmer_center_hz: f64,
     fft_size: usize,
     spectrum_rate: f32,
     spectrum_decim: usize,
@@ -369,6 +395,8 @@ impl Engine {
             ingress_worker: Some(IngressWorker::spawn()),
             audio_scratch: Vec::new(),
             latest: vec![-120.0; FFT_SIZE],
+            skimmer_peak_hold: vec![-120.0; FFT_SIZE],
+            last_skimmer_center_hz: f64::NAN,
             fft_size: FFT_SIZE,
             spectrum_rate: 12_000.0,
             spectrum_decim: 1,
@@ -409,7 +437,15 @@ impl Engine {
             if streaming {
                 self.poll_handshake();
                 let (ring_fill, _) = self.measure_iq_buffer();
-                let max_pumps = if ring_fill > 0.35 {
+                let iq_recording = self.recorder.is_some();
+                let max_pumps = if iq_recording {
+                    // Drain the ring aggressively — catch-up drops are disabled while recording.
+                    if ring_fill > 0.2 {
+                        MAX_CATCHUP_PUMPS * 4
+                    } else {
+                        MAX_CATCHUP_PUMPS
+                    }
+                } else if ring_fill > 0.35 {
                     if self
                         .params
                         .lock()
@@ -427,7 +463,8 @@ impl Engine {
                 loop {
                     let got = self.pump_stream();
                     pumps += 1;
-                    if got == 0 || pumps >= max_pumps {
+                    self.drain_commands();
+                    if !self.running || got == 0 || pumps >= max_pumps {
                         break;
                     }
                     let (fill, _) = self.measure_iq_buffer();
@@ -450,7 +487,11 @@ impl Engine {
                 self.update_ring_utilization(sample_rate, (0.0, 0.0), 0, dt);
                 self.last_pump_at = Instant::now();
                 self.publish_stats(0);
-                thread::sleep(Duration::from_millis(20));
+                match self.cmd_rx.recv_timeout(Duration::from_millis(20)) {
+                    Ok(cmd) => self.handle_command(cmd),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => self.running = false,
+                }
             }
         }
         // Clean shutdown: stop source so the reader thread exits.
@@ -502,29 +543,64 @@ impl Engine {
                     let _ = conn.source.set_agc(on);
                 }
             }
+            #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyAtt(step) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_hf_att(step);
                 }
             }
+            #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyLna(on) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_hf_lna(on);
                 }
             }
+            #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyAgcThreshold(high) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_hf_agc_threshold(high);
                 }
             }
+            #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyFrontendOptions(flags) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_frontend_options(flags);
                 }
             }
+            #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyBiasTee(on) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_bias_tee(on);
+                }
+            }
+            #[cfg(feature = "rtlsdr")]
+            EngineCommand::SetRtlSdrRtlAgc(on) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_agc(on);
+                }
+            }
+            #[cfg(feature = "rtlsdr")]
+            EngineCommand::SetRtlSdrManualGain(manual) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_tuner_gain_mode(manual);
+                }
+            }
+            #[cfg(feature = "rtlsdr")]
+            EngineCommand::SetRtlSdrTunerGain(gain_db10) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_tuner_gain(gain_db10);
+                }
+            }
+            #[cfg(feature = "rtlsdr")]
+            EngineCommand::SetRtlSdrBiasTee(on) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_bias_tee(on);
+                }
+            }
+            #[cfg(feature = "rtlsdr")]
+            EngineCommand::SetRtlSdrPpm(ppm) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_freq_correction(ppm);
                 }
             }
             EngineCommand::SetAudioDevice(name) => {
@@ -533,6 +609,7 @@ impl Engine {
             }
             EngineCommand::ClearSkimmerSpots => {
                 self.skimmer.clear();
+                self.reset_skimmer_peak_hold(self.fft_size);
             }
             EngineCommand::ReloadScp => {
                 self.skimmer.reload_scp();
@@ -656,7 +733,27 @@ impl Engine {
         self.iq_buffer_peak = 0.0;
         self.last_pump_got = 0;
         self.last_pump_at = Instant::now();
+        self.reset_skimmer_peak_hold(self.fft_size);
+        self.last_skimmer_center_hz = f64::NAN;
         self.stop_recorder();
+    }
+
+    fn reset_skimmer_peak_hold(&mut self, len: usize) {
+        let len = len.max(1);
+        if self.skimmer_peak_hold.len() != len {
+            self.skimmer_peak_hold.resize(len, -120.0);
+        } else {
+            self.skimmer_peak_hold.fill(-120.0);
+        }
+    }
+
+    fn touch_skimmer_center(&mut self, center_hz: f64) {
+        if self.last_skimmer_center_hz.is_nan()
+            || (center_hz - self.last_skimmer_center_hz).abs() > 1.0
+        {
+            self.reset_skimmer_peak_hold(self.fft_size);
+            self.last_skimmer_center_hz = center_hz;
+        }
     }
 
     fn stop_recorder(&mut self) {
@@ -715,7 +812,8 @@ impl Engine {
                 log::info("IQ playback finished");
             }
         } else if let Some(conn) = &mut self.conn {
-            {
+            // Never discard ring samples while recording — every sample must reach the file.
+            if self.recorder.is_none() {
                 let cap = conn.iq_ring_capacity.max(1);
                 let slots = conn.iq.slots();
                 let fill = slots as f32 / cap as f32;
@@ -779,6 +877,7 @@ impl Engine {
         };
 
         self.sync_spectrum_chain(spectrum_input_rate, &params);
+        self.touch_skimmer_center(center_hz);
 
         let cw = params.cw.clone();
         let wideband = device_rate > WIDEBAND_IQ_THRESHOLD;
@@ -803,8 +902,12 @@ impl Engine {
             });
 
         if use_ingress_worker {
-            self.demod
-                .process(batch.as_slice(), device_rate, &cw, &mut self.audio_scratch);
+            self.demod.process(
+                self.demod_input(batch.as_slice(), device_rate),
+                device_rate,
+                &cw,
+                &mut self.audio_scratch,
+            );
             if let Some(decimated) = self.ingress_worker.as_ref().and_then(|w| w.finish()) {
                 self.drain_decim = decimated;
             } else {
@@ -813,6 +916,7 @@ impl Engine {
             }
         } else if wideband && ingress_decim > 1 && self.spectrum_decim <= 1 {
             let batch_demod = Arc::clone(&batch);
+            let demod_input = self.demod_input(batch_demod.as_slice(), device_rate);
             let (demod, audio_scratch, ingress, decim_buf) = (
                 &mut self.demod,
                 &mut self.audio_scratch,
@@ -820,7 +924,7 @@ impl Engine {
                 &mut self.drain_decim,
             );
             join(
-                || demod.process(batch_demod.as_slice(), device_rate, &cw, audio_scratch),
+                || demod.process(demod_input, device_rate, &cw, audio_scratch),
                 || ingress.decimate_block(batch.as_slice(), decim_buf),
             );
         } else {
@@ -840,16 +944,21 @@ impl Engine {
                     params.full_drain_spectrum,
                 );
                 let batch_demod = Arc::clone(&batch);
+                let demod_input = self.demod_input(batch_demod.as_slice(), device_rate);
                 let (demod, spectrum_front) = (&mut self.demod, &mut self.spectrum_front);
                 let (audio_scratch, spectrum_scratch) =
                     (&mut self.audio_scratch, &mut self.spectrum_scratch);
                 join(
-                    || demod.process(batch_demod.as_slice(), device_rate, &cw, audio_scratch),
+                    || demod.process(demod_input, device_rate, &cw, audio_scratch),
                     || spectrum_front.process(fft_base, spectrum_scratch),
                 );
             } else {
-                self.demod
-                    .process(batch.as_slice(), device_rate, &cw, &mut self.audio_scratch);
+                self.demod.process(
+                    self.demod_input(batch.as_slice(), device_rate),
+                    device_rate,
+                    &cw,
+                    &mut self.audio_scratch,
+                );
             }
         }
 
@@ -886,12 +995,26 @@ impl Engine {
         let fft_input: &[Complex32] = &self.spectrum_scratch;
         let max_rows = self.adaptive_spectrum_rows(device_rate);
         self.last_spectrum_rows = max_rows;
+        let playback = self.playback.is_some();
         let analyzer = &mut self.analyzer;
         let latest = &mut self.latest;
+        let skimmer_peak_hold = &mut self.skimmer_peak_hold;
         let row_pool = &mut self.row_pool;
         let mut produced: Vec<Vec<f32>> = Vec::new();
         analyzer.process_limited(fft_input, max_rows, |row| {
             latest.copy_from_slice(row);
+            if skimmer_peak_hold.len() != row.len() {
+                skimmer_peak_hold.resize(row.len(), -120.0);
+            }
+            if playback {
+                for (hold, &sample) in skimmer_peak_hold.iter_mut().zip(row.iter()) {
+                    *hold = hold.max(sample);
+                }
+            } else {
+                for (hold, &sample) in skimmer_peak_hold.iter_mut().zip(row.iter()) {
+                    *hold = (*hold - SKIMMER_PEAK_HOLD_DECAY_DB).max(sample);
+                }
+            }
             let mut buf = row_pool
                 .pop()
                 .unwrap_or_else(|| vec![-120.0; row.len()]);
@@ -918,7 +1041,10 @@ impl Engine {
             } else {
                 (batch.as_slice(), device_rate)
             };
-            let throttle = if skimmer_iq_rate > 96_000.0 {
+            let is_kiwi = self.conn.as_ref().is_some_and(|c| c.is_kiwi);
+            let throttle = if is_kiwi && skimmer_iq_rate <= 24_000.0 {
+                2
+            } else if skimmer_iq_rate > 96_000.0 {
                 4
             } else if skimmer_iq_rate > 48_000.0 {
                 2
@@ -931,7 +1057,7 @@ impl Engine {
                 self.skimmer.set_config(cfg);
                 self.skimmer.submit(
                     skimmer_iq,
-                    &self.latest,
+                    &self.skimmer_peak_hold,
                     skimmer_iq_rate,
                     self.spectrum_rate,
                     self.spectrum_pan_hz,
@@ -947,7 +1073,7 @@ impl Engine {
 
     fn sync_spectrum_chain(&mut self, iq_rate: f32, params: &EngineParams) {
         // Always FFT the full passband; UI zoom/pan is a viewport crop on the waterfall.
-        let _ = params.view_span_hz;
+        let _ = params;
         let (decim, fft, eff) = spectrum_plan(iq_rate, params.fft_size, params.fft_auto, iq_rate);
         self.spectrum_rate = eff;
         self.spectrum_decim = decim;
@@ -959,6 +1085,7 @@ impl Engine {
             self.spectrum_hop = hop;
             self.analyzer = SpectrumAnalyzer::new(fft, hop);
             self.latest = vec![-120.0; fft];
+            self.reset_skimmer_peak_hold(fft);
         }
     }
 
@@ -1023,6 +1150,14 @@ impl Engine {
             samples
         } else {
             &samples[samples.len() - max..]
+        }
+    }
+
+    fn demod_input<'a>(&self, samples: &'a [Complex32], rate: f32) -> &'a [Complex32] {
+        if rate > WIDEBAND_IQ_THRESHOLD {
+            self.wideband_tail(samples, rate, MAX_AUDIO_SAMPLES_WB)
+        } else {
+            samples
         }
     }
 

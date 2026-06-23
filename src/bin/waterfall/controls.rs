@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 
 use eframe::egui::{ComboBox, DragValue, FontId, Response, RichText, Slider, Ui, Vec2};
 
-use crate::theme::{ACCENT, MUTED};
+use crate::theme::{chip_hovered, ACCENT, MUTED};
 
 pub fn scroll_slider_f32(ui: &mut Ui, value: &mut f32, range: RangeInclusive<f32>, label: &str) -> Response {
     let span = *range.end() - *range.start();
@@ -165,7 +165,7 @@ fn digit_wheel(ui: &mut Ui, hz: &mut u64, place: u64) -> bool {
     let digit = ((*hz / place) % 10) as u8;
     let size = Vec2::new(24.0, 30.0);
     let (rect, resp) = ui.allocate_exact_size(size, eframe::egui::Sense::hover());
-    let hovered = resp.hovered();
+    let hovered = chip_hovered(ui, rect, &resp);
     if hovered {
         let label = if place >= 1_000_000 {
             format!("{:.0} MHz per step", place as f64 / 1_000_000.0)

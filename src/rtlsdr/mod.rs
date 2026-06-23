@@ -219,11 +219,14 @@ impl IqSource for RtlSdr {
 
         check("rtlsdr_reset_buffer", unsafe { sys::rtlsdr_reset_buffer(self.dev) })?;
 
-        let dev = self.dev;
+        let dev_addr = self.dev as usize;
+        let ctx_addr = ctx_ptr as usize;
         let handle = thread::Builder::new()
             .name("rtlsdr-async".into())
             .spawn(move || {
-                let _ = unsafe { sys::rtlsdr_read_async(dev, stream_cb, ctx_ptr, 0, 0) };
+                let dev = dev_addr as *mut sys::rtlsdr_dev_t;
+                let ctx = ctx_addr as *mut c_void;
+                let _ = unsafe { sys::rtlsdr_read_async(dev, stream_cb, ctx, 0, 0) };
             })
             .map_err(|_| SourceError::Backend {
                 op: "spawn rtlsdr async thread",

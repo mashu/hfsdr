@@ -92,6 +92,17 @@ extern "C" {
     pub fn airspyhf_set_hf_att(device: *mut airspyhf_device_t, value: u8) -> c_int;
     /// LNA / preamp: 0 or 1 (+6 dB, compensated digitally).
     pub fn airspyhf_set_hf_lna(device: *mut airspyhf_device_t, flag: u8) -> c_int;
+    pub fn airspyhf_version_string_read(
+        device: *mut airspyhf_device_t,
+        version: *mut c_char,
+        length: u8,
+    ) -> c_int;
+}
+
+// libairspyhf >= 1.8 — absent from older distro/brew packages.
+#[cfg(airspyhf_extended_api)]
+#[link(name = "airspyhf")]
+extern "C" {
     pub fn airspyhf_get_frontend_options(
         device: *mut airspyhf_device_t,
         flags: *mut u32,
@@ -102,9 +113,4 @@ extern "C" {
     ) -> c_int;
     /// 0 = off, 1 = on — DC bias on the antenna port for active preamps.
     pub fn airspyhf_set_bias_tee(device: *mut airspyhf_device_t, value: i8) -> c_int;
-    pub fn airspyhf_version_string_read(
-        device: *mut airspyhf_device_t,
-        version: *mut c_char,
-        length: u8,
-    ) -> c_int;
 }

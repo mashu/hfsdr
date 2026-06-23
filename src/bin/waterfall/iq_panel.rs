@@ -7,6 +7,7 @@ use eframe::egui::{self, Ui};
 use crate::engine::EngineStats;
 use crate::iq_dialog;
 use crate::popup::{path_row, popup_section, primary_button, secondary_button};
+use crate::status_widgets::iq_playback_chip;
 use crate::theme::MUTED;
 
 /// Persisted paths for IQ record / playback.
@@ -60,6 +61,15 @@ impl IqPanel {
         }
     }
 
+    pub fn replay_playback(&self) -> Option<IqPanelCmd> {
+        let path = self.playback_path.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(IqPanelCmd::Play(PathBuf::from(path)))
+        }
+    }
+
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -73,7 +83,7 @@ impl IqPanel {
                 ui,
                 "Folder",
                 &self.capture_dir.display().to_string(),
-                "…",
+                "Choose folder",
             ) {
                 if let Some(dir) = iq_dialog::pick_capture_dir(&self.capture_dir) {
                     self.capture_dir = dir;
@@ -108,23 +118,34 @@ impl IqPanel {
             } else {
                 self.playback_path.clone()
             };
-            if path_row(ui, "File", &playback_label, "…") {
-                let start = if self.playback_path.is_empty() {
-                    self.capture_dir.clone()
-                } else {
-                    PathBuf::from(&self.playback_path)
-                };
-                if let Some(path) = iq_dialog::pick_playback_file(&start) {
-                    self.playback_path = path.display().to_string();
-                    dirty = true;
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    if path_row(ui, "File", &playback_label, "Choose file") {
+                        let start = if self.playback_path.is_empty() {
+                            self.capture_dir.clone()
+                        } else {
+                            PathBuf::from(&self.playback_path)
+                        };
+                        if let Some(path) = iq_dialog::pick_playback_file(&start) {
+                            self.playback_path = path.display().to_string();
+                            dirty = true;
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                let can_play = !self.playback_path.trim().is_empty();
+                if iq_playback_chip(ui, view.stats.iq_playback, can_play).clicked() {
+                    if let Some(cmd) = self.replay_playback() {
+                        cmds.push(cmd);
+                    }
                 }
-            }
+            });
             ui.horizontal(|ui| {
                 let can_play = !self.playback_path.trim().is_empty();
-                if primary_button(ui, "Play", can_play && !view.stats.iq_playback).clicked() {
-                    cmds.push(IqPanelCmd::Play(PathBuf::from(
-                        self.playback_path.trim(),
-                    )));
+                if primary_button(ui, "Play", can_play).clicked() {
+                    if let Some(cmd) = self.replay_playback() {
+                        cmds.push(cmd);
+                    }
                 }
                 if view.stats.iq_playback && secondary_button(ui, "Stop").clicked() {
                     cmds.push(IqPanelCmd::StopPlayback);

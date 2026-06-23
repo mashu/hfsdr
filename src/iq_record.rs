@@ -148,11 +148,14 @@ impl IqRecorder {
         &self.path
     }
 
+    /// Queue samples for the writer thread. Blocks until the chunk is accepted — never drops.
     pub fn push(&self, samples: &[Complex32]) {
         if samples.is_empty() {
             return;
         }
-        let _ = self.tx.try_send(RecMsg::Chunk(samples.to_vec()));
+        self.tx
+            .send(RecMsg::Chunk(samples.to_vec()))
+            .expect("IQ recorder writer thread stopped");
     }
 
     pub fn stop(mut self) -> io::Result<IqCaptureMeta> {

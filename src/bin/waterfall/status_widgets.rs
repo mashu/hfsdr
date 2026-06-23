@@ -2,14 +2,60 @@
 
 use eframe::egui::{self, Color32, FontId, Response, Sense, Stroke, Ui, Vec2};
 
-use crate::theme::{ACCENT, MUTED, OK, WARN};
+use crate::theme::{chip_hovered, ACCENT, MUTED, OK, WARN};
+
+/// Engine / pipeline chip — opens the interactive DSP flow diagram.
+pub fn engine_pipeline_chip(ui: &mut Ui, panel_open: bool, streaming: bool) -> Response {
+    let size = Vec2::new(72.0, 20.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = chip_hovered(ui, rect, &response);
+    let painter = ui.painter_at(rect);
+    let rounding = 4.0;
+    let accent = if panel_open || hovered {
+        ACCENT
+    } else if streaming {
+        OK
+    } else {
+        MUTED
+    };
+    let border = Color32::from_rgba_unmultiplied(
+        accent.r(),
+        accent.g(),
+        accent.b(),
+        if hovered || panel_open { 200 } else { 110 },
+    );
+    let bg = if hovered || panel_open {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28)
+    } else {
+        Color32::from_rgb(30, 36, 48)
+    };
+    painter.rect(rect, rounding, bg, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    painter.text(
+        rect.center() - Vec2::new(6.0, 0.0),
+        egui::Align2::CENTER_CENTER,
+        "Engine",
+        FontId::proportional(11.0),
+        accent,
+    );
+    painter.text(
+        egui::pos2(rect.right() - 6.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        "▾",
+        FontId::proportional(10.0),
+        accent,
+    );
+    response.on_hover_text(
+        "Receive pipeline — source, DSP stages, spectrum, skimmer, sinks\n\
+         Click for draggable flow diagram with live stage status",
+    )
+}
 
 /// IQ ring buffer — framed, labeled control; click opens record / playback panel.
 pub fn iq_buffer_control(ui: &mut Ui, fill: f32, buffer_secs: f32, panel_open: bool) -> Response {
     let fill = fill.clamp(0.0, 1.0);
     let size = Vec2::new(92.0, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
+    let hovered = chip_hovered(ui, rect, &response);
     let painter = ui.painter_at(rect);
     let rounding = 4.0;
 
@@ -88,7 +134,7 @@ pub fn iq_record_toggle(
         size,
         if enabled { Sense::click() } else { Sense::hover() },
     );
-    let hovered = response.hovered();
+    let hovered = chip_hovered(ui, rect, &response);
     let painter = ui.painter_at(rect);
     let rounding = 4.0;
     let stroke_color = if !enabled {
@@ -137,12 +183,63 @@ pub fn iq_record_toggle(
     }
 }
 
+/// One-click replay of the IQ file selected in the I/O panel.
+pub fn iq_playback_chip(ui: &mut Ui, playing: bool, has_file: bool) -> Response {
+    let size = Vec2::new(28.0, 20.0);
+    let enabled = has_file;
+    let (rect, response) = ui.allocate_exact_size(
+        size,
+        if enabled { Sense::click() } else { Sense::hover() },
+    );
+    let hovered = chip_hovered(ui, rect, &response);
+    let painter = ui.painter_at(rect);
+    let rounding = 4.0;
+    let accent = if playing { OK } else { ACCENT };
+    let stroke_color = if !enabled {
+        Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 60)
+    } else if playing {
+        Color32::from_rgba_unmultiplied(OK.r(), OK.g(), OK.b(), if hovered { 220 } else { 160 })
+    } else if hovered {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 220)
+    } else {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 130)
+    };
+    let bg = if !enabled {
+        Color32::from_rgb(30, 36, 48)
+    } else if playing {
+        Color32::from_rgba_unmultiplied(OK.r(), OK.g(), OK.b(), if hovered { 50 } else { 36 })
+    } else if hovered {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28)
+    } else {
+        Color32::from_rgb(30, 36, 48)
+    };
+    painter.rect(rect, rounding, bg, Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
+    painter.text(
+        rect.center() + Vec2::new(1.0, 0.0),
+        egui::Align2::CENTER_CENTER,
+        "▶",
+        FontId::proportional(10.0),
+        if !enabled {
+            Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 120)
+        } else {
+            accent
+        },
+    );
+    if !enabled {
+        response.on_hover_text("Choose an IQ file in the I/O panel first")
+    } else if playing {
+        response.on_hover_text("Replay selected IQ file from the start")
+    } else {
+        response.on_hover_text("Play selected IQ file")
+    }
+}
+
 /// Receiver alias beside the connection badge — click opens connection settings.
 pub fn connection_alias_chip(ui: &mut Ui, alias: &str) -> Response {
     let text = truncate_middle(alias, 28);
     let size = Vec2::new(128.0, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
+    let hovered = chip_hovered(ui, rect, &response);
     let painter = ui.painter_at(rect);
     let rounding = 4.0;
     let border = if hovered {
@@ -166,11 +263,75 @@ pub fn connection_alias_chip(ui: &mut Ui, alias: &str) -> Response {
     response.on_hover_text(format!("{alias}\nClick for connection settings"))
 }
 
+/// Fixed-width cursor frequency readout — accent when hovering the plot, muted placeholder otherwise.
+pub fn cursor_freq_slot(ui: &mut Ui, label: &str, active: bool) -> Response {
+    let size = Vec2::new(156.0, 14.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let color = if active {
+        ACCENT
+    } else {
+        Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 100)
+    };
+    ui.painter_at(rect).text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        label,
+        FontId::monospace(10.5),
+        color,
+    );
+    if active {
+        response.on_hover_text("Mouse position on spectrum / waterfall")
+    } else {
+        response.on_hover_text("Hover spectrum or waterfall to read cursor frequency")
+    }
+}
+
+/// One-click connect to the last configured receiver (beside the OFFLINE badge).
+pub fn quick_connect_chip(ui: &mut Ui, enabled: bool) -> Response {
+    let size = Vec2::new(22.0, 20.0);
+    let (rect, response) = ui.allocate_exact_size(
+        size,
+        if enabled { Sense::click() } else { Sense::hover() },
+    );
+    let hovered = chip_hovered(ui, rect, &response);
+    let painter = ui.painter_at(rect);
+    let rounding = 4.0;
+    let stroke_color = if !enabled {
+        Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 60)
+    } else if hovered {
+        Color32::from_rgba_unmultiplied(OK.r(), OK.g(), OK.b(), 220)
+    } else {
+        Color32::from_rgba_unmultiplied(OK.r(), OK.g(), OK.b(), 130)
+    };
+    let bg = if !enabled {
+        Color32::from_rgb(30, 36, 48)
+    } else if hovered {
+        Color32::from_rgba_unmultiplied(OK.r(), OK.g(), OK.b(), 42)
+    } else {
+        Color32::from_rgb(30, 36, 48)
+    };
+    painter.rect(rect, rounding, bg, Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "⚡",
+        FontId::proportional(11.0),
+        if !enabled {
+            Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 120)
+        } else if hovered {
+            OK
+        } else {
+            MUTED
+        },
+    );
+    response
+}
+
 /// One-click disconnect beside the connection badge.
 pub fn disconnect_chip(ui: &mut Ui) -> Response {
     let size = Vec2::new(22.0, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
+    let hovered = chip_hovered(ui, rect, &response);
     let painter = ui.painter_at(rect);
     let rounding = 4.0;
     let stroke_color = if hovered {

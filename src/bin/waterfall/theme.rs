@@ -3,9 +3,14 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, Sense,
-    Stroke, TextStyle, Ui, Vec2, Visuals,
+    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Response,
+    RichText, Sense, Stroke, TextStyle, Ui, Vec2, Visuals,
 };
+
+/// Pointer is over the painted `rect` and nothing opaque covers this widget.
+pub fn chip_hovered(ui: &Ui, rect: Rect, response: &Response) -> bool {
+    ui.rect_contains_pointer(rect) && response.contains_pointer()
+}
 
 pub const ACCENT: Color32 = Color32::from_rgb(56, 189, 248);
 pub const ACCENT_DIM: Color32 = Color32::from_rgb(30, 100, 140);
@@ -35,6 +40,8 @@ pub fn apply(ctx: &eframe::egui::Context) {
     visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(32, 38, 50);
     visuals.selection.bg_fill = ACCENT_DIM;
     style.visuals = visuals;
+    // Avoid tooltip-under-cursor hover flicker on compact status chips.
+    style.interaction.tooltip_delay = 0.75;
     style.spacing.item_spacing = eframe::egui::vec2(8.0, 6.0);
     style.spacing.button_padding = eframe::egui::vec2(10.0, 5.0);
     style.text_styles.insert(TextStyle::Heading, FontId::new(18.0, FontFamily::Proportional));
@@ -87,7 +94,7 @@ pub fn clickable_badge(ui: &mut Ui, text: &str, color: Color32) -> eframe::egui:
     )
 }
 
-/// Compact padlock toggle for amateur band lock (icon-only).
+/// Compact chain-link toggle for amateur band lock (linked = constrained to ham bands).
 pub fn band_lock_toggle(ui: &mut Ui, on: &mut bool) -> bool {
     let size = Vec2::splat(22.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -104,7 +111,7 @@ pub fn band_lock_toggle(ui: &mut Ui, on: &mut bool) -> bool {
         Color32::from_rgb(32, 38, 50)
     };
     let stroke = Stroke::new(1.5, color);
-    let painter = ui.painter();
+    let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, fill);
     painter.rect_stroke(
         rect,
@@ -115,43 +122,47 @@ pub fn band_lock_toggle(ui: &mut Ui, on: &mut bool) -> bool {
 
     let cx = rect.center().x;
     let cy = rect.center().y;
-    let body = Rect::from_center_size(Pos2::new(cx, cy + 2.5), Vec2::new(8.0, 6.0));
-    painter.rect_stroke(body, 1.0, stroke, eframe::egui::StrokeKind::Inside);
+    draw_chain_links(&painter, cx, cy, *on, stroke);
 
-    let shackle_left = cx - 3.0;
-    let shackle_right = cx + 3.0;
-    let shackle_top = cy - 4.5;
-    let shackle_bottom = body.top() + 1.0;
-    if *on {
+    let tip = if *on {
+        "Band lock: linked — RX stays inside amateur allocations (160m–6m)"
+    } else {
+        "Band lock: open — tune anywhere on the dial"
+    };
+    resp.on_hover_text(tip);
+    changed
+}
+
+fn draw_chain_links(painter: &eframe::egui::Painter, cx: f32, cy: f32, linked: bool, stroke: Stroke) {
+    let r = 4.2;
+    let gap = if linked { 2.8 } else { 5.6 };
+    let left = Pos2::new(cx - gap / 2.0 - r, cy);
+    let right = Pos2::new(cx + gap / 2.0 + r, cy);
+
+    painter.circle_stroke(left, r, stroke);
+    painter.circle_stroke(right, r, stroke);
+
+    if linked {
         painter.line_segment(
-            [Pos2::new(shackle_left, shackle_bottom), Pos2::new(shackle_left, shackle_top)],
+            [Pos2::new(left.x + r * 0.35, cy - r * 0.55), Pos2::new(right.x - r * 0.35, cy - r * 0.55)],
             stroke,
         );
         painter.line_segment(
-            [Pos2::new(shackle_left, shackle_top), Pos2::new(shackle_right, shackle_top)],
-            stroke,
-        );
-        painter.line_segment(
-            [Pos2::new(shackle_right, shackle_top), Pos2::new(shackle_right, shackle_bottom)],
+            [Pos2::new(left.x + r * 0.35, cy + r * 0.55), Pos2::new(right.x - r * 0.35, cy + r * 0.55)],
             stroke,
         );
     } else {
+        let break_stroke = Stroke::new(stroke.width + 0.5, Color32::from_rgb(248, 113, 113));
+        let mid = Pos2::new(cx, cy);
         painter.line_segment(
-            [Pos2::new(shackle_left, shackle_bottom), Pos2::new(shackle_left, shackle_top)],
-            stroke,
+            [Pos2::new(mid.x - 2.5, cy - 3.0), Pos2::new(mid.x + 1.0, cy)],
+            break_stroke,
         );
         painter.line_segment(
-            [Pos2::new(shackle_left, shackle_top), Pos2::new(shackle_right, shackle_top)],
-            stroke,
-        );
-        painter.line_segment(
-            [Pos2::new(shackle_right, shackle_top), Pos2::new(shackle_right, shackle_bottom - 2.0)],
-            stroke,
+            [Pos2::new(mid.x + 1.0, cy), Pos2::new(mid.x - 2.5, cy + 3.0)],
+            break_stroke,
         );
     }
-
-    resp.on_hover_text("Lock RX to amateur bands (160m–10m, 6m)");
-    changed
 }
 
 /// Full-width DSP stage row: label, optional shortcut chip, animated pill switch.
@@ -180,13 +191,17 @@ pub fn stage_toggle(
         ACCENT.b(),
         (eframe::egui::lerp(8.0..=36.0, anim)) as u8,
     );
-    let border = Color32::from_rgba_unmultiplied(
+    let mut border = Color32::from_rgba_unmultiplied(
         ACCENT.r(),
         ACCENT.g(),
         ACCENT.b(),
         (eframe::egui::lerp(40.0..=140.0, anim)) as u8,
     );
-    ui.painter().rect(
+    let hovered = chip_hovered(ui, rect, &resp);
+    if hovered && !*on {
+        border = Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 90);
+    }
+    ui.painter_at(rect).rect(
         rect,
         CornerRadius::same(8),
         bg,
@@ -206,7 +221,8 @@ pub fn stage_toggle(
     } else {
         Color32::from_rgb(48, 54, 70)
     };
-    ui.painter().rect(
+    let painter = ui.painter_at(rect);
+    painter.rect(
         pill_rect,
         CornerRadius::same(10),
         track,
@@ -215,8 +231,7 @@ pub fn stage_toggle(
     );
     let cx = eframe::egui::lerp((pill_rect.left() + 10.0)..=(pill_rect.right() - 10.0), how_on);
     let knob = if *on { ACCENT } else { MUTED };
-    ui.painter()
-        .circle(eframe::egui::pos2(cx, pill_rect.center().y), 8.0, knob, Stroke::NONE);
+    painter.circle(eframe::egui::pos2(cx, pill_rect.center().y), 8.0, knob, Stroke::NONE);
 
     let text_left = rect.left() + 12.0;
     let title_y = if subtitle.is_some() {
@@ -224,7 +239,7 @@ pub fn stage_toggle(
     } else {
         rect.center().y
     };
-    ui.painter().text(
+    painter.text(
         eframe::egui::pos2(text_left, title_y),
         if subtitle.is_some() {
             Align2::LEFT_TOP
@@ -240,7 +255,7 @@ pub fn stage_toggle(
         },
     );
     if let Some(sub) = subtitle {
-        ui.painter().text(
+        painter.text(
             eframe::egui::pos2(text_left, rect.top() + 26.0),
             Align2::LEFT_TOP,
             sub,
@@ -254,14 +269,14 @@ pub fn stage_toggle(
             eframe::egui::pos2(pill_rect.left() - 36.0, rect.center().y - 9.0),
             eframe::egui::vec2(28.0, 18.0),
         );
-        ui.painter().rect(
+        painter.rect(
             chip_rect,
             CornerRadius::same(4),
             Color32::from_rgb(38, 44, 58),
             Stroke::new(1.0, Color32::from_rgb(70, 80, 100)),
             eframe::egui::StrokeKind::Inside,
         );
-        ui.painter().text(
+        painter.text(
             chip_rect.center(),
             Align2::CENTER_CENTER,
             chip,
@@ -285,7 +300,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> bool {
         }
         let how_on = ui.ctx().animate_bool(resp.id, *on);
         let track = if *on { ACCENT_DIM } else { Color32::from_rgb(48, 54, 70) };
-        ui.painter().rect(
+        ui.painter_at(rect).rect(
             rect,
             CornerRadius::same(9),
             track,
@@ -294,7 +309,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> bool {
         );
         let cx = eframe::egui::lerp((rect.left() + 9.0)..=(rect.right() - 9.0), how_on);
         let knob = if *on { ACCENT } else { MUTED };
-        ui.painter()
+        ui.painter_at(rect)
             .circle(eframe::egui::pos2(cx, rect.center().y), 7.0, knob, Stroke::NONE);
         ui.label(label);
     });

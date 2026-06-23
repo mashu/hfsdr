@@ -53,6 +53,14 @@ name = "pipeline-bench"
 path = "src/bin/pipeline_bench.rs"
 required-features = ["airspy"]
 
+[[bin]]
+name = "skimmer-bench"
+path = "src/bin/skimmer_bench.rs"
+
+[[bin]]
+name = "kiwi-pipeline-bench"
+path = "src/bin/kiwi_pipeline_bench.rs"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

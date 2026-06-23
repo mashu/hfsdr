@@ -139,7 +139,11 @@ impl MasterScp {
     }
 
     /// Best SCP-validated callsign embedded in decoded text (longest exact match wins).
-    pub fn find_in_text(&self, text: &str) -> Option<String> {
+    ///
+    /// When `exact_only` is true, substring prefix completion is skipped — only
+    /// calls that appear verbatim in the decode are returned. Use this when
+    /// rejecting false positives matters more than completing a partial copy.
+    pub fn find_in_text(&self, text: &str, exact_only: bool) -> Option<String> {
         if !self.is_loaded() {
             return None;
         }
@@ -164,7 +168,8 @@ impl MasterScp {
                         {
                             best_exact = Some(call);
                         }
-                    } else if call.len() > sub.len()
+                    } else if !exact_only
+                        && call.len() > sub.len()
                         && best_partial
                             .as_ref()
                             .is_none_or(|b| call.len() > b.len())
@@ -316,10 +321,14 @@ G0ABC
     fn find_in_text_prefers_longest_exact() {
         let scp = MasterScp::from_text("VER20240101\nSM5DAJ\nW1AW\n");
         assert_eq!(
-            scp.find_in_text("DE SM5DAJ SM5DAJ K"),
+            scp.find_in_text("DE SM5DAJ SM5DAJ K", false),
             Some("SM5DAJ".into())
         );
-        assert_eq!(scp.find_in_text("CQ SM5DA"), Some("SM5DAJ".into()));
+        assert_eq!(
+            scp.find_in_text("CQ SM5DA", false),
+            Some("SM5DAJ".into())
+        );
+        assert_eq!(scp.find_in_text("CQ SM5DA", true), None);
     }
 
     #[test]

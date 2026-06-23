@@ -6,10 +6,18 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::source::{AirspySettings, ConnectRequest, KiwiSettings};
+use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, RtlSdrSettings};
 
 const APP_DIR: &str = "hfsdr";
 const FILE: &str = "settings.json";
+
+fn default_pan_step_hz() -> f32 {
+    500.0
+}
+
+fn default_pan_step_fast_hz() -> f32 {
+    5000.0
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotchData {
@@ -67,6 +75,12 @@ pub struct AppSettings {
     pub range_db: f32,
     pub display_auto_track: bool,
     pub show_band_overview: bool,
+    /// Arrow-key pan / tune step (Hz); hold accelerates to [`pan_step_fast_hz`].
+    #[serde(default = "default_pan_step_hz")]
+    pub pan_step_hz: f32,
+    /// Coarse step after sustained ←/→ hold or Ctrl+arrow.
+    #[serde(default = "default_pan_step_fast_hz")]
+    pub pan_step_fast_hz: f32,
     pub smooth_alpha: f32,
     /// Waterfall time averaging: 1 = none, 2 or 4 = frames per line.
     pub waterfall_avg: u8,
@@ -121,6 +135,8 @@ pub struct AppSettings {
     pub kiwi: KiwiSettings,
     pub airspy: AirspySettings,
     pub airspy_sample_rate: u32,
+    pub rtlsdr: RtlSdrSettings,
+    pub rtlsdr_sample_rate: u32,
     /// Bumped when persisted layout or defaults change; used for one-time migrations.
     #[serde(default = "legacy_settings_format")]
     pub settings_format: u32,
@@ -164,6 +180,8 @@ impl Default for AppSettings {
             range_db: 17.0,
             display_auto_track: false,
             show_band_overview: false,
+            pan_step_hz: default_pan_step_hz(),
+            pan_step_fast_hz: default_pan_step_fast_hz(),
             smooth_alpha: 0.09,
             waterfall_avg: 1,
             target_fps: 30,
@@ -186,13 +204,13 @@ impl Default for AppSettings {
             skimmer_initial_wpm: 22.0,
             skimmer_thr_low: 0.55,
             skimmer_thr_high: 0.72,
-            skimmer_channel_timeout_secs: 8.0,
-            skimmer_store_max_age_secs: 120.0,
+            skimmer_channel_timeout_secs: 30.0,
+            skimmer_store_max_age_secs: 300.0,
             skimmer_max_decode_chars: 64,
             min_spot_snr: 12.0,
             spot_cq_only: false,
             spot_hide_heard_labels: true,
-            spot_max_age_secs: 90.0,
+            spot_max_age_secs: 180.0,
             spot_callsign_filter: String::new(),
             spot_label_limit: 40,
             scp_require: true,
@@ -209,6 +227,8 @@ impl Default for AppSettings {
             kiwi: KiwiSettings::default(),
             airspy: AirspySettings::default(),
             airspy_sample_rate: 384_000,
+            rtlsdr: RtlSdrSettings::default(),
+            rtlsdr_sample_rate: 2_048_000,
             settings_format: 1,
             iq_capture_dir: String::new(),
             iq_playback_path: String::new(),

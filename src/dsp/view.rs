@@ -173,7 +173,7 @@ pub struct SpectrumViewMapping {
     pub view_span_hz: f32,
     /// Pan for frequency axis labels and mouse hit-testing (always matches plot state).
     pub pan_offset_hz: f64,
-    /// Pan passed to [`compose_panadapter_row`] (zero when FFT rows are mix-down centered).
+    /// Pan passed to [`compose_panadapter_row`] when cropping FFT rows to the viewport.
     pub compose_pan_offset_hz: f64,
     /// Unpadded IQ data width (native passband).
     pub data_span_hz: f32,
@@ -309,7 +309,8 @@ pub fn spectrum_view_mapping(
         row_rate_hz,
         view_span_hz,
         pan_offset_hz,
-        compose_pan_offset_hz: if spectrum_zoomed { 0.0 } else { pan_offset_hz },
+        // Engine FFTs the full passband; UI pan is always a viewport crop on stored rows.
+        compose_pan_offset_hz: pan_offset_hz,
         data_span_hz: if allow_band_padding {
             iq_passband_hz
         } else {
@@ -328,7 +329,7 @@ mod tests {
         let m = spectrum_view_mapping(768_000.0, 48_000.0, true, 30_000.0, 12_000.0, false);
         assert_eq!(m.row_rate_hz, 48_000.0);
         assert_eq!(m.pan_offset_hz, 12_000.0);
-        assert_eq!(m.compose_pan_offset_hz, 0.0);
+        assert_eq!(m.compose_pan_offset_hz, 12_000.0);
     }
 
     #[test]

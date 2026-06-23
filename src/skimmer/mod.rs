@@ -23,6 +23,7 @@ pub use morse::{decode_elements, encode_char};
 pub use patterns::{analyze, looks_like_callsign, PatternMatch};
 pub use scp::{MasterScp, MASTER_SCP_URL};
 pub use peaks::{
-    bin_to_offset_hz, detect_peaks, noise_floor_db, offset_hz_to_bin, strongest_offset_hz, Peak,
+    bin_to_offset_hz, detect_peaks, detect_peaks_with_floor, noise_floor_db, noise_floor_db_into,
+    offset_hz_to_bin, strongest_offset_hz, strongest_offset_hz_with_floor, Peak,
 };
 pub use spots::{Spot, SpotKind, SpotSort, SpotStore};

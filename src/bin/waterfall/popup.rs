@@ -7,7 +7,7 @@ use eframe::egui::{
     StrokeKind, Ui, Vec2,
 };
 
-use crate::theme::{ACCENT, MUTED, PANEL, SURFACE, WARN};
+use crate::theme::{chip_hovered, ACCENT, MUTED, PANEL, SURFACE, WARN};
 
 pub fn popup_window_frame() -> Frame {
     Frame::new()
@@ -129,20 +129,24 @@ pub fn alert_banner(ui: &mut Ui, text: &str, detail: Option<&str>) {
     ui.add_space(6.0);
 }
 
-/// Label + truncated path + browse — one row.
-pub fn path_row(ui: &mut Ui, label: &str, path: &str, browse: &str) -> bool {
+/// Label, truncated path, and a clear browse action — stacked for readability.
+pub fn path_row(ui: &mut Ui, label: &str, path: &str, browse_label: &str) -> bool {
     let mut picked = false;
-    ui.horizontal(|ui| {
+    ui.vertical(|ui| {
         ui.label(RichText::new(label).small().color(MUTED));
-        ui.label(
-            RichText::new(truncate_middle(path, 36))
-                .small()
-                .monospace()
-                .color(Color32::from_rgb(170, 180, 198)),
-        );
-        if ghost_button(ui, browse).clicked() {
-            picked = true;
-        }
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(truncate_middle(path, 42))
+                    .small()
+                    .monospace()
+                    .color(Color32::from_rgb(170, 180, 198)),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if secondary_button(ui, browse_label).clicked() {
+                    picked = true;
+                }
+            });
+        });
     });
     picked
 }
@@ -254,7 +258,7 @@ pub fn list_row(ui: &mut Ui, text: &str, enabled: bool) -> egui::Response {
     let width = ui.available_width();
     let height = 26.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click());
-    let hovered = response.hovered() && enabled;
+    let hovered = chip_hovered(ui, rect, &response) && enabled;
     let painter = ui.painter_at(rect);
     let bg = if !enabled {
         Color32::from_rgb(22, 26, 34)

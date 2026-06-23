@@ -21,12 +21,9 @@ extern "C" {
     pub fn rtlsdr_open(dev: *mut *mut rtlsdr_dev_t, index: u32) -> c_int;
     pub fn rtlsdr_close(dev: *mut rtlsdr_dev_t) -> c_int;
     pub fn rtlsdr_set_center_freq(dev: *mut rtlsdr_dev_t, freq: u32) -> c_int;
-    pub fn rtlsdr_get_center_freq(dev: *mut rtlsdr_dev_t) -> u32;
     pub fn rtlsdr_set_freq_correction(dev: *mut rtlsdr_dev_t, ppm: c_int) -> c_int;
-    pub fn rtlsdr_get_freq_correction(dev: *mut rtlsdr_dev_t) -> c_int;
     pub fn rtlsdr_get_tuner_gains(dev: *mut rtlsdr_dev_t, gains: *mut c_int) -> c_int;
     pub fn rtlsdr_set_tuner_gain(dev: *mut rtlsdr_dev_t, gain: c_int) -> c_int;
-    pub fn rtlsdr_get_tuner_gain(dev: *mut rtlsdr_dev_t) -> c_int;
     pub fn rtlsdr_set_tuner_gain_mode(dev: *mut rtlsdr_dev_t, manual: c_int) -> c_int;
     pub fn rtlsdr_set_sample_rate(dev: *mut rtlsdr_dev_t, rate: u32) -> c_int;
     pub fn rtlsdr_get_sample_rate(dev: *mut rtlsdr_dev_t) -> u32;

@@ -10,6 +10,8 @@ use std::fmt;
 use hfsdr::{Complex32, Consumer, IqSource, kiwi_iq_half_hz, KiwiSource, KIWI_IQ_RATE};
 #[cfg(feature = "airspy")]
 use hfsdr::{AirspyHf, airspyhf::iq_ring_capacity};
+#[cfg(feature = "rtlsdr")]
+use hfsdr::{rtlsdr::{self, iq_ring_capacity as rtlsdr_ring_capacity}, RtlSdr};
 use serde::{Deserialize, Serialize};
 
 /// Kiwi IQ stream options sent at connect (see kiwiclient `-L`/`-H`/`-o`/`-r`).
@@ -111,17 +113,15 @@ fn default_hf_lna_on() -> bool {
     true
 }
 
+#[cfg(feature = "airspy")]
 impl AirspySettings {
     pub fn frontend_flags(&self) -> u32 {
         let mut flags = 0u32;
-        #[cfg(feature = "airspy")]
-        {
-            if self.frontend_optimize_band_iii {
-                flags |= hfsdr::airspyhf::FLAGS_OPTIMIZE_BAND_III;
-            }
-            if self.frontend_optimize_pll_boundary {
-                flags |= hfsdr::airspyhf::FLAGS_OPTIMIZE_PLL_INT_BOUNDARY;
-            }
+        if self.frontend_optimize_band_iii {
+            flags |= hfsdr::airspyhf::FLAGS_OPTIMIZE_BAND_III;
+        }
+        if self.frontend_optimize_pll_boundary {
+            flags |= hfsdr::airspyhf::FLAGS_OPTIMIZE_PLL_INT_BOUNDARY;
         }
         flags
     }
@@ -151,11 +151,74 @@ pub fn default_airspy_sample_rate(rates: &[u32]) -> u32 {
     rates.last().copied().unwrap_or(384_000)
 }
 
+/// RTL-SDR hardware and client-side processing options.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RtlSdrSettings {
+    /// USB device index (`0` = first dongle).
+    pub device_index: u32,
+    /// RTL2832 internal digital AGC.
+    pub rtl_agc: bool,
+    /// Manual tuner gain mode (when off, tuner AGC / auto gain applies).
+    pub manual_gain: bool,
+    /// Tuner gain in tenths of a dB (e.g. 290 = 29.0 dB); clamped at connect.
+    pub tuner_gain_db10: i32,
+    /// Frequency correction in parts-per-million.
+    pub ppm: i32,
+    /// Direct sampling: 0 = off, 1 = I-ADC, 2 = Q-ADC (HF via IF, 0–28.8 MHz).
+    pub direct_sampling: u8,
+    /// Offset tuning to move DC spur away from tune (zero-IF tuners).
+    pub offset_tuning: bool,
+    /// GPIO bias tee for active antennas / upconverters.
+    pub bias_tee: bool,
+    /// Client-side IQ decimation target in Hz; `0` = native device rate.
+    pub iq_process_hz: u32,
+}
+
+impl Default for RtlSdrSettings {
+    fn default() -> Self {
+        Self {
+            device_index: 0,
+            rtl_agc: false,
+            manual_gain: true,
+            tuner_gain_db10: 290,
+            ppm: 0,
+            direct_sampling: 0,
+            offset_tuning: false,
+            bias_tee: false,
+            iq_process_hz: 0,
+        }
+    }
+}
+
+#[cfg(feature = "rtlsdr")]
+impl RtlSdrSettings {
+    pub fn ingress_decimation(&self, device_rate: u32) -> (usize, f32) {
+        if self.iq_process_hz == 0 || self.iq_process_hz >= device_rate {
+            return (1, device_rate as f32);
+        }
+        if device_rate.is_multiple_of(self.iq_process_hz) {
+            let factor = (device_rate / self.iq_process_hz) as usize;
+            (factor.max(1), self.iq_process_hz as f32)
+        } else {
+            (1, device_rate as f32)
+        }
+    }
+}
+
+/// Preferred default RTL-SDR sample rate when the connect request leaves rate at `0`.
+#[cfg(feature = "rtlsdr")]
+pub fn default_rtlsdr_sample_rate() -> u32 {
+    rtlsdr::DEFAULT_SAMPLE_RATE
+}
+
 /// Which front end to bring up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
     #[cfg(feature = "airspy")]
     Airspy,
+    #[cfg(feature = "rtlsdr")]
+    RtlSdr,
     Kiwi,
 }
 
@@ -164,6 +227,8 @@ impl fmt::Display for SourceKind {
         match self {
             #[cfg(feature = "airspy")]
             SourceKind::Airspy => write!(f, "Airspy HF+"),
+            #[cfg(feature = "rtlsdr")]
+            SourceKind::RtlSdr => write!(f, "RTL-SDR"),
             SourceKind::Kiwi => write!(f, "KiwiSDR"),
         }
     }
@@ -183,9 +248,12 @@ pub struct ConnectRequest {
     /// Kiwi IQ passband, resample, and transverter offset (ignored for Airspy).
     #[serde(default)]
     pub kiwi: KiwiSettings,
-    /// Airspy HF AGC, attenuator, LNA, and optional IQ decimation (ignored for Kiwi).
+    /// Airspy HF AGC, attenuator, LNA, and optional IQ decimation (ignored for Kiwi / RTL-SDR).
     #[serde(default)]
     pub airspy: AirspySettings,
+    /// RTL-SDR gain, ppm, direct sampling, and optional IQ decimation (ignored for Kiwi / Airspy).
+    #[serde(default)]
+    pub rtlsdr: RtlSdrSettings,
 }
 
 impl Default for ConnectRequest {
@@ -198,6 +266,7 @@ impl Default for ConnectRequest {
             sample_rate: 0,
             kiwi: KiwiSettings::default(),
             airspy: AirspySettings::default(),
+            rtlsdr: RtlSdrSettings::default(),
         }
     }
 }
@@ -208,6 +277,12 @@ impl ConnectRequest {
         match self.kind {
             #[cfg(feature = "airspy")]
             SourceKind::Airspy => format!("Airspy @ {:.3} MHz", self.center_hz / 1e6),
+            #[cfg(feature = "rtlsdr")]
+            SourceKind::RtlSdr => format!(
+                "RTL-SDR #{} @ {:.3} MHz",
+                self.rtlsdr.device_index,
+                self.center_hz / 1e6
+            ),
             SourceKind::Kiwi => format!("{}:{}", self.host, self.port),
         }
     }
@@ -235,6 +310,8 @@ pub fn connect(req: &ConnectRequest) -> Result<Connection, String> {
         SourceKind::Kiwi => connect_kiwi(req),
         #[cfg(feature = "airspy")]
         SourceKind::Airspy => connect_airspy(req),
+        #[cfg(feature = "rtlsdr")]
+        SourceKind::RtlSdr => connect_rtlsdr(req),
     }
 }
 
@@ -299,10 +376,50 @@ fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
     })
 }
 
+#[cfg(feature = "rtlsdr")]
+fn connect_rtlsdr(req: &ConnectRequest) -> Result<Connection, String> {
+    let mut src = RtlSdr::open_index(req.rtlsdr.device_index).map_err(|e| e.to_string())?;
+    let sr = if req.sample_rate != 0 {
+        req.sample_rate
+    } else {
+        default_rtlsdr_sample_rate()
+    };
+    src.set_sample_rate(sr).map_err(|e| e.to_string())?;
+    if req.rtlsdr.ppm != 0 {
+        src.set_freq_correction(req.rtlsdr.ppm).ok();
+    }
+    src.set_direct_sampling(req.rtlsdr.direct_sampling)
+        .map_err(|e| e.to_string())?;
+    src.set_offset_tuning(req.rtlsdr.offset_tuning).ok();
+    src.set_rtl_agc(req.rtlsdr.rtl_agc).ok();
+    src.set_tuner_gain_mode(req.rtlsdr.manual_gain)
+        .map_err(|e| e.to_string())?;
+    if req.rtlsdr.manual_gain {
+        let gain = src.clamp_tuner_gain(req.rtlsdr.tuner_gain_db10);
+        src.set_tuner_gain(gain).ok();
+    }
+    src.set_bias_tee(req.rtlsdr.bias_tee).ok();
+    src.tune(req.center_hz).map_err(|e| e.to_string())?;
+    let (ingress_decim, eff_sr) = req.rtlsdr.ingress_decimation(sr);
+    let ring_cap = rtlsdr_ring_capacity(sr);
+    let iq = src.start().map_err(|e| e.to_string())?;
+    Ok(Connection {
+        source: Box::new(src),
+        iq,
+        iq_ring_capacity: ring_cap,
+        device_sample_rate: sr as f32,
+        sample_rate: eff_sr,
+        center_hz: req.center_hz,
+        is_kiwi: false,
+        iq_ingress_decim: ingress_decim,
+    })
+}
+
 /// Parse CLI args into a connect request for auto-connect on launch.
 ///
 /// `waterfall kiwi <host> [port] [center_hz]` or
-/// `waterfall airspy [sample_rate_hz] [center_hz] [process_hz]` (requires `airspy` feature).
+/// `waterfall airspy [sample_rate_hz] [center_hz] [process_hz]` (requires `airspy` feature) or
+/// `waterfall rtlsdr [sample_rate_hz] [center_hz] [process_hz]` (requires `rtlsdr` feature).
 pub fn request_from_args() -> Option<ConnectRequest> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -318,6 +435,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 sample_rate: 0,
                 kiwi: KiwiSettings::default(),
                 airspy: AirspySettings::default(),
+                rtlsdr: RtlSdrSettings::default(),
             })
         }
         #[cfg(feature = "airspy")]
@@ -335,6 +453,25 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 sample_rate,
                 kiwi: KiwiSettings::default(),
                 airspy,
+                rtlsdr: RtlSdrSettings::default(),
+            })
+        }
+        #[cfg(feature = "rtlsdr")]
+        Some("rtlsdr") => {
+            let sample_rate = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let center_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
+            let process_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(48_000);
+            let mut rtlsdr = RtlSdrSettings::default();
+            rtlsdr.iq_process_hz = process_hz;
+            Some(ConnectRequest {
+                kind: SourceKind::RtlSdr,
+                host: String::new(),
+                port: 8073,
+                center_hz,
+                sample_rate,
+                kiwi: KiwiSettings::default(),
+                airspy: AirspySettings::default(),
+                rtlsdr,
             })
         }
         _ => None,
@@ -351,6 +488,8 @@ impl<'de> Deserialize<'de> for SourceKind {
         Ok(match s.as_str() {
             #[cfg(feature = "airspy")]
             "Airspy" => SourceKind::Airspy,
+            #[cfg(feature = "rtlsdr")]
+            "RtlSdr" => SourceKind::RtlSdr,
             _ => SourceKind::Kiwi,
         })
     }
@@ -364,6 +503,8 @@ impl Serialize for SourceKind {
         let name = match self {
             #[cfg(feature = "airspy")]
             SourceKind::Airspy => "Airspy",
+            #[cfg(feature = "rtlsdr")]
+            SourceKind::RtlSdr => "RtlSdr",
             SourceKind::Kiwi => "Kiwi",
         };
         serializer.serialize_str(name)
@@ -398,10 +539,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "airspy")]
     fn airspy_ingress_decimation_divides_evenly() {
         let mut s = AirspySettings::default();
         s.iq_process_hz = 192_000;
         assert_eq!(s.ingress_decimation(768_000), (4, 192_000.0));
+    }
+
+    #[test]
+    fn rtlsdr_default_process_is_native() {
+        assert_eq!(RtlSdrSettings::default().iq_process_hz, 0);
+    }
+
+    #[test]
+    #[cfg(feature = "rtlsdr")]
+    fn rtlsdr_ingress_decimation_divides_evenly() {
+        let mut s = RtlSdrSettings::default();
+        s.iq_process_hz = 48_000;
+        assert_eq!(s.ingress_decimation(1_920_000), (40, 48_000.0));
     }
 
     #[test]

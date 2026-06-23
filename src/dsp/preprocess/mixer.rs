@@ -5,7 +5,7 @@ use std::f32::consts::TAU;
 use crate::source::Complex32;
 
 use super::fir_decim::FirDecimator;
-use super::super::simd::complex_mul;
+use super::super::simd::{complex_mul, complex_mul_block};
 
 /// Stateful complex rotator `exp(-j·2π·f·t)` for mix-down (or inverse for mix-up).
 #[derive(Clone, Debug)]
@@ -15,6 +15,7 @@ pub struct IqRotator {
     last_freq_hz: f32,
     last_rate_hz: f32,
     mix_up: bool,
+    rot_scratch: Vec<Complex32>,
 }
 
 impl Default for IqRotator {
@@ -31,6 +32,7 @@ impl IqRotator {
             last_freq_hz: 0.0,
             last_rate_hz: 0.0,
             mix_up,
+            rot_scratch: Vec::new(),
         }
     }
 
@@ -38,7 +40,7 @@ impl IqRotator {
         self.rot = Complex32 { re: 1.0, im: 0.0 };
     }
 
-    fn sync_step(&mut self, freq_hz: f32, sample_rate_hz: f32) {
+    pub fn sync_step(&mut self, freq_hz: f32, sample_rate_hz: f32) {
         if sample_rate_hz <= 0.0 {
             return;
         }
@@ -61,6 +63,12 @@ impl IqRotator {
     #[inline]
     pub fn mix_one(&mut self, sample: Complex32, freq_hz: f32, sample_rate_hz: f32) -> Complex32 {
         self.sync_step(freq_hz, sample_rate_hz);
+        self.mix_sample(sample)
+    }
+
+    /// Mix one sample after [`Self::sync_step`] has been called for this block.
+    #[inline]
+    pub fn mix_sample(&mut self, sample: Complex32) -> Complex32 {
         let out = complex_mul(sample, self.rot);
         self.rot = complex_mul(self.rot, self.step);
         out
@@ -74,16 +82,31 @@ impl IqRotator {
         freq_hz: f32,
         sample_rate_hz: f32,
     ) {
-        output.clear();
         if input.is_empty() || sample_rate_hz <= 0.0 {
+            output.clear();
             return;
         }
         self.sync_step(freq_hz, sample_rate_hz);
+        output.clear();
         output.reserve(input.len());
+        if input.len() >= 64 {
+            self.rot_scratch.resize(input.len(), Complex32 { re: 0.0, im: 0.0 });
+            let mut r = self.rot;
+            let step = self.step;
+            for slot in self.rot_scratch.iter_mut() {
+                *slot = r;
+                r = complex_mul(r, step);
+            }
+            self.rot = r;
+            output.resize(input.len(), Complex32 { re: 0.0, im: 0.0 });
+            complex_mul_block(input, &self.rot_scratch, &mut output[..]);
+            return;
+        }
         let mut r = self.rot;
+        let step = self.step;
         for &sample in input {
             output.push(complex_mul(sample, r));
-            r = complex_mul(r, self.step);
+            r = complex_mul(r, step);
         }
         self.rot = r;
     }

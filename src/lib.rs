@@ -52,7 +52,8 @@ pub use dsp::{
 pub use kiwi::protocol::{kiwi_iq_half_hz, KIWI_IQ_HALF_HZ, KIWI_IQ_RATE};
 pub use kiwi::KiwiSource;
 pub use skimmer::{
-    detect_peaks, strongest_offset_hz, AdaptiveCwDecoder, BigramCwDecoder, CwDecoder, DecoderParams,
+    detect_peaks, detect_peaks_with_floor, strongest_offset_hz, strongest_offset_hz_with_floor,
+    noise_floor_db, noise_floor_db_into, AdaptiveCwDecoder, BigramCwDecoder, CwDecoder, DecoderParams,
     EnvelopeSettings, MasterScp, Peak, Skimmer, SkimmerConfig, SkimmerDecoderKind, Spot,
     SpotKind, SpotSort, SpotStore, MASTER_SCP_URL,
 };

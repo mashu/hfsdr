@@ -19,10 +19,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            features: airspy
+            features: airspy,rtlsdr
             install: |
               sudo apt-get update
-              sudo apt-get install -y libairspyhf-dev
+              sudo apt-get install -y libairspyhf-dev librtlsdr-dev
           - os: macos-latest
             features: airspy
             install: |
@@ -60,11 +60,12 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x86_64
-            features: gui
+            features: gui,rtlsdr
             install: |
               sudo apt-get update
               sudo apt-get install -y \
                 libairspyhf-dev \
+                librtlsdr-dev \
                 libasound2-dev \
                 libxkbcommon-dev \
                 libwayland-dev \
@@ -135,6 +136,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libairspyhf-dev \
+            librtlsdr-dev \
             libasound2-dev \
             libxkbcommon-dev \
             libwayland-dev \
