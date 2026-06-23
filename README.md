@@ -1,4 +1,5 @@
 # hfsdr
+<img width="3824" height="2272" alt="image" src="https://github.com/user-attachments/assets/67d1b346-3e46-447f-9302-b77f44c7ba46" />
 
 [![CI](https://github.com/mashu/hfsdr/actions/workflows/ci.yml/badge.svg)](https://github.com/mashu/hfsdr/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/)
