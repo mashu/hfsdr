@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::source::{ConnectRequest, KiwiSettings};
+use crate::source::{AirspySettings, ConnectRequest, KiwiSettings};
 
 const APP_DIR: &str = "hfsdr";
 const FILE: &str = "settings.json";
@@ -73,6 +73,9 @@ pub struct AppSettings {
     pub target_fps: u32,
     pub fft_size: usize,
     pub fft_auto: bool,
+    /// Feed every drained IQ sample to the spectrum FFT (wideband); uses more CPU.
+    #[serde(default)]
+    pub full_drain_spectrum: bool,
 
     // Audio.
     pub audio_enabled: bool,
@@ -116,6 +119,11 @@ pub struct AppSettings {
     pub recent_hosts: Vec<ConnectRequest>,
     pub last_center_mhz: f64,
     pub kiwi: KiwiSettings,
+    pub airspy: AirspySettings,
+    pub airspy_sample_rate: u32,
+    /// Bumped when persisted layout or defaults change; used for one-time migrations.
+    #[serde(default = "legacy_settings_format")]
+    pub settings_format: u32,
 
     // IQ capture / playback.
     pub iq_capture_dir: String,
@@ -161,6 +169,7 @@ impl Default for AppSettings {
             target_fps: 30,
             fft_size: 2048,
             fft_auto: true,
+            full_drain_spectrum: false,
             audio_enabled: true,
             volume: 1.0,
             skimmer_enabled: true,
@@ -198,6 +207,9 @@ impl Default for AppSettings {
             recent_hosts: Vec::new(),
             last_center_mhz: 14.01,
             kiwi: KiwiSettings::default(),
+            airspy: AirspySettings::default(),
+            airspy_sample_rate: 384_000,
+            settings_format: 1,
             iq_capture_dir: String::new(),
             iq_playback_path: String::new(),
         }
@@ -210,16 +222,26 @@ fn settings_path() -> Option<std::path::PathBuf> {
     Some(dir.join(FILE))
 }
 
+fn legacy_settings_format() -> u32 {
+    0
+}
+
 impl AppSettings {
     /// Load persisted settings, falling back to defaults on any error.
     pub fn load() -> Self {
         let Some(path) = settings_path() else {
             return Self::default();
         };
-        match std::fs::read_to_string(&path) {
+        let mut s: AppSettings = match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-            Err(_) => Self::default(),
+            Err(_) => return Self::default(),
+        };
+        if s.settings_format == 0 {
+            // Legacy file from before preamp defaulted on.
+            s.airspy.hf_lna = true;
+            s.settings_format = 1;
         }
+        s
     }
 
     /// Persist settings; errors are swallowed (best-effort).

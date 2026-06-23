@@ -91,9 +91,49 @@ pub trait IqSource {
         Ok(())
     }
 
-    /// Toggle AGC when supported (KiwiSDR).
+    /// Toggle AGC when supported (KiwiSDR, Airspy HF+).
     fn set_agc(&mut self, on: bool) -> Result<()> {
         let _ = on;
+        Ok(())
+    }
+
+    /// HF attenuator step 0..=8 (Airspy HF+, 6 dB per step).
+    fn set_hf_att(&mut self, _step: u8) -> Result<()> {
+        Ok(())
+    }
+
+    /// HF LNA / preamp (Airspy HF+).
+    fn set_hf_lna(&mut self, _on: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// HF AGC threshold: `false` = low, `true` = high (Airspy HF+).
+    fn set_hf_agc_threshold(&mut self, _high: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// Frontend option flags (Airspy HF+ Discovery / Ranger).
+    fn set_frontend_options(&mut self, _flags: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// Antenna-port bias tee (Airspy HF+ Discovery / Ranger, RTL-SDR).
+    fn set_bias_tee(&mut self, _on: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// Tuner gain in tenths of a dB (RTL-SDR manual mode).
+    fn set_tuner_gain(&mut self, _gain_db10: i32) -> Result<()> {
+        Ok(())
+    }
+
+    /// Manual vs automatic tuner gain (RTL-SDR).
+    fn set_tuner_gain_mode(&mut self, _manual: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// Frequency correction in parts-per-million (RTL-SDR).
+    fn set_freq_correction(&mut self, _ppm: i32) -> Result<()> {
         Ok(())
     }
 

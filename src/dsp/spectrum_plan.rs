@@ -9,8 +9,8 @@ pub const MAX_FFT_SIZE: usize = 65_536;
 /// IQ rates above this (e.g. Airspy HF+) use [`WIDEBAND_MAX_FFT`] in auto mode.
 pub const WIDEBAND_IQ_THRESHOLD: f32 = 100_000.0;
 
-/// Auto-FFT ceiling on wideband SDRs — keeps CPU headroom for skimmer + UI.
-pub const WIDEBAND_MAX_FFT: usize = 16_384;
+/// Auto-FFT ceiling on wideband SDRs — keeps CPU headroom for demod + UI.
+pub const WIDEBAND_MAX_FFT: usize = 4096;
 
 /// Minimum FFT size.
 pub const MIN_FFT_SIZE: usize = 2048;
@@ -33,6 +33,15 @@ pub fn auto_fft_size(iq_rate: f32) -> usize {
     raw.next_power_of_two().clamp(MIN_FFT_SIZE, MAX_FFT_SIZE)
 }
 
+/// FFT hop size: wideband uses no overlap (half the CPU of 50% overlap).
+pub fn spectrum_hop(fft_size: usize, iq_rate: f32) -> usize {
+    if iq_rate > WIDEBAND_IQ_THRESHOLD {
+        fft_size.max(1)
+    } else {
+        (fft_size / 2).max(1)
+    }
+}
+
 /// Integer decimation factor when `view_span_hz` is narrower than full bandwidth.
 pub fn spectrum_zoom_decimation(iq_rate: f32, view_span_hz: f32) -> usize {
     if iq_rate <= 0.0 || view_span_hz <= 0.0 || view_span_hz >= iq_rate * ZOOM_DECIM_THRESHOLD {
@@ -46,6 +55,8 @@ pub fn spectrum_zoom_decimation(iq_rate: f32, view_span_hz: f32) -> usize {
 fn fft_cap(iq_rate: f32) -> usize {
     if iq_rate > WIDEBAND_IQ_THRESHOLD {
         WIDEBAND_MAX_FFT
+    } else if iq_rate > 48_000.0 {
+        8192
     } else {
         MAX_FFT_SIZE
     }
@@ -111,6 +122,13 @@ mod tests {
         assert!(eff < 100_000.0);
         assert!(fft <= MAX_FFT_SIZE);
         assert!(bin_width_hz(eff, fft) <= 20.0);
+    }
+
+    #[test]
+    fn wideband_hop_is_non_overlapping() {
+        assert_eq!(spectrum_hop(16_384, 384_000.0), 16_384);
+        assert_eq!(spectrum_hop(16_384, 96_000.0), 8192);
+        assert_eq!(spectrum_hop(2048, 12_000.0), 1024);
     }
 
     #[test]

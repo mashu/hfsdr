@@ -6,8 +6,11 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::log;
 
-/// ~0.5 s at 48 kHz — keeps audio roughly aligned with the live scope trace.
-const RING_CAPACITY: usize = 24_000;
+/// Standard device rate — demod output is resampled in [`AudioOutput::push`].
+pub const OUTPUT_SAMPLE_RATE: u32 = 48_000;
+
+/// ~1 s at 48 kHz — absorbs bursty CW demod blocks from wideband IQ.
+const RING_CAPACITY: usize = 48_000;
 
 pub struct AudioOutput {
     producer: Producer<f32>,
@@ -25,26 +28,26 @@ impl AudioOutput {
         devices.filter_map(|d| d.name().ok()).collect()
     }
 
-    /// Open the default output device.
-    pub fn try_open_default(source_rate: u32) -> Option<Self> {
+    /// Open the default output device at [`OUTPUT_SAMPLE_RATE`].
+    pub fn try_open_default(_iq_rate: u32) -> Option<Self> {
         let host = cpal::default_host();
         let device = host.default_output_device()?;
-        Self::try_open_device(&device, source_rate)
+        Self::try_open_device(&device)
     }
 
-    /// Open a named output device.
-    pub fn try_open_named(name: &str, source_rate: u32) -> Option<Self> {
+    /// Open a named output device at [`OUTPUT_SAMPLE_RATE`].
+    pub fn try_open_named(name: &str, _iq_rate: u32) -> Option<Self> {
         let host = cpal::default_host();
         let Ok(mut devices) = host.output_devices() else {
             return None;
         };
         let device = devices.find(|d| d.name().ok().as_deref() == Some(name))?;
-        Self::try_open_device(&device, source_rate)
+        Self::try_open_device(&device)
     }
 
-    fn try_open_device(device: &Device, source_rate: u32) -> Option<Self> {
+    fn try_open_device(device: &Device) -> Option<Self> {
         let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
-        let config = pick_output_config(device, source_rate)?;
+        let config = pick_output_config(device)?;
         let output_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
         log::info(format!("audio: {device_name} @ {output_rate} Hz, {channels} ch"));
@@ -134,7 +137,7 @@ fn fill_output(data: &mut [f32], channels: usize, consumer: &mut Consumer<f32>) 
     }
 }
 
-fn pick_output_config(device: &Device, source_rate: u32) -> Option<SupportedStreamConfig> {
+fn pick_output_config(device: &Device) -> Option<SupportedStreamConfig> {
     let configs: Vec<_> = device
         .supported_output_configs()
         .map_err(|e| {
@@ -147,16 +150,18 @@ fn pick_output_config(device: &Device, source_rate: u32) -> Option<SupportedStre
 
     if let Some(c) = configs
         .iter()
-        .find(|c| c.min_sample_rate().0 <= source_rate && c.max_sample_rate().0 >= source_rate)
+        .find(|c| {
+            c.min_sample_rate().0 <= OUTPUT_SAMPLE_RATE && c.max_sample_rate().0 >= OUTPUT_SAMPLE_RATE
+        })
     {
-        return Some(c.with_sample_rate(SampleRate(source_rate)));
+        return Some(c.with_sample_rate(SampleRate(OUTPUT_SAMPLE_RATE)));
     }
 
     if let Some(c) = configs
         .iter()
-        .find(|c| c.min_sample_rate().0 <= 48_000 && c.max_sample_rate().0 >= 48_000)
+        .find(|c| c.min_sample_rate().0 <= 44_100 && c.max_sample_rate().0 >= 44_100)
     {
-        return Some(c.with_sample_rate(SampleRate(48_000)));
+        return Some(c.with_sample_rate(SampleRate(44_100)));
     }
 
     device

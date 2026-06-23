@@ -2,7 +2,9 @@
 //! power spectral density rows (dB).
 
 use crate::source::Complex32;
-use rustfft::{Fft, FftPlanner};
+
+use super::fft_plan::plan_forward;
+use rustfft::Fft;
 use std::sync::Arc;
 
 /// Fixed-capacity ring for sliding-window FFT input. Avoids O(n) `Vec::drain`
@@ -71,7 +73,7 @@ impl SpectrumAnalyzer {
     pub fn new(n: usize, hop: usize) -> Self {
         assert!(n.is_power_of_two(), "FFT size should be a power of two");
         let hop = hop.clamp(1, n);
-        let fft = FftPlanner::<f32>::new().plan_fft_forward(n);
+        let fft = plan_forward(n);
         let scratch = vec![Complex32::new(0.0, 0.0); fft.get_inplace_scratch_len()];
 
         let window: Vec<f32> = (0..n)
@@ -102,12 +104,34 @@ impl SpectrumAnalyzer {
 
     /// Feed IQ samples; `emit` is called once per completed row with a slice of
     /// `size()` dB values (fftshifted: index 0 is the lowest frequency).
-    pub fn process<F: FnMut(&[f32])>(&mut self, input: &[Complex32], mut emit: F) {
+    pub fn process<F: FnMut(&[f32])>(&mut self, input: &[Complex32], emit: F) {
+        let _ = self.process_limited(input, usize::MAX, emit);
+    }
+
+    /// Like [`process`](Self::process) but emits at most `max_rows` frames per call.
+    /// All `input` samples are always ingested into the sliding window; emission
+    /// stops once `max_rows` is reached, and remaining frames are produced on later
+    /// calls as more IQ arrives.
+    pub fn process_limited<F: FnMut(&[f32])>(
+        &mut self,
+        input: &[Complex32],
+        max_rows: usize,
+        mut emit: F,
+    ) -> usize {
+        let mut emitted = 0usize;
         for &sample in input {
             self.acc.push(sample);
             while self.acc.len() >= self.n {
+                if emitted >= max_rows {
+                    break;
+                }
                 for i in 0..self.n {
-                    self.buf[i] = self.acc.sample_at(i) * self.window[i];
+                    let s = self.acc.sample_at(i);
+                    let w = self.window[i];
+                    self.buf[i] = Complex32 {
+                        re: s.re * w,
+                        im: s.im * w,
+                    };
                 }
                 self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
 
@@ -115,14 +139,18 @@ impl SpectrumAnalyzer {
                 let norm = self.n as f32 * self.coherent_gain;
                 for i in 0..self.n {
                     let src = (i + half) % self.n;
-                    let mag = self.buf[src].norm() / norm;
+                    let re = self.buf[src].re;
+                    let im = self.buf[src].im;
+                    let mag = (re * re + im * im).sqrt() / norm;
                     self.row[i] = 20.0 * (mag + 1e-12).log10();
                 }
                 emit(&self.row);
+                emitted += 1;
 
                 self.acc.advance(self.hop);
             }
         }
+        emitted
     }
 }
 
@@ -187,6 +215,32 @@ mod tests {
         let mut sa = SpectrumAnalyzer::new(n, hop);
         let mut rows = 0usize;
         sa.process(&vec![Complex32::new(0.5, 0.0); n + hop], |_| rows += 1);
+        assert_eq!(rows, 2);
+    }
+
+    #[test]
+    fn process_limited_caps_rows_and_preserves_tail() {
+        let n = 64;
+        let hop = n / 2;
+        let mut sa = SpectrumAnalyzer::new(n, hop);
+        let input = vec![Complex32::new(0.5, 0.0); n + hop * 3];
+        let mut rows = 0usize;
+        sa.process_limited(&input, 2, |_| rows += 1);
+        assert_eq!(rows, 2);
+        sa.process_limited(&[], 2, |_| rows += 1);
+        assert!(rows >= 2);
+    }
+
+    #[test]
+    fn process_limited_keeps_ingesting_after_row_cap() {
+        let n = 64;
+        let hop = n;
+        let mut sa = SpectrumAnalyzer::new(n, hop);
+        let input = vec![Complex32::new(0.5, 0.0); n * 3];
+        let mut rows = 0usize;
+        sa.process_limited(&input, 1, |_| rows += 1);
+        assert_eq!(rows, 1);
+        sa.process_limited(&input, 1, |_| rows += 1);
         assert_eq!(rows, 2);
     }
 }

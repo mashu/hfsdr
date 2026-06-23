@@ -1,5 +1,5 @@
 //! Raw FFI to libairspyhf (verified against
-//! `/usr/include/libairspyhf/airspyhf.h`, version 1.6.x).
+//! `/usr/include/libairspyhf/airspyhf.h`, version 1.8.x).
 //!
 //! This is the only place that talks to C. Everything in the parent module is
 //! safe Rust built on top of these declarations.
@@ -49,6 +49,11 @@ pub type airspyhf_sample_block_cb_fn =
 /// `AIRSPYHF_SUCCESS`.
 pub const SUCCESS: c_int = 0;
 
+/// `AIRSPYHF_FLAGS_OPTIMIZE_BAND_III` — VHF Band-III frontend tuning.
+pub const FLAGS_OPTIMIZE_BAND_III: u32 = 1;
+/// `AIRSPYHF_FLAGS_OPTIMIZE_PLL_INT_BOUNDARY` — PLL integer-boundary optimization.
+pub const FLAGS_OPTIMIZE_PLL_INT_BOUNDARY: u32 = 2;
+
 #[link(name = "airspyhf")]
 extern "C" {
     pub fn airspyhf_lib_version(lib_version: *mut airspyhf_lib_version_t);
@@ -87,6 +92,16 @@ extern "C" {
     pub fn airspyhf_set_hf_att(device: *mut airspyhf_device_t, value: u8) -> c_int;
     /// LNA / preamp: 0 or 1 (+6 dB, compensated digitally).
     pub fn airspyhf_set_hf_lna(device: *mut airspyhf_device_t, flag: u8) -> c_int;
+    pub fn airspyhf_get_frontend_options(
+        device: *mut airspyhf_device_t,
+        flags: *mut u32,
+    ) -> c_int;
+    pub fn airspyhf_set_frontend_options(
+        device: *mut airspyhf_device_t,
+        flags: u32,
+    ) -> c_int;
+    /// 0 = off, 1 = on — DC bias on the antenna port for active preamps.
+    pub fn airspyhf_set_bias_tee(device: *mut airspyhf_device_t, value: i8) -> c_int;
     pub fn airspyhf_version_string_read(
         device: *mut airspyhf_device_t,
         version: *mut c_char,

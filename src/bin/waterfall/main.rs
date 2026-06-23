@@ -1,7 +1,7 @@
 //! Live waterfall + spectrum UI over any [`IqSource`], on egui's wgpu backend.
 //!
 //! Usage:
-//!   waterfall airspy [sample_rate_hz] [center_hz]
+//!   waterfall airspy [sample_rate_hz] [center_hz] [process_hz]
 //!   waterfall kiwi <host> [port] [center_hz]
 
 mod app;
@@ -18,6 +18,7 @@ mod kiwi_directory;
 mod log;
 mod scp_fetch;
 mod popup;
+mod rf_view;
 mod settings;
 mod skimmer;
 mod smooth;

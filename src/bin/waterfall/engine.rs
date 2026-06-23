@@ -12,13 +12,16 @@
 //! - sending discrete [`EngineCommand`]s (connect, tune, ...),
 //! - and reading [`EngineShared`] (spectrum rows, status, stats, spots).
 
+use std::sync::Arc;
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hfsdr::{Complex32, CwChannelSettings, IqAudioDemod, IqPlayback, IqRecorder, SpectrumAnalyzer, SpectrumFrontEnd, Spot, spectrum_plan};
+use hfsdr::{Complex32, CwChannelSettings, FirDecimator, IngressWorker, IqAudioDemod, IqPlayback, IqRecorder, SpectrumAnalyzer, SpectrumFrontEnd, Spot, spectrum_hop, spectrum_plan};
+
+use rayon::join;
 
 use crate::audio::AudioOutput;
 use crate::log;
@@ -30,11 +33,25 @@ pub const FFT_SIZE: usize = 2048;
 pub const FFT_HOP: usize = FFT_SIZE / 2;
 pub const WATERFALL_ROWS: usize = 360;
 
-/// Hard cap on samples processed per engine iteration (bounds latency spikes).
-const MAX_DRAIN: usize = 1 << 16;
+/// Hard cap on samples drained per pump (wideband uses tail-only DSP below this).
+const MAX_DRAIN_NARROW: usize = 1 << 16;
+const MAX_DRAIN_WIDEBAND: usize = 1 << 16;
+const MAX_SPECTRUM_ROWS_PER_PUMP: usize = 4;
+const MIN_SPECTRUM_ROWS_WIDEBAND: usize = 2;
+const MAX_SPECTRUM_ROWS_WIDEBAND: usize = 8;
+/// Catch-up pumps when the IQ ring is backing up (Airspy at 384 kHz).
+const MAX_CATCHUP_PUMPS: usize = 8;
+const MAX_CATCHUP_PUMPS_LIGHT: usize = 2;
+/// Wideband demod/FFT only need the freshest samples — not the full drain batch.
+const WIDEBAND_IQ_THRESHOLD: f32 = 96_000.0;
+const MAX_AUDIO_SAMPLES_WB: usize = 8192;
+const MAX_FFT_INPUT_WB: usize = 20_480;
+/// Drop stale ring data when fill exceeds this (stay real-time under CPU pressure).
+const RING_CATCHUP_FILL: f32 = 0.55;
+const RING_CATCHUP_TARGET: f32 = 0.25;
 /// No IQ for this long after the first sample triggers a reconnect.
 const STALL_TIMEOUT_KIWI: Duration = Duration::from_secs(20);
-const STALL_TIMEOUT_LOCAL: Duration = Duration::from_secs(5);
+const STALL_TIMEOUT_LOCAL: Duration = Duration::from_secs(12);
 /// Wait this long for the first IQ sample before treating the link as stalled.
 const KIWI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(45);
 /// Effective rate below this fraction of nominal for `SLOW_HOLD` flags "slow".
@@ -54,6 +71,8 @@ pub enum ConnState {
 #[derive(Clone, Debug)]
 pub struct EngineStats {
     pub sample_rate: f32,
+    /// Native IQ passband width for panadapter axis (device rate or Kiwi passband).
+    pub iq_passband_hz: f32,
     pub effective_sps: f32,
     pub last_drain: usize,
     pub dropped: u64,
@@ -68,6 +87,7 @@ pub struct EngineStats {
     pub spectrum_fft: usize,
     pub spectrum_decim: usize,
     pub spectrum_zoomed: bool,
+    pub spectrum_rows_per_pump: usize,
     pub scp: ScpStatus,
     pub iq_recording: bool,
     pub iq_playback: bool,
@@ -83,6 +103,7 @@ impl Default for EngineStats {
     fn default() -> Self {
         Self {
             sample_rate: 12_000.0,
+            iq_passband_hz: 12_000.0,
             effective_sps: 0.0,
             last_drain: 0,
             dropped: 0,
@@ -97,6 +118,7 @@ impl Default for EngineStats {
             spectrum_fft: FFT_SIZE,
             spectrum_decim: 1,
             spectrum_zoomed: false,
+            spectrum_rows_per_pump: MIN_SPECTRUM_ROWS_WIDEBAND,
             scp: ScpStatus::default(),
             iq_recording: false,
             iq_playback: false,
@@ -120,6 +142,8 @@ pub struct EngineParams {
     pub fft_auto: bool,
     pub view_span_hz: f32,
     pub view_pan_offset_hz: f64,
+    /// Feed the full IQ drain batch to the spectrum analyzer (not just the recent tail).
+    pub full_drain_spectrum: bool,
 }
 
 impl Default for EngineParams {
@@ -134,6 +158,7 @@ impl Default for EngineParams {
             fft_auto: true,
             view_span_hz: 12_000.0,
             view_pan_offset_hz: 0.0,
+            full_drain_spectrum: false,
         }
     }
 }
@@ -170,6 +195,11 @@ pub enum EngineCommand {
     Disconnect,
     Tune(f64),
     SetRfAgc(bool),
+    SetAirspyAtt(u8),
+    SetAirspyLna(bool),
+    SetAirspyAgcThreshold(bool),
+    SetAirspyFrontendOptions(u32),
+    SetAirspyBiasTee(bool),
     SetAudioDevice(Option<String>),
     ClearSkimmerSpots,
     ReloadScp,
@@ -276,12 +306,18 @@ struct Engine {
 
     drain: Vec<Complex32>,
     drain_decim: Vec<Complex32>,
+    spectrum_ingress: FirDecimator,
+    spectrum_ingress_factor: usize,
+    spectrum_ingress_rate: f32,
+    ingress_worker: Option<IngressWorker>,
     audio_scratch: Vec<f32>,
     latest: Vec<f32>,
     fft_size: usize,
     spectrum_rate: f32,
     spectrum_decim: usize,
     spectrum_pan_hz: f32,
+    spectrum_hop: usize,
+    pump_serial: u64,
 
     last_data: Instant,
     connected_at: Instant,
@@ -302,6 +338,7 @@ struct Engine {
     iq_buffer_peak: f32,
     last_pump_got: usize,
     last_pump_at: Instant,
+    last_spectrum_rows: usize,
     row_pool: Vec<Vec<f32>>,
 }
 
@@ -324,14 +361,20 @@ impl Engine {
             analyzer: SpectrumAnalyzer::new(FFT_SIZE, FFT_HOP),
             spectrum_front: SpectrumFrontEnd::new(12_000.0, 1, 0.0),
             spectrum_scratch: Vec::new(),
-            drain: Vec::with_capacity(MAX_DRAIN),
-            drain_decim: Vec::with_capacity(MAX_DRAIN),
+            drain: Vec::with_capacity(MAX_DRAIN_WIDEBAND),
+            drain_decim: Vec::with_capacity(MAX_DRAIN_WIDEBAND),
+            spectrum_ingress: FirDecimator::with_factor(384_000.0, 1, true),
+            spectrum_ingress_factor: 1,
+            spectrum_ingress_rate: 384_000.0,
+            ingress_worker: Some(IngressWorker::spawn()),
             audio_scratch: Vec::new(),
             latest: vec![-120.0; FFT_SIZE],
             fft_size: FFT_SIZE,
             spectrum_rate: 12_000.0,
             spectrum_decim: 1,
             spectrum_pan_hz: 0.0,
+            spectrum_hop: FFT_SIZE / 2,
+            pump_serial: 0,
             last_data: Instant::now(),
             connected_at: Instant::now(),
             first_iq_received: false,
@@ -350,6 +393,7 @@ impl Engine {
             iq_buffer_peak: 0.0,
             last_pump_got: 0,
             last_pump_at: Instant::now(),
+            last_spectrum_rows: MIN_SPECTRUM_ROWS_WIDEBAND,
             row_pool: Vec::new(),
         }
     }
@@ -364,9 +408,35 @@ impl Engine {
             let streaming = self.conn.is_some() || self.playback.is_some();
             if streaming {
                 self.poll_handshake();
-                let got = self.pump_stream();
+                let (ring_fill, _) = self.measure_iq_buffer();
+                let max_pumps = if ring_fill > 0.35 {
+                    if self
+                        .params
+                        .lock()
+                        .map(|p| p.full_drain_spectrum)
+                        .unwrap_or(false)
+                    {
+                        MAX_CATCHUP_PUMPS + 4
+                    } else {
+                        MAX_CATCHUP_PUMPS
+                    }
+                } else {
+                    MAX_CATCHUP_PUMPS_LIGHT
+                };
+                let mut pumps = 0usize;
+                loop {
+                    let got = self.pump_stream();
+                    pumps += 1;
+                    if got == 0 || pumps >= max_pumps {
+                        break;
+                    }
+                    let (fill, _) = self.measure_iq_buffer();
+                    if fill < 0.2 {
+                        break;
+                    }
+                }
                 self.maybe_reconnect_on_stall();
-                if got == 0 {
+                if self.last_pump_got == 0 {
                     thread::sleep(Duration::from_millis(3));
                 }
             } else {
@@ -430,6 +500,31 @@ impl Engine {
             EngineCommand::SetRfAgc(on) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_agc(on);
+                }
+            }
+            EngineCommand::SetAirspyAtt(step) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_hf_att(step);
+                }
+            }
+            EngineCommand::SetAirspyLna(on) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_hf_lna(on);
+                }
+            }
+            EngineCommand::SetAirspyAgcThreshold(high) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_hf_agc_threshold(high);
+                }
+            }
+            EngineCommand::SetAirspyFrontendOptions(flags) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_frontend_options(flags);
+                }
+            }
+            EngineCommand::SetAirspyBiasTee(on) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_bias_tee(on);
                 }
             }
             EngineCommand::SetAudioDevice(name) => {
@@ -580,27 +675,24 @@ impl Engine {
         }
     }
 
-    fn audio_device_open(&mut self, source_rate: u32) {
+    fn audio_device_open(&mut self, _iq_rate: u32) {
         self.audio = match &self.audio_device {
-            Some(name) => AudioOutput::try_open_named(name, source_rate)
-                .or_else(|| AudioOutput::try_open_default(source_rate)),
-            None => AudioOutput::try_open_default(source_rate),
+            Some(name) => AudioOutput::try_open_named(name, 0)
+                .or_else(|| AudioOutput::try_open_default(0)),
+            None => AudioOutput::try_open_default(0),
         };
+        if self.audio.is_none() {
+            log::error("audio output unavailable (need PulseAudio/PipeWire/ALSA and F32 output)");
+        }
     }
 
     fn reopen_audio(&mut self) {
-        let sr = self
-            .conn
-            .as_ref()
-            .map(|c| c.sample_rate as u32)
-            .unwrap_or(48_000);
-        self.audio_device_open(sr);
+        self.audio_device_open(0);
     }
 
     /// Drain and process available IQ; returns sample count processed.
     fn pump_stream(&mut self) -> usize {
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
-        let (sample_rate, _, _) = self.link_meta();
         let dt = self
             .last_pump_at
             .elapsed()
@@ -609,8 +701,9 @@ impl Engine {
         let ring_before = self.measure_iq_buffer();
 
         self.drain.clear();
+        let drain_cap = self.max_drain();
         if let Some(pb) = &mut self.playback {
-            while self.drain.len() < MAX_DRAIN {
+            while self.drain.len() < drain_cap {
                 match pb.pop() {
                     Some(s) => self.drain.push(s),
                     None => break,
@@ -622,31 +715,42 @@ impl Engine {
                 log::info("IQ playback finished");
             }
         } else if let Some(conn) = &mut self.conn {
-            while self.drain.len() < MAX_DRAIN {
+            {
+                let cap = conn.iq_ring_capacity.max(1);
+                let slots = conn.iq.slots();
+                let fill = slots as f32 / cap as f32;
+                if fill >= RING_CATCHUP_FILL {
+                    let target = (cap as f32 * RING_CATCHUP_TARGET) as usize;
+                    while conn.iq.slots() > target {
+                        let _ = conn.iq.pop();
+                    }
+                }
+            }
+            while self.drain.len() < drain_cap {
                 match conn.iq.pop() {
                     Ok(s) => self.drain.push(s),
                     Err(_) => break,
                 }
             }
         }
+        let (device_rate, center_hz, _is_kiwi) = if let Some(pb) = &self.playback {
+            let m = pb.meta();
+            (m.sample_rate as f32, m.center_hz, false)
+        } else {
+            self.conn
+                .as_ref()
+                .map(|c| (c.device_sample_rate, c.center_hz, c.is_kiwi))
+                .unwrap_or((12_000.0, 0.0, false))
+        };
         let ingress_decim = self
             .conn
             .as_ref()
             .map(|c| c.iq_ingress_decim)
             .unwrap_or(1)
             .max(1);
-        if ingress_decim > 1 {
-            self.drain_decim.clear();
-            for (i, sample) in self.drain.iter().enumerate() {
-                if i % ingress_decim == 0 {
-                    self.drain_decim.push(*sample);
-                }
-            }
-            std::mem::swap(&mut self.drain, &mut self.drain_decim);
-        }
         let got = self.drain.len();
         self.last_pump_got = got;
-        self.update_ring_utilization(sample_rate, ring_before, got, dt);
+        self.update_ring_utilization(device_rate, ring_before, got, dt);
         self.last_pump_at = Instant::now();
         if got == 0 {
             self.publish_stats(0);
@@ -665,39 +769,128 @@ impl Engine {
         self.last_data = Instant::now();
         self.rate_window_count += got as u64;
 
-        let (sample_rate, center_hz, _is_kiwi) = if let Some(pb) = &self.playback {
-            let m = pb.meta();
-            (m.sample_rate as f32, m.center_hz, false)
+        let spectrum_input_rate = if let Some(pb) = &self.playback {
+            pb.meta().sample_rate as f32
         } else {
             self.conn
                 .as_ref()
-                .map(|c| (c.sample_rate, c.center_hz, c.is_kiwi))
-                .unwrap_or((12_000.0, 0.0, false))
+                .map(|c| c.sample_rate)
+                .unwrap_or(device_rate)
         };
 
-        self.sync_spectrum_chain(sample_rate, &params);
+        self.sync_spectrum_chain(spectrum_input_rate, &params);
 
-        self.demod
-            .process(&self.drain, sample_rate, &params.cw, &mut self.audio_scratch);
+        let cw = params.cw.clone();
+        let wideband = device_rate > WIDEBAND_IQ_THRESHOLD;
+        let batch = Arc::new(std::mem::take(&mut self.drain));
+        self.drain = Vec::with_capacity(self.max_drain());
+
+        if ingress_decim > 1
+            && (ingress_decim != self.spectrum_ingress_factor
+                || (device_rate - self.spectrum_ingress_rate).abs() > 1.0)
+        {
+            self.spectrum_ingress =
+                FirDecimator::with_factor(device_rate, ingress_decim, true);
+            self.spectrum_ingress_factor = ingress_decim;
+            self.spectrum_ingress_rate = device_rate;
+        }
+
+        let use_ingress_worker = wideband
+            && ingress_decim > 1
+            && self.spectrum_decim <= 1
+            && self.ingress_worker.as_ref().is_some_and(|w| {
+                w.start(Arc::clone(&batch), device_rate, ingress_decim)
+            });
+
+        if use_ingress_worker {
+            self.demod
+                .process(batch.as_slice(), device_rate, &cw, &mut self.audio_scratch);
+            if let Some(decimated) = self.ingress_worker.as_ref().and_then(|w| w.finish()) {
+                self.drain_decim = decimated;
+            } else {
+                self.spectrum_ingress
+                    .decimate_block(batch.as_slice(), &mut self.drain_decim);
+            }
+        } else if wideband && ingress_decim > 1 && self.spectrum_decim <= 1 {
+            let batch_demod = Arc::clone(&batch);
+            let (demod, audio_scratch, ingress, decim_buf) = (
+                &mut self.demod,
+                &mut self.audio_scratch,
+                &mut self.spectrum_ingress,
+                &mut self.drain_decim,
+            );
+            join(
+                || demod.process(batch_demod.as_slice(), device_rate, &cw, audio_scratch),
+                || ingress.decimate_block(batch.as_slice(), decim_buf),
+            );
+        } else {
+            if ingress_decim > 1 {
+                self.spectrum_ingress
+                    .decimate_block(batch.as_slice(), &mut self.drain_decim);
+            }
+            if wideband && self.spectrum_decim > 1 {
+                let ingress_base: &[Complex32] = if ingress_decim > 1 {
+                    &self.drain_decim
+                } else {
+                    batch.as_slice()
+                };
+                let fft_base = self.spectrum_fft_slice(
+                    ingress_base,
+                    device_rate,
+                    params.full_drain_spectrum,
+                );
+                let batch_demod = Arc::clone(&batch);
+                let (demod, spectrum_front) = (&mut self.demod, &mut self.spectrum_front);
+                let (audio_scratch, spectrum_scratch) =
+                    (&mut self.audio_scratch, &mut self.spectrum_scratch);
+                join(
+                    || demod.process(batch_demod.as_slice(), device_rate, &cw, audio_scratch),
+                    || spectrum_front.process(fft_base, spectrum_scratch),
+                );
+            } else {
+                self.demod
+                    .process(batch.as_slice(), device_rate, &cw, &mut self.audio_scratch);
+            }
+        }
+
+        let ingress_base: &[Complex32] = if ingress_decim > 1 {
+            &self.drain_decim
+        } else {
+            batch.as_slice()
+        };
+        let fft_base = self.spectrum_fft_slice(
+            ingress_base,
+            device_rate,
+            params.full_drain_spectrum,
+        );
+        if self.spectrum_decim > 1 {
+            if !(wideband && self.spectrum_decim > 1) {
+                self.spectrum_front
+                    .process(fft_base, &mut self.spectrum_scratch);
+            }
+        } else {
+            self.spectrum_scratch.clear();
+            self.spectrum_scratch.extend_from_slice(fft_base);
+        }
+
         if params.audio_enabled {
+            if self.audio.is_none() {
+                self.audio_device_open(0);
+            }
             if let Some(audio) = &mut self.audio {
-                let audio_rate = hfsdr::audio_sample_rate(sample_rate, params.cw.decimation);
+                let audio_rate = hfsdr::audio_sample_rate(device_rate, params.cw.decimation);
                 audio.push(&self.audio_scratch, audio_rate as u32, params.volume);
             }
         }
 
-        // FFT at full IQ rate, optionally decimated/mix-down when zoomed in.
-        let fft_input = if self.spectrum_decim > 1 {
-            self.spectrum_front.process(&self.drain, &mut self.spectrum_scratch);
-            &self.spectrum_scratch
-        } else {
-            &self.drain
-        };
+        let fft_input: &[Complex32] = &self.spectrum_scratch;
+        let max_rows = self.adaptive_spectrum_rows(device_rate);
+        self.last_spectrum_rows = max_rows;
         let analyzer = &mut self.analyzer;
         let latest = &mut self.latest;
         let row_pool = &mut self.row_pool;
         let mut produced: Vec<Vec<f32>> = Vec::new();
-        analyzer.process(fft_input, |row| {
+        analyzer.process_limited(fft_input, max_rows, |row| {
             latest.copy_from_slice(row);
             let mut buf = row_pool
                 .pop()
@@ -709,19 +902,42 @@ impl Engine {
             produced.push(buf);
         });
 
-        self.skimmer.set_enabled(params.skimmer_enabled);
-        if params.skimmer_enabled {
-            let mut cfg = params.skimmer.clone();
-            cfg.source_label = "rx".to_string();
-            self.skimmer.set_config(cfg);
-            self.skimmer.submit(
-                &self.drain,
-                &self.latest,
-                sample_rate,
-                self.spectrum_rate,
-                self.spectrum_pan_hz,
-                center_hz,
-            );
+        self.pump_serial = self.pump_serial.wrapping_add(1);
+        let run_skimmer = params.skimmer_enabled;
+        self.skimmer.set_enabled(run_skimmer);
+        if run_skimmer {
+            let spectrum_iq_rate = if let Some(pb) = &self.playback {
+                pb.meta().sample_rate as f32
+            } else if let Some(c) = &self.conn {
+                c.sample_rate
+            } else {
+                device_rate
+            };
+            let (skimmer_iq, skimmer_iq_rate) = if ingress_decim > 1 && !self.drain_decim.is_empty() {
+                (self.drain_decim.as_slice(), spectrum_iq_rate)
+            } else {
+                (batch.as_slice(), device_rate)
+            };
+            let throttle = if skimmer_iq_rate > 96_000.0 {
+                4
+            } else if skimmer_iq_rate > 48_000.0 {
+                2
+            } else {
+                1
+            };
+            if self.pump_serial % throttle == 0 {
+                let mut cfg = params.skimmer.clone();
+                cfg.source_label = "rx".to_string();
+                self.skimmer.set_config(cfg);
+                self.skimmer.submit(
+                    skimmer_iq,
+                    &self.latest,
+                    skimmer_iq_rate,
+                    self.spectrum_rate,
+                    self.spectrum_pan_hz,
+                    center_hz,
+                );
+            }
         }
 
         let snr = self.demod.snr_db();
@@ -730,25 +946,83 @@ impl Engine {
     }
 
     fn sync_spectrum_chain(&mut self, iq_rate: f32, params: &EngineParams) {
-        let view_span = if params.view_span_hz > 0.0 {
-            params.view_span_hz
-        } else {
-            iq_rate
-        };
-        let (decim, fft, eff) = spectrum_plan(iq_rate, params.fft_size, params.fft_auto, view_span);
+        // Always FFT the full passband; UI zoom/pan is a viewport crop on the waterfall.
+        let _ = params.view_span_hz;
+        let (decim, fft, eff) = spectrum_plan(iq_rate, params.fft_size, params.fft_auto, iq_rate);
         self.spectrum_rate = eff;
         self.spectrum_decim = decim;
-        self.spectrum_pan_hz = if decim > 1 {
-            params.view_pan_offset_hz as f32
-        } else {
-            0.0
-        };
-        self.spectrum_front
-            .sync(iq_rate, decim, self.spectrum_pan_hz);
-        if fft != self.fft_size {
+        self.spectrum_pan_hz = 0.0;
+        self.spectrum_front.sync(iq_rate, decim, 0.0);
+        let hop = spectrum_hop(fft, iq_rate);
+        if fft != self.fft_size || hop != self.spectrum_hop {
             self.fft_size = fft;
-            self.analyzer = SpectrumAnalyzer::new(fft, fft / 2);
+            self.spectrum_hop = hop;
+            self.analyzer = SpectrumAnalyzer::new(fft, hop);
             self.latest = vec![-120.0; fft];
+        }
+    }
+
+    fn spectrum_fft_slice<'a>(
+        &self,
+        samples: &'a [Complex32],
+        rate: f32,
+        full_drain: bool,
+    ) -> &'a [Complex32] {
+        if full_drain || rate <= WIDEBAND_IQ_THRESHOLD {
+            samples
+        } else {
+            self.wideband_tail(samples, rate, self.max_fft_input())
+        }
+    }
+
+    fn adaptive_spectrum_rows(&self, device_rate: f32) -> usize {
+        if device_rate <= WIDEBAND_IQ_THRESHOLD {
+            return MAX_SPECTRUM_ROWS_PER_PUMP;
+        }
+        let nominal = device_rate.max(1.0);
+        let sps_ratio = (self.cached_rate / nominal).clamp(0.0, 1.25);
+        let ring_headroom = 1.0 - self.iq_buffer_fill.clamp(0.0, 1.0);
+        let score = (sps_ratio * 0.55 + ring_headroom * 0.45).clamp(0.0, 1.0);
+        if score > 0.85 {
+            MAX_SPECTRUM_ROWS_WIDEBAND
+        } else if score > 0.65 {
+            6
+        } else if score > 0.45 {
+            4
+        } else {
+            MIN_SPECTRUM_ROWS_WIDEBAND
+        }
+    }
+
+    fn max_drain(&self) -> usize {
+        let (sr, _, _) = self.link_meta();
+        if sr > WIDEBAND_IQ_THRESHOLD {
+            MAX_DRAIN_WIDEBAND
+        } else if sr > 48_000.0 {
+            MAX_DRAIN_NARROW
+        } else {
+            1 << 15
+        }
+    }
+
+    fn max_fft_input(&self) -> usize {
+        if self.link_meta().0 > WIDEBAND_IQ_THRESHOLD {
+            (self.spectrum_hop * MAX_SPECTRUM_ROWS_WIDEBAND + self.fft_size).min(MAX_FFT_INPUT_WB)
+        } else {
+            usize::MAX
+        }
+    }
+
+    fn wideband_tail<'a>(
+        &self,
+        samples: &'a [Complex32],
+        rate: f32,
+        max: usize,
+    ) -> &'a [Complex32] {
+        if rate <= WIDEBAND_IQ_THRESHOLD || samples.len() <= max {
+            samples
+        } else {
+            &samples[samples.len() - max..]
         }
     }
 
@@ -761,7 +1035,7 @@ impl Engine {
             let cap = conn.iq_ring_capacity.max(1);
             let slots = conn.iq.slots();
             let fill = slots as f32 / cap as f32;
-            let secs = slots as f32 / conn.sample_rate.max(1.0);
+            let secs = slots as f32 / conn.device_sample_rate.max(1.0);
             (fill, secs)
         } else {
             (0.0, 0.0)
@@ -862,7 +1136,12 @@ impl Engine {
             }
             guard.spots = spots;
             guard.stats = EngineStats {
-                sample_rate,
+                sample_rate: self
+                    .conn
+                    .as_ref()
+                    .map(|c| c.sample_rate)
+                    .unwrap_or(sample_rate),
+                iq_passband_hz: self.iq_passband_hz(),
                 effective_sps: effective,
                 last_drain: got,
                 dropped,
@@ -877,6 +1156,7 @@ impl Engine {
                 spectrum_fft: self.fft_size,
                 spectrum_decim: self.spectrum_decim,
                 spectrum_zoomed: self.spectrum_decim > 1,
+                spectrum_rows_per_pump: self.last_spectrum_rows,
                 scp,
                 iq_recording,
                 iq_playback,
@@ -893,9 +1173,24 @@ impl Engine {
             let m = pb.meta();
             (m.sample_rate as f32, m.center_hz, false)
         } else if let Some(c) = &self.conn {
-            (c.sample_rate, c.center_hz, c.is_kiwi)
+            (c.device_sample_rate, c.center_hz, c.is_kiwi)
         } else {
             (12_000.0, 0.0, false)
+        }
+    }
+
+    fn iq_passband_hz(&self) -> f32 {
+        if let Some(pb) = &self.playback {
+            return pb.meta().sample_rate as f32;
+        }
+        if let Some(c) = &self.conn {
+            if c.is_kiwi {
+                hfsdr::kiwi_iq_half_hz(c.device_sample_rate as u32) as f32 * 2.0
+            } else {
+                c.device_sample_rate
+            }
+        } else {
+            12_000.0
         }
     }
 
@@ -926,7 +1221,12 @@ impl Engine {
         let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
         if let Ok(mut guard) = self.shared.lock() {
             guard.stats = EngineStats {
-                sample_rate,
+                sample_rate: self
+                    .conn
+                    .as_ref()
+                    .map(|c| c.sample_rate)
+                    .unwrap_or(sample_rate),
+                iq_passband_hz: self.iq_passband_hz(),
                 effective_sps: effective,
                 last_drain: got,
                 dropped,
@@ -941,6 +1241,7 @@ impl Engine {
                 spectrum_fft: self.fft_size,
                 spectrum_decim: self.spectrum_decim,
                 spectrum_zoomed: self.spectrum_decim > 1,
+                spectrum_rows_per_pump: self.last_spectrum_rows,
                 scp,
                 iq_recording,
                 iq_playback,

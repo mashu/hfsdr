@@ -2,13 +2,12 @@
 
 use crate::source::Complex32;
 
-use super::cw::{Decimator, ComplexNco};
+use super::preprocess::IqShiftDecim;
 
 /// Shift the view center to DC and decimate before FFT when heavily zoomed.
 #[derive(Clone, Debug)]
 pub struct SpectrumFrontEnd {
-    nco: ComplexNco,
-    decimator: Decimator,
+    ingress: IqShiftDecim,
     iq_rate: f32,
     shift_hz: f32,
     decim: usize,
@@ -18,8 +17,7 @@ impl SpectrumFrontEnd {
     pub fn new(iq_rate: f32, decim: usize, shift_hz: f32) -> Self {
         let decim = decim.max(1);
         Self {
-            nco: ComplexNco::new(),
-            decimator: Decimator::with_factor(iq_rate, decim),
+            ingress: IqShiftDecim::new(iq_rate, decim, iq_rate > 96_000.0),
             iq_rate,
             shift_hz,
             decim,
@@ -32,8 +30,7 @@ impl SpectrumFrontEnd {
             || self.decim != decim
             || (self.shift_hz - shift_hz).abs() > 0.5
         {
-            self.decimator = Decimator::with_factor(iq_rate, decim);
-            self.nco.reset();
+            self.ingress = IqShiftDecim::new(iq_rate, decim, iq_rate > 96_000.0);
             self.iq_rate = iq_rate;
             self.shift_hz = shift_hz;
             self.decim = decim;
@@ -49,11 +46,7 @@ impl SpectrumFrontEnd {
             output.extend_from_slice(input);
             return;
         }
-        for &sample in input {
-            let shifted = self.nco.mix_down(sample, self.shift_hz, self.iq_rate);
-            if let Some(decimated) = self.decimator.push(shifted) {
-                output.push(decimated);
-            }
-        }
+        let slice = self.ingress.process(input, self.shift_hz, self.iq_rate);
+        output.extend_from_slice(slice);
     }
 }

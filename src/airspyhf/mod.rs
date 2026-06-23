@@ -4,6 +4,8 @@
 
 mod sys;
 
+pub use sys::{FLAGS_OPTIMIZE_BAND_III, FLAGS_OPTIMIZE_PLL_INT_BOUNDARY};
+
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
 use rtrb::{Producer, RingBuffer};
 use std::os::raw::{c_char, c_int, c_void};
@@ -191,6 +193,27 @@ impl AirspyHf {
         })
     }
 
+    /// Frontend option flags (`sys::FLAGS_*`). Discovery/Ranger band-tracking
+    /// preselectors are automatic; these tune VHF Band-III and PLL behavior.
+    pub fn set_frontend_options(&mut self, flags: u32) -> Result<()> {
+        check("airspyhf_set_frontend_options", unsafe {
+            sys::airspyhf_set_frontend_options(self.dev, flags)
+        })
+    }
+
+    pub fn frontend_options(&self) -> Result<u32> {
+        let mut flags = 0u32;
+        let rc = unsafe { sys::airspyhf_get_frontend_options(self.dev, &mut flags) };
+        check("airspyhf_get_frontend_options", rc).map(|_| flags)
+    }
+
+    /// Antenna-port bias tee: powers external preamps/upconverters (0 = off, 1 = on).
+    pub fn set_bias_tee(&mut self, on: bool) -> Result<()> {
+        check("airspyhf_set_bias_tee", unsafe {
+            sys::airspyhf_set_bias_tee(self.dev, on as i8)
+        })
+    }
+
     /// Whether the current sample rate runs the radio in Low-IF mode.
     pub fn is_low_if(&self) -> bool {
         // SAFETY: valid device handle.
@@ -263,8 +286,7 @@ impl IqSource for AirspyHf {
         if self.streaming {
             return Err(SourceError::InvalidState("already streaming"));
         }
-        let block = self.output_size().max(4096);
-        let capacity = (block * 16).max(1 << 15);
+        let capacity = iq_ring_capacity(self.sample_rate);
         let (prod, cons) = RingBuffer::<Complex32>::new(capacity);
 
         let mut ctx = Box::new(StreamCtx {
@@ -304,6 +326,36 @@ impl IqSource for AirspyHf {
     fn is_streaming(&self) -> bool {
         self.streaming
     }
+
+    fn set_agc(&mut self, on: bool) -> Result<()> {
+        self.set_hf_agc(on)
+    }
+
+    fn set_hf_att(&mut self, step: u8) -> Result<()> {
+        AirspyHf::set_hf_att(self, step)
+    }
+
+    fn set_hf_lna(&mut self, on: bool) -> Result<()> {
+        AirspyHf::set_hf_lna(self, on)
+    }
+
+    fn set_hf_agc_threshold(&mut self, high: bool) -> Result<()> {
+        AirspyHf::set_hf_agc_threshold(self, high)
+    }
+
+    fn set_frontend_options(&mut self, flags: u32) -> Result<()> {
+        AirspyHf::set_frontend_options(self, flags)
+    }
+
+    fn set_bias_tee(&mut self, on: bool) -> Result<()> {
+        AirspyHf::set_bias_tee(self, on)
+    }
+}
+
+/// ~2 s of IQ at the selected rate (power-of-two, clamped for memory).
+pub fn iq_ring_capacity(sample_rate: u32) -> usize {
+    let target = (sample_rate as usize).saturating_mul(2);
+    target.next_power_of_two().clamp(1 << 18, 1 << 21)
 }
 
 impl Drop for AirspyHf {

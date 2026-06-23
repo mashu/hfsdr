@@ -9,7 +9,7 @@ use std::fmt;
 
 use hfsdr::{Complex32, Consumer, IqSource, kiwi_iq_half_hz, KiwiSource, KIWI_IQ_RATE};
 #[cfg(feature = "airspy")]
-use hfsdr::AirspyHf;
+use hfsdr::{AirspyHf, airspyhf::iq_ring_capacity};
 use serde::{Deserialize, Serialize};
 
 /// Kiwi IQ stream options sent at connect (see kiwiclient `-L`/`-H`/`-o`/`-r`).
@@ -63,6 +63,94 @@ impl KiwiSettings {
     }
 }
 
+/// Airspy HF+ hardware and client-side processing options.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AirspySettings {
+    /// HF AGC on/off (recommended on for most bands).
+    pub hf_agc: bool,
+    /// HF AGC threshold: `false` = low, `true` = high.
+    pub hf_agc_threshold_high: bool,
+    /// HF attenuator step 0..=8 (6 dB per step).
+    pub hf_att: u8,
+    /// LNA / preamp (+6 dB, compensated digitally). Enable for passive antennas.
+    #[serde(default = "default_hf_lna_on")]
+    pub hf_lna: bool,
+    /// VHF Band-III frontend optimization (Discovery / Ranger).
+    pub frontend_optimize_band_iii: bool,
+    /// PLL integer-boundary optimization (Discovery / Ranger).
+    pub frontend_optimize_pll_boundary: bool,
+    /// Antenna-port bias tee — DC power for active preamps/upconverters.
+    pub bias_tee: bool,
+    /// Library IQ correction, IF shift, and fine tuning.
+    pub lib_dsp: bool,
+    /// Frequency calibration in parts-per-billion.
+    pub calibration_ppb: i32,
+    /// Client-side IQ decimation target in Hz; `0` = native device rate.
+    pub iq_process_hz: u32,
+}
+
+impl Default for AirspySettings {
+    fn default() -> Self {
+        Self {
+            hf_agc: true,
+            hf_agc_threshold_high: false,
+            hf_att: 0,
+            hf_lna: true,
+            frontend_optimize_band_iii: false,
+            frontend_optimize_pll_boundary: false,
+            bias_tee: false,
+            lib_dsp: true,
+            calibration_ppb: 0,
+            iq_process_hz: 0,
+        }
+    }
+}
+
+fn default_hf_lna_on() -> bool {
+    true
+}
+
+impl AirspySettings {
+    pub fn frontend_flags(&self) -> u32 {
+        let mut flags = 0u32;
+        #[cfg(feature = "airspy")]
+        {
+            if self.frontend_optimize_band_iii {
+                flags |= hfsdr::airspyhf::FLAGS_OPTIMIZE_BAND_III;
+            }
+            if self.frontend_optimize_pll_boundary {
+                flags |= hfsdr::airspyhf::FLAGS_OPTIMIZE_PLL_INT_BOUNDARY;
+            }
+        }
+        flags
+    }
+
+    pub fn ingress_decimation(&self, device_rate: u32) -> (usize, f32) {
+        if self.iq_process_hz == 0 || self.iq_process_hz >= device_rate {
+            return (1, device_rate as f32);
+        }
+        if device_rate.is_multiple_of(self.iq_process_hz) {
+            let factor = (device_rate / self.iq_process_hz) as usize;
+            (factor.max(1), self.iq_process_hz as f32)
+        } else {
+            (1, device_rate as f32)
+        }
+    }
+}
+
+/// Preferred default sample rate when the connect request leaves rate at `0`.
+#[cfg(feature = "airspy")]
+pub fn default_airspy_sample_rate(rates: &[u32]) -> u32 {
+    const PREFERRED: &[u32] = &[384_000, 192_000, 768_000, 96_000, 48_000];
+    for &p in PREFERRED {
+        if rates.contains(&p) {
+            return p;
+        }
+    }
+    rates.last().copied().unwrap_or(384_000)
+}
+
 /// Which front end to bring up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
@@ -90,11 +178,14 @@ pub struct ConnectRequest {
     /// KiwiSDR port (ignored for Airspy).
     pub port: u16,
     pub center_hz: f64,
-    /// Airspy sample rate; `0` selects the device default (ignored for Kiwi).
+    /// Airspy sample rate in Hz; `0` selects [`default_airspy_sample_rate`] (ignored for Kiwi).
     pub sample_rate: u32,
     /// Kiwi IQ passband, resample, and transverter offset (ignored for Airspy).
     #[serde(default)]
     pub kiwi: KiwiSettings,
+    /// Airspy HF AGC, attenuator, LNA, and optional IQ decimation (ignored for Kiwi).
+    #[serde(default)]
+    pub airspy: AirspySettings,
 }
 
 impl Default for ConnectRequest {
@@ -106,6 +197,7 @@ impl Default for ConnectRequest {
             center_hz: 14_010_000.0,
             sample_rate: 0,
             kiwi: KiwiSettings::default(),
+            airspy: AirspySettings::default(),
         }
     }
 }
@@ -126,10 +218,13 @@ pub struct Connection {
     pub source: Box<dyn IqSource>,
     pub iq: Consumer<Complex32>,
     pub iq_ring_capacity: usize,
+    /// Native device IQ rate (full passband for demod and display).
+    pub device_sample_rate: f32,
+    /// Rate after optional client-side decimation (spectrum FFT path only).
     pub sample_rate: f32,
     pub center_hz: f64,
     pub is_kiwi: bool,
-    /// Client-side integer decimation applied after the Kiwi ring (1 = none).
+    /// Client-side integer decimation for the spectrum path (1 = none).
     pub iq_ingress_decim: usize,
 }
 
@@ -160,6 +255,7 @@ fn connect_kiwi(req: &ConnectRequest) -> Result<Connection, String> {
         source: Box::new(src),
         iq,
         iq_ring_capacity: 1 << 16,
+        device_sample_rate: reported as f32,
         sample_rate: eff_sr,
         center_hz: req.center_hz,
         is_kiwi: true,
@@ -173,27 +269,40 @@ fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
     let sr = if req.sample_rate != 0 {
         req.sample_rate
     } else {
-        src.sample_rates().first().copied().unwrap_or(768_000)
+        default_airspy_sample_rate(&src.sample_rates())
     };
     src.set_sample_rate(sr).map_err(|e| e.to_string())?;
-    src.set_lib_dsp(true).ok();
+    src.set_lib_dsp(req.airspy.lib_dsp).ok();
+    if req.airspy.calibration_ppb != 0 {
+        src.set_calibration_ppb(req.airspy.calibration_ppb).ok();
+    }
+    src.set_hf_agc(req.airspy.hf_agc).map_err(|e| e.to_string())?;
+    src.set_hf_agc_threshold(req.airspy.hf_agc_threshold_high)
+        .ok();
+    src.set_hf_att(req.airspy.hf_att).ok();
+    src.set_hf_lna(req.airspy.hf_lna).ok();
+    src.set_frontend_options(req.airspy.frontend_flags()).ok();
+    src.set_bias_tee(req.airspy.bias_tee).ok();
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
+    let (ingress_decim, eff_sr) = req.airspy.ingress_decimation(sr);
+    let ring_cap = iq_ring_capacity(sr);
     let iq = src.start().map_err(|e| e.to_string())?;
     Ok(Connection {
         source: Box::new(src),
         iq,
-        iq_ring_capacity: 1 << 15,
-        sample_rate: sr as f32,
+        iq_ring_capacity: ring_cap,
+        device_sample_rate: sr as f32,
+        sample_rate: eff_sr,
         center_hz: req.center_hz,
         is_kiwi: false,
-        iq_ingress_decim: 1,
+        iq_ingress_decim: ingress_decim,
     })
 }
 
 /// Parse CLI args into a connect request for auto-connect on launch.
 ///
 /// `waterfall kiwi <host> [port] [center_hz]` or
-/// `waterfall airspy [sample_rate_hz] [center_hz]` (requires `airspy` feature).
+/// `waterfall airspy [sample_rate_hz] [center_hz] [process_hz]` (requires `airspy` feature).
 pub fn request_from_args() -> Option<ConnectRequest> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -208,12 +317,16 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 center_hz,
                 sample_rate: 0,
                 kiwi: KiwiSettings::default(),
+                airspy: AirspySettings::default(),
             })
         }
         #[cfg(feature = "airspy")]
         Some("airspy") => {
             let sample_rate = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             let center_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
+            let process_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(48_000);
+            let mut airspy = AirspySettings::default();
+            airspy.iq_process_hz = process_hz;
             Some(ConnectRequest {
                 kind: SourceKind::Airspy,
                 host: String::new(),
@@ -221,6 +334,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 center_hz,
                 sample_rate,
                 kiwi: KiwiSettings::default(),
+                airspy,
             })
         }
         _ => None,
@@ -271,5 +385,29 @@ mod tests {
         let mut s = KiwiSettings::default();
         s.iq_resample_hz = 6_000;
         assert_eq!(s.ingress_decimation(12_000), (2, 6_000.0));
+    }
+
+    #[test]
+    fn airspy_default_preamp_on() {
+        assert!(AirspySettings::default().hf_lna);
+    }
+
+    #[test]
+    fn airspy_default_process_is_native() {
+        assert_eq!(AirspySettings::default().iq_process_hz, 0);
+    }
+
+    #[test]
+    fn airspy_ingress_decimation_divides_evenly() {
+        let mut s = AirspySettings::default();
+        s.iq_process_hz = 192_000;
+        assert_eq!(s.ingress_decimation(768_000), (4, 192_000.0));
+    }
+
+    #[test]
+    #[cfg(feature = "airspy")]
+    fn airspy_default_rate_prefers_384k() {
+        let rates = vec![3_000, 192_000, 384_000, 768_000];
+        assert_eq!(default_airspy_sample_rate(&rates), 384_000);
     }
 }

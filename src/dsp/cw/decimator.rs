@@ -2,7 +2,7 @@
 
 use crate::source::Complex32;
 
-use super::fir::{design_gaussian_lowpass, FirFilter};
+use super::fir::{design_gaussian_lowpass, design_gaussian_lowpass_compact, FirFilter};
 
 const TARGET_AUDIO_RATE: f32 = 12_000.0;
 
@@ -24,6 +24,18 @@ impl Decimator {
         let factor = factor.clamp(1, 256);
         let cutoff = (input_rate / factor as f32 * 0.45).max(100.0);
         let fir = design_gaussian_lowpass(input_rate, cutoff * 2.0);
+        Self {
+            factor,
+            fir,
+            counter: 0,
+        }
+    }
+
+    /// Short FIR for wideband IQ ingress (384 kHz → 12 kHz). ~10× cheaper than full taps.
+    pub fn for_wideband_ingress(input_rate: f32, factor: usize) -> Self {
+        let factor = factor.clamp(1, 256);
+        let cutoff = (input_rate / factor as f32 * 0.45).max(100.0);
+        let fir = design_gaussian_lowpass_compact(input_rate, cutoff * 2.0);
         Self {
             factor,
             fir,

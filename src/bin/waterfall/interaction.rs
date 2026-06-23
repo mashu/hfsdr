@@ -208,14 +208,21 @@ impl PlotInteraction {
                     shift,
                     notches,
                 );
-                // Tune anywhere on the spectrum body; leave handle grabs (edges,
-                // center line, notches) to drag gestures only.
-                if matches!(
+                // Tune on click unless the user grabbed a resize/notch handle.
+                let click_tunes = !matches!(
                     mode,
-                    DragMode::Tune | DragMode::PanView | DragMode::ShiftPassband
-                ) {
+                    DragMode::ResizeLeft
+                        | DragMode::ResizeRight
+                        | DragMode::ResizeNotchLeft(_)
+                        | DragMode::ResizeNotchRight(_)
+                        | DragMode::DragNotch(_)
+                );
+                if click_tunes {
                     let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
                     actions.push(PlotAction::CenterOnOffsetHz(offset));
+                    // Clicks always tune; do not leave a stale drag mode from passband/notch hits.
+                    self.drag_mode = DragMode::None;
+                    self.drag_origin = None;
                 }
             }
         }
@@ -465,14 +472,39 @@ pub fn suggest_notch_offset_hz(listen_offset_hz: f32, other_offsets: &[f32]) -> 
 }
 
 pub fn x_to_offset_hz(x: f32, rect: Rect, span_hz: f32, pan_offset_hz: f64) -> f64 {
-    let t = ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-    pan_offset_hz + (t as f64 - 0.5) * span_hz as f64
+    let t = ((x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+    hfsdr::view_t_to_offset_hz(t, span_hz, pan_offset_hz)
 }
 
 pub fn offset_hz_to_x(offset_hz: f64, rect: Rect, span_hz: f32, pan_offset_hz: f64) -> f32 {
-    let rel = offset_hz - pan_offset_hz;
-    let t = rel / span_hz as f64 + 0.5;
+    let t = hfsdr::offset_hz_to_view_t(offset_hz, span_hz, pan_offset_hz);
     rect.left() + rect.width() * t as f32
+}
+
+/// Shared frequency ↔ horizontal pixel mapping for scope, axis, and waterfall.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlotFreqMapping {
+    pub view_span_hz: f32,
+    pub pan_offset_hz: f64,
+    pub storage_span_hz: f32,
+}
+
+impl PlotFreqMapping {
+    pub fn new(view_span_hz: f32, pan_offset_hz: f64, storage_span_hz: f32) -> Self {
+        Self {
+            view_span_hz,
+            pan_offset_hz,
+            storage_span_hz,
+        }
+    }
+
+    pub fn x_to_offset(&self, x: f32, rect: Rect) -> f64 {
+        x_to_offset_hz(x, rect, self.view_span_hz, self.pan_offset_hz)
+    }
+
+    pub fn offset_to_x(&self, offset_hz: f64, rect: Rect) -> f32 {
+        offset_hz_to_x(offset_hz, rect, self.view_span_hz, self.pan_offset_hz)
+    }
 }
 
 pub fn filter_edges(
@@ -494,6 +526,17 @@ pub fn format_offset_label(offset_hz: f64) -> String {
         format!("{:.2} kHz", offset_hz / 1000.0)
     } else {
         format!("{:.0} Hz", offset_hz)
+    }
+}
+
+/// Absolute RF frequency for status bar / cursor (Hz).
+pub fn format_absolute_freq_hz(freq_hz: f64) -> String {
+    if freq_hz.abs() >= 1_000_000.0 {
+        format!("{:.6} MHz", freq_hz / 1_000_000.0)
+    } else if freq_hz.abs() >= 1000.0 {
+        format!("{:.3} kHz", freq_hz / 1000.0)
+    } else {
+        format!("{:.0} Hz", freq_hz)
     }
 }
 

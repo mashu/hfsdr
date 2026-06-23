@@ -14,8 +14,7 @@ use eframe::egui;
 use egui::Color32;
 use egui_extras::{Column, TableBuilder};
 use hfsdr::{
-    decimation_factor, compose_panadapter_row, fit_panadapter_row_width, kiwi_iq_half_hz,
-    panadapter_output_bins, spectrum_view_mapping,
+    decimation_factor, compose_panadapter_row, panadapter_output_bins,
     strongest_offset_hz, Continent,
     ContinentResolver, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, WindowKind,
@@ -33,6 +32,7 @@ use crate::engine::{
     ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
 };
 use crate::ham_bands;
+use crate::rf_view;
 use crate::popup::{
     alert_banner, chip_row, configure_popup_window, ghost_button, inline_stats, list_row,
     popup_header, popup_scroll_body, popup_section, primary_button, secondary_button,
@@ -40,22 +40,24 @@ use crate::popup::{
 };
 use crate::iq_panel::{IqPanel, IqPanelCmd, IqPanelView};
 use crate::interaction::{
-    PlotAction, PlotInteraction, PlotViewState, RIT_MAX_HZ, RIT_MIN_HZ, NOTCH_WIDTH_MAX_HZ,
+    PlotAction, PlotFreqMapping, PlotInteraction, PlotViewState, RIT_MAX_HZ, RIT_MIN_HZ, NOTCH_WIDTH_MAX_HZ,
     NOTCH_WIDTH_MIN_HZ, suggest_notch_offset_hz,
 };
 use crate::interaction::{CW_PASSBAND_MAX_HZ, CW_PASSBAND_MIN_HZ, CW_PASSBAND_NARROW_MAX_HZ};
 use crate::kiwi_directory::{GeoLocation, KiwiReceiver};
 use crate::log;
 use crate::settings::{AppSettings, NotchData};
-use crate::source::{ConnectRequest, KiwiSettings, SourceKind};
+use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, SourceKind};
 use crate::spot_filter::{
     build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
 };
 use crate::theme::{
     apply, band_lock_toggle, clickable_badge, collapsible_section, section_card, section_heading,
-    section_hint, stat_row, stage_toggle, toggle, MUTED, OK, WARN,
+    section_hint, stat_row, stage_toggle, toggle, ACCENT, MUTED, OK, WARN,
 };
-use crate::widgets::{show_freq_axis_bar, update_trace, SpectrumWidget, SpotLabel, TraceViewKey, WaterfallWidget, SCOPE_HEIGHT};
+use crate::widgets::{
+    update_trace, PanadapterPlot, SpotLabel, TraceViewKey, SCOPE_HEIGHT,
+};
 
 const SMOOTH_ALPHA: f32 = 0.09;
 
@@ -130,6 +132,61 @@ const KIWI_AR_OUT_PRESETS: &[(&str, u32)] = &[
     ("96 kHz", 96_000),
 ];
 
+#[cfg(feature = "airspy")]
+const AIRSPY_SAMPLE_RATE_PRESETS: &[(&str, u32)] = &[
+    ("384 kHz (recommended)", 384_000),
+    ("768 kHz", 768_000),
+    ("192 kHz", 192_000),
+    ("96 kHz", 96_000),
+    ("48 kHz", 48_000),
+    ("24 kHz", 24_000),
+    ("12 kHz", 12_000),
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StorageKey {
+    tex_width: u32,
+    storage_span_hz: u32,
+    row_rate_hz: u32,
+}
+
+impl StorageKey {
+    fn from(storage: &SpectrumViewMapping, tex_width: usize) -> Self {
+        Self {
+            tex_width: tex_width as u32,
+            storage_span_hz: storage.view_span_hz.round() as u32,
+            row_rate_hz: storage.row_rate_hz.round() as u32,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ViewportKey {
+    view_span_hz: u32,
+    pan_offset_hz: i64,
+    plot_width: u32,
+    rows: u32,
+}
+
+impl ViewportKey {
+    fn from_view(view_span_hz: f32, pan_offset_hz: f64, plot_width: usize, rows: usize) -> Self {
+        Self {
+            view_span_hz: view_span_hz.round() as u32,
+            pan_offset_hz: pan_offset_hz.round() as i64,
+            plot_width: plot_width as u32,
+            rows: rows as u32,
+        }
+    }
+}
+
+#[cfg(feature = "airspy")]
+const AIRSPY_PROCESS_RATE_PRESETS: &[(&str, u32)] = &[
+    ("48 kHz (recommended)", 48_000),
+    ("Native (full bandwidth)", 0),
+    ("96 kHz", 96_000),
+    ("192 kHz", 192_000),
+];
+
 pub struct WaterfallApp {
     engine: EngineHandle,
     conn_state: ConnState,
@@ -142,6 +199,9 @@ pub struct WaterfallApp {
     form_host: String,
     form_port: u16,
     form_kiwi: KiwiSettings,
+    form_sample_rate: u32,
+    form_airspy: AirspySettings,
+    last_airspy_rf: AirspySettings,
 
     sample_rate: f32,
     center_khz: f64,
@@ -166,19 +226,18 @@ pub struct WaterfallApp {
     overview_composed: Vec<f32>,
     overview_view_key: TraceViewKey,
     latest_frame_tick: bool,
-    texture: Option<egui::TextureHandle>,
-    waterfall_pixels: Vec<Color32>,
-    tex_width: usize,
+    waterfall_storage_pixels: Vec<Color32>,
+    storage_tex_width: usize,
+    last_storage_key: Option<StorageKey>,
+    waterfall_viewport_texture: Option<egui::TextureHandle>,
+    waterfall_viewport_pixels: Vec<Color32>,
+    viewport_tex_width: usize,
+    last_viewport_key: Option<ViewportKey>,
     textures_dirty: bool,
     force_texture_full: bool,
     pending_row_appends: usize,
-    was_plot_dragging: bool,
-    last_tex_span: f32,
-    last_tex_pan: f64,
-    last_tex_row_rate: f32,
-    last_spectrum_pan: f64,
-    last_spectrum_span: f32,
-    last_spectrum_zoomed: bool,
+    last_display_levels_at: Option<Instant>,
+    waterfall_row_scratch: Vec<f32>,
 
     ref_db: f32,
     range_db: f32,
@@ -191,6 +250,7 @@ pub struct WaterfallApp {
     target_fps: u32,
     fft_size: usize,
     fft_auto: bool,
+    full_drain_spectrum: bool,
 
     audio_devices: Vec<String>,
     selected_audio_device: usize,
@@ -238,11 +298,11 @@ pub struct WaterfallApp {
     last_settings_snapshot: Option<AppSettings>,
     settings_dirty_at: Option<std::time::Instant>,
 
-    spectrum_widget: SpectrumWidget,
-    waterfall_widget: WaterfallWidget,
+    panadapter_plot: PanadapterPlot,
     plot_view: PlotViewState,
     plot_interaction: PlotInteraction,
     hover_offset_hz: Option<f64>,
+    last_plot_interaction_rect: Option<egui::Rect>,
     tune_preview_offset_hz: Option<f64>,
     themed: bool,
 }
@@ -262,6 +322,9 @@ impl WaterfallApp {
             form_host: String::new(),
             form_port: 8073,
             form_kiwi: KiwiSettings::default(),
+            form_sample_rate: 384_000,
+            form_airspy: AirspySettings::default(),
+            last_airspy_rf: AirspySettings::default(),
             sample_rate: 12_000.0,
             center_khz: DEFAULT_CENTER_HZ / 1000.0,
             last_center_khz: DEFAULT_CENTER_HZ / 1000.0,
@@ -282,19 +345,19 @@ impl WaterfallApp {
             overview_composed: Vec::new(),
             overview_view_key: TraceViewKey::new(0.0, 0.0, 0.0, 0.0, 0),
             latest_frame_tick: false,
-            texture: None,
-            waterfall_pixels: Vec::new(),
-            tex_width: 0,
+            waterfall_storage_pixels: Vec::new(),
+            storage_tex_width: 0,
+            last_storage_key: None,
+            waterfall_viewport_texture: None,
+            waterfall_viewport_pixels: Vec::new(),
+            viewport_tex_width: 0,
+            last_viewport_key: None,
             textures_dirty: false,
             force_texture_full: true,
             pending_row_appends: 0,
-            was_plot_dragging: false,
-            last_tex_span: 0.0,
-            last_tex_pan: 0.0,
-            last_tex_row_rate: 0.0,
-            last_spectrum_pan: 0.0,
-            last_spectrum_span: 0.0,
-            last_spectrum_zoomed: false,
+            last_display_levels_at: None,
+            waterfall_row_scratch: Vec::new(),
+
             ref_db: -65.0,
             range_db: crate::display_levels::DEFAULT_RANGE_DB,
             display_levels_initialized: false,
@@ -306,6 +369,7 @@ impl WaterfallApp {
             target_fps: 30,
             fft_size: FFT_SIZE,
             fft_auto: true,
+            full_drain_spectrum: false,
             audio_devices,
             selected_audio_device: 0,
             last_audio_device: 0,
@@ -349,11 +413,11 @@ impl WaterfallApp {
 
             last_settings_snapshot: None,
             settings_dirty_at: None,
-            spectrum_widget: SpectrumWidget::new(),
-            waterfall_widget: WaterfallWidget::new(),
+            panadapter_plot: PanadapterPlot::new(),
             plot_view: PlotViewState::new(),
             plot_interaction: PlotInteraction::new(),
             hover_offset_hz: None,
+            last_plot_interaction_rect: None,
             tune_preview_offset_hz: None,
             themed: false,
         };
@@ -366,6 +430,10 @@ impl WaterfallApp {
             app.form_host = r.host.clone();
             app.form_port = r.port;
             app.form_kiwi = r.kiwi.clone();
+            if r.sample_rate != 0 {
+                app.form_sample_rate = r.sample_rate;
+            }
+            app.form_airspy = r.airspy.clone();
         }
 
         // CLI args take precedence and trigger an auto-connect on first frame.
@@ -374,6 +442,10 @@ impl WaterfallApp {
             app.form_host = req.host.clone();
             app.form_port = req.port;
             app.form_kiwi = req.kiwi.clone();
+            if req.sample_rate != 0 {
+                app.form_sample_rate = req.sample_rate;
+            }
+            app.form_airspy = req.airspy.clone();
             app.center_khz = req.center_hz / 1000.0;
             app.clamp_center_to_ham_bands();
             app.last_center_khz = app.center_khz;
@@ -437,14 +509,30 @@ impl WaterfallApp {
             )
     }
 
-    /// Wideband local SDR (e.g. Airspy) — higher DSP load than Kiwi.
-    fn is_wideband(&self) -> bool {
-        !self.is_kiwi && self.sample_rate > 48_000.0
+    /// Heavy local IQ rate (demod / ring load), not the decimated spectrum span.
+    fn is_wideband_device(&self) -> bool {
+        !self.is_kiwi && self.iq_passband_hz() > 96_000.0
     }
 
-    /// Cap repaint rate on wideband + skimmer to leave CPU for decoders.
+    /// Wideband local SDR for UI caps (FPS, channel limits).
+    fn is_wideband(&self) -> bool {
+        self.is_wideband_device()
+    }
+
+    /// Skimmer peak/decoders need a manageable spectrum span (≤96 kHz on Airspy).
+    fn skimmer_spectrum_ok(&self) -> bool {
+        self.is_kiwi || self.plot_full_span_hz() <= 96_000.0
+    }
+
+    fn skimmer_runtime_enabled(&self) -> bool {
+        self.skimmer_enabled && self.skimmer_spectrum_ok()
+    }
+
+    /// Cap repaint rate on wideband to leave CPU for FFT + texture work.
     fn effective_target_fps(&self) -> u32 {
-        if self.is_wideband() && self.skimmer_enabled {
+        if self.is_wideband() {
+            self.target_fps.min(15)
+        } else if self.skimmer_enabled && self.sample_rate > 24_000.0 {
             self.target_fps.min(30)
         } else {
             self.target_fps
@@ -509,6 +597,7 @@ impl WaterfallApp {
         self.target_fps = s.target_fps.clamp(10, 60);
         self.fft_size = s.fft_size.clamp(1024, 65_536);
         self.fft_auto = s.fft_auto;
+        self.full_drain_spectrum = s.full_drain_spectrum;
 
         self.audio_enabled = s.audio_enabled;
         self.volume = s.volume;
@@ -535,6 +624,10 @@ impl WaterfallApp {
 
         self.recent_hosts = s.recent_hosts.clone();
         self.form_kiwi = s.kiwi.clone();
+        self.form_airspy = s.airspy.clone();
+        if s.airspy_sample_rate != 0 {
+            self.form_sample_rate = s.airspy_sample_rate;
+        }
         self.center_khz = s.last_center_mhz * 1000.0;
         self.clamp_center_to_ham_bands();
         self.last_center_khz = self.center_khz;
@@ -593,6 +686,7 @@ impl WaterfallApp {
             target_fps: self.target_fps,
             fft_size: self.fft_size,
             fft_auto: self.fft_auto,
+            full_drain_spectrum: self.full_drain_spectrum,
             audio_enabled: self.audio_enabled,
             volume: self.volume,
             skimmer_enabled: self.skimmer_enabled,
@@ -630,6 +724,9 @@ impl WaterfallApp {
             recent_hosts: self.recent_hosts.clone(),
             last_center_mhz: self.center_khz / 1000.0,
             kiwi: self.form_kiwi.clone(),
+            airspy: self.form_airspy.clone(),
+            airspy_sample_rate: self.form_sample_rate,
+            settings_format: 1,
             iq_capture_dir: self.iq.capture_dir.display().to_string(),
             iq_playback_path: self.iq.playback_path.clone(),
         }
@@ -654,6 +751,8 @@ impl WaterfallApp {
         self.rows.clear();
         self.force_texture_full = true;
         self.textures_dirty = true;
+        self.last_viewport_key = None;
+        self.last_storage_key = None;
     }
 
     /// Push UI settings to the engine and pull its published rows/status/spots.
@@ -666,12 +765,13 @@ impl WaterfallApp {
             cw: self.cw.clone(),
             audio_enabled: self.audio_enabled,
             volume: self.volume,
-            skimmer_enabled: self.skimmer_enabled,
+            skimmer_enabled: self.skimmer_runtime_enabled(),
             skimmer: self.effective_skimmer(),
             fft_size: self.fft_size,
             fft_auto: self.fft_auto,
             view_span_hz: view.view_span_hz,
             view_pan_offset_hz: self.plot_view.pan_offset_hz,
+            full_drain_spectrum: self.full_drain_spectrum,
         });
 
         let Some(poll) = self.engine.try_poll() else {
@@ -707,6 +807,14 @@ impl WaterfallApp {
         self.skimmer_spots = poll.spots;
         let latest = poll.latest;
         let new_rows = poll.rows;
+        if matches!(self.conn_state, ConnState::Streaming)
+            && self.waterfall_viewport_texture.is_none()
+            && self.rows.is_empty()
+            && !new_rows.is_empty()
+        {
+            self.force_texture_full = true;
+            self.textures_dirty = true;
+        }
         if latest.len() != self.latest.len() {
             // FFT size changed under us: adopt the new width and reset buffers.
             self.latest = latest;
@@ -728,20 +836,8 @@ impl WaterfallApp {
 
         let full_span = self.plot_full_span_hz();
         let max_zoom = self.plot_max_zoom_out();
-        let view_span = self.plot_view.view_span_hz(full_span, max_zoom);
-        let view_pan = self.plot_view.pan_offset_hz;
-        let zoomed = self.stats.spectrum_zoomed;
-        let zoom_mode_changed = zoomed != self.last_spectrum_zoomed;
-        if zoom_mode_changed || (view_span - self.last_spectrum_span).abs() > 1.0 {
-            // Zoom level changes rescale history — old rows would smear or flip width.
-            self.invalidate_waterfall_history();
-        } else if zoomed && (view_pan - self.last_spectrum_pan).abs() > 0.5 {
-            // Mix-down rows are pan-specific.
-            self.invalidate_waterfall_history();
-        }
-        self.last_spectrum_pan = view_pan;
-        self.last_spectrum_span = view_span;
-        self.last_spectrum_zoomed = zoomed;
+        let _view_span = self.plot_view.view_span_hz(full_span, max_zoom);
+        let _view_pan = self.plot_view.pan_offset_hz;
 
         if !new_rows.is_empty() {
             let n_new = new_rows.len();
@@ -760,7 +856,14 @@ impl WaterfallApp {
             self.waterfall_rows = self.rows.len();
             self.pending_row_appends += n_new;
             self.textures_dirty = true;
-            self.update_display_levels();
+            let levels_due = self
+                .last_display_levels_at
+                .map(|t| t.elapsed() >= Duration::from_millis(300))
+                .unwrap_or(true);
+            if levels_due {
+                self.update_display_levels();
+                self.last_display_levels_at = Some(Instant::now());
+            }
         }
 
         self.apply_pitch_lock();
@@ -772,11 +875,15 @@ impl WaterfallApp {
     fn apply_plot_actions(&mut self, actions: Vec<PlotAction>) {
         for action in actions {
             match action {
-                PlotAction::TuneDeltaHz(delta) | PlotAction::CenterOnOffsetHz(delta) => {
-                    self.invalidate_waterfall_history();
+                PlotAction::TuneDeltaHz(delta) => {
                     self.center_khz += delta / 1000.0;
+                }
+                PlotAction::CenterOnOffsetHz(offset) => {
+                    self.invalidate_waterfall_history();
+                    self.center_khz += offset / 1000.0;
                     self.plot_view.pan_offset_hz = 0.0;
                     self.tune_preview_offset_hz = None;
+                    self.clear_rit();
                 }
                 PlotAction::SetTunePreviewOffsetHz(offset) => {
                     self.tune_preview_offset_hz = Some(offset);
@@ -786,6 +893,7 @@ impl WaterfallApp {
                         self.invalidate_waterfall_history();
                         self.center_khz += offset / 1000.0;
                         self.plot_view.pan_offset_hz = 0.0;
+                        self.clear_rit();
                     }
                     self.tune_preview_offset_hz = None;
                 }
@@ -883,24 +991,28 @@ impl WaterfallApp {
         } else {
             target
         };
-        self.ref_db = ref_db;
-        self.range_db = range_db;
-        self.force_texture_full = true;
-        self.textures_dirty = true;
-        self.display_levels_initialized = true;
+        let ref_delta = (self.ref_db - ref_db).abs();
+        let range_delta = (self.range_db - range_db).abs();
+        if !self.display_levels_initialized || ref_delta > 0.35 || range_delta > 0.75 {
+            self.ref_db = ref_db;
+            self.range_db = range_db;
+            self.force_texture_full = true;
+            self.textures_dirty = true;
+            self.display_levels_initialized = true;
+        }
     }
 
     fn estimate_display_levels(&self) -> Option<(f32, f32)> {
         const ROWS_FOR_ESTIMATE: usize = 24;
         let view = self.spectrum_view();
-        let data_span = self.plot_full_span_hz();
         let compose = |row: &[f32]| {
             compose_panadapter_row(
                 row,
                 view.row_rate_hz,
                 view.view_span_hz,
-                data_span,
-                view.pan_offset_hz,
+                view.data_span_hz,
+                view.compose_pan_offset_hz,
+                view.allow_band_padding,
             )
         };
         if self.rows.len() >= 8 {
@@ -918,30 +1030,51 @@ impl WaterfallApp {
         }
     }
 
+    fn iq_passband_hz(&self) -> f32 {
+        rf_view::iq_passband_hz(
+            self.is_kiwi,
+            self.stats.iq_passband_hz,
+            self.sample_rate,
+        )
+    }
+
+    /// Span of the spectrum FFT chain — base for zoom, pan, clicks, and waterfall storage.
     fn plot_full_span_hz(&self) -> f32 {
-        if self.is_kiwi && self.sample_rate > 0.0 {
-            kiwi_iq_half_hz(self.sample_rate as u32) as f32 * 2.0
-        } else {
-            self.sample_rate
-        }
+        rf_view::spectrum_plot_span_hz(self.stats.spectrum_rate, self.iq_passband_hz())
     }
 
     fn plot_max_zoom_out(&self) -> f32 {
-        let full = self.plot_full_span_hz().max(1.0);
-        (self.band_overview_span_hz() / full).max(1.0)
+        rf_view::max_zoom_out(
+            self.is_kiwi,
+            self.iq_passband_hz(),
+            self.band_overview_span_hz(),
+        )
     }
 
     fn spectrum_view(&self) -> SpectrumViewMapping {
-        let full_span = self.plot_full_span_hz();
-        let max_zoom = self.plot_max_zoom_out();
-        let span = self.plot_view.view_span_hz(full_span, max_zoom);
-        spectrum_view_mapping(
-            self.sample_rate,
+        rf_view::build_spectrum_view(
+            self.is_kiwi,
+            self.iq_passband_hz(),
+            self.plot_full_span_hz(),
+            self.band_overview_span_hz(),
             self.stats.spectrum_rate,
             self.stats.spectrum_zoomed,
-            span,
-            self.plot_view.pan_offset_hz,
+            &self.plot_view,
         )
+    }
+
+    fn waterfall_storage_view(&self) -> SpectrumViewMapping {
+        rf_view::build_waterfall_storage_view(
+            self.is_kiwi,
+            self.iq_passband_hz(),
+            self.plot_full_span_hz(),
+            self.band_overview_span_hz(),
+            self.stats.spectrum_rate,
+        )
+    }
+
+    fn storage_row_width(&self, storage: &SpectrumViewMapping, row_len: usize) -> usize {
+        panadapter_output_bins(row_len, storage.view_span_hz, storage.data_span_hz).max(1)
     }
 
     /// Snap tuning so the strongest signal near the cursor lands at the BFO pitch.
@@ -1012,6 +1145,34 @@ impl WaterfallApp {
 
     fn listen_offset_hz(&self) -> f64 {
         self.rit_hz as f64 + self.tune_preview_offset_hz.unwrap_or(0.0)
+    }
+
+    fn center_hz(&self) -> f64 {
+        self.center_khz * 1000.0
+    }
+
+    fn update_plot_hover(&mut self, ctx: &egui::Context) {
+        let Some(rect) = self.last_plot_interaction_rect else {
+            self.hover_offset_hz = None;
+            return;
+        };
+        let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+            self.hover_offset_hz = None;
+            return;
+        };
+        if !rect.contains(pos) {
+            self.hover_offset_hz = None;
+            return;
+        }
+        self.plot_view
+            .clamp_pan(self.plot_full_span_hz(), self.plot_max_zoom_out());
+        let view = self.spectrum_view();
+        self.hover_offset_hz = Some(crate::interaction::x_to_offset_hz(
+            pos.x,
+            rect,
+            view.view_span_hz,
+            view.pan_offset_hz,
+        ));
     }
 
     fn arm_manual_notch(&mut self, slot: usize, offset_hz: Option<f32>) {
@@ -1199,7 +1360,6 @@ impl WaterfallApp {
         self.plot_view.zoom_to_full_span();
         self.plot_view
             .clamp_pan(self.plot_full_span_hz(), self.plot_max_zoom_out());
-        self.invalidate_waterfall_history();
     }
 
     fn select_cw_band(&mut self, band: &CwBandPreset) {
@@ -1232,19 +1392,83 @@ impl WaterfallApp {
             self.engine.send(EngineCommand::SetRfAgc(self.agc_rf_on));
             self.last_agc_rf_on = self.agc_rf_on;
         }
+        self.apply_airspy_live_settings();
         self.apply_audio_device();
+    }
+
+    fn apply_airspy_live_settings(&mut self) {
+        if self.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
+            return;
+        }
+        if self.form_airspy.hf_agc != self.last_airspy_rf.hf_agc {
+            self.engine
+                .send(EngineCommand::SetRfAgc(self.form_airspy.hf_agc));
+            self.last_airspy_rf.hf_agc = self.form_airspy.hf_agc;
+        }
+        if self.form_airspy.hf_agc_threshold_high != self.last_airspy_rf.hf_agc_threshold_high {
+            self.engine.send(EngineCommand::SetAirspyAgcThreshold(
+                self.form_airspy.hf_agc_threshold_high,
+            ));
+            self.last_airspy_rf.hf_agc_threshold_high = self.form_airspy.hf_agc_threshold_high;
+        }
+        if self.form_airspy.hf_att != self.last_airspy_rf.hf_att {
+            self.engine
+                .send(EngineCommand::SetAirspyAtt(self.form_airspy.hf_att));
+            self.last_airspy_rf.hf_att = self.form_airspy.hf_att;
+        }
+        if self.form_airspy.hf_lna != self.last_airspy_rf.hf_lna {
+            self.engine
+                .send(EngineCommand::SetAirspyLna(self.form_airspy.hf_lna));
+            self.last_airspy_rf.hf_lna = self.form_airspy.hf_lna;
+        }
+        let frontend = self.form_airspy.frontend_flags();
+        if frontend != self.last_airspy_rf.frontend_flags() {
+            self.engine
+                .send(EngineCommand::SetAirspyFrontendOptions(frontend));
+            self.last_airspy_rf.frontend_optimize_band_iii =
+                self.form_airspy.frontend_optimize_band_iii;
+            self.last_airspy_rf.frontend_optimize_pll_boundary =
+                self.form_airspy.frontend_optimize_pll_boundary;
+        }
+        if self.form_airspy.bias_tee != self.last_airspy_rf.bias_tee {
+            self.engine
+                .send(EngineCommand::SetAirspyBiasTee(self.form_airspy.bias_tee));
+            self.last_airspy_rf.bias_tee = self.form_airspy.bias_tee;
+        }
+    }
+
+    #[cfg(feature = "airspy")]
+    fn is_airspy_streaming(&self) -> bool {
+        self.form_kind == SourceKind::Airspy
+            && matches!(self.conn_state, ConnState::Streaming)
     }
 
     fn connect_now(&mut self) {
         self.clamp_center_to_ham_bands();
+        let sample_rate = {
+            #[cfg(feature = "airspy")]
+            {
+                if self.form_kind == SourceKind::Airspy {
+                    self.form_sample_rate
+                } else {
+                    0
+                }
+            }
+            #[cfg(not(feature = "airspy"))]
+            {
+                0
+            }
+        };
         let req = ConnectRequest {
             kind: self.form_kind,
             host: self.form_host.trim().to_string(),
             port: self.form_port,
             center_hz: self.center_khz * 1000.0,
-            sample_rate: 0,
+            sample_rate,
             kiwi: self.form_kiwi.clone(),
+            airspy: self.form_airspy.clone(),
         };
+        self.last_airspy_rf = self.form_airspy.clone();
         self.last_center_khz = self.center_khz;
         self.remember_host(&req);
         self.apply_default_view_zoom();
@@ -1366,7 +1590,6 @@ impl WaterfallApp {
         }
         if full {
             self.plot_view.zoom_to_full_span();
-            self.invalidate_waterfall_history();
         }
         if mute {
             self.audio_enabled = !self.audio_enabled;
@@ -1424,37 +1647,34 @@ impl WaterfallApp {
     }
 
     fn waterfall_source_row(&self, row_index: usize) -> Option<&[f32]> {
-        self.rows
-            .get(row_index)
-            .map(Vec::as_slice)
-            .or_else(|| (row_index == 0).then(|| self.latest.as_slice()))
+        if let Some(row) = self.rows.get(row_index) {
+            return Some(row.as_slice());
+        }
+        // After a history reset, paint every row from the live FFT until history refills.
+        if self.rows.is_empty() && !self.latest.is_empty() {
+            return Some(self.latest.as_slice());
+        }
+        (row_index == 0 && !self.latest.is_empty()).then(|| self.latest.as_slice())
     }
 
-    fn composed_waterfall_row(
-        row_data: &[f32],
-        view: &SpectrumViewMapping,
-        data_span: f32,
+    fn write_row_pixels(
+        pixels: &mut [Color32],
+        y: usize,
         width: usize,
-    ) -> Vec<f32> {
-        let composed = compose_panadapter_row(
-            row_data,
-            view.row_rate_hz,
-            view.view_span_hz,
-            data_span,
-            view.pan_offset_hz,
-        );
-        if composed.len() == width {
-            composed
-        } else {
-            fit_panadapter_row_width(composed, width)
+        db_row: &[f32],
+        ref_db: f32,
+        range_db: f32,
+    ) {
+        let base = y * width;
+        for (x, &db) in db_row.iter().enumerate().take(width) {
+            pixels[base + x] = db_to_colour(db, ref_db, range_db);
         }
     }
 
-    fn waterfall_row_db(
+    fn waterfall_row_db_for_storage(
         &self,
         row_index: usize,
-        view: &SpectrumViewMapping,
-        data_span: f32,
+        storage: &SpectrumViewMapping,
         width: usize,
         avg: usize,
     ) -> Vec<f32> {
@@ -1464,9 +1684,17 @@ impl WaterfallApp {
             let Some(row_data) = self.waterfall_source_row(row_index.saturating_add(k)) else {
                 break;
             };
-            let row_view = Self::composed_waterfall_row(row_data, view, data_span, width);
-            for (i, &db) in row_view.iter().enumerate().take(width) {
-                acc[i] += db;
+            let row = compose_panadapter_row(
+                row_data,
+                storage.row_rate_hz,
+                storage.view_span_hz,
+                storage.data_span_hz,
+                storage.compose_pan_offset_hz,
+                storage.allow_band_padding,
+            );
+            let n = row.len().min(width);
+            for (i, &v) in row.iter().take(n).enumerate() {
+                acc[i] += v;
             }
             count += 1;
         }
@@ -1480,58 +1708,135 @@ impl WaterfallApp {
         acc
     }
 
-    fn write_row_pixels(pixels: &mut [Color32], y: usize, width: usize, db_row: &[f32], ref_db: f32, range_db: f32) {
-        let base = y * width;
-        for (x, &db) in db_row.iter().enumerate().take(width) {
-            pixels[base + x] = db_to_colour(db, ref_db, range_db);
-        }
-    }
-
-    fn upload_waterfall_texture(&mut self, ctx: &egui::Context, width: usize, height: usize) {
-        let image = egui::ColorImage::new([width, height], self.waterfall_pixels.clone());
-        match &mut self.texture {
+    fn upload_waterfall_viewport(&mut self, ctx: &egui::Context, width: usize, height: usize) {
+        let image = egui::ColorImage::new([width, height], self.waterfall_viewport_pixels.clone());
+        match &mut self.waterfall_viewport_texture {
             Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
             none => {
-                *none = Some(ctx.load_texture("waterfall", image, egui::TextureOptions::LINEAR));
+                *none = Some(ctx.load_texture(
+                    "waterfall_viewport",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
             }
         }
     }
 
-    fn rebuild_waterfall_texture(&mut self, ctx: &egui::Context) {
-        let view = self.spectrum_view();
-        let data_span = self.plot_full_span_hz();
-        let w = panadapter_output_bins(self.latest.len(), view.view_span_hz, data_span).max(1);
+    fn sync_waterfall_storage(&mut self, ctx: &egui::Context) {
+        if self.rows.is_empty() && self.latest.is_empty() {
+            return;
+        }
+        let storage = self.waterfall_storage_view();
+        let row_len = self
+            .rows
+            .front()
+            .map(|r| r.len())
+            .unwrap_or_else(|| self.latest.len());
+        if row_len == 0 {
+            return;
+        }
+        let w = self.storage_row_width(&storage, row_len);
         let h = WATERFALL_ROWS;
+        let key = StorageKey::from(&storage, w);
         let avg = self.waterfall_avg.max(1) as usize;
         let ref_db = self.ref_db;
         let range_db = self.range_db;
-        self.tex_width = w;
-        self.waterfall_pixels.resize(w * h, Color32::BLACK);
-        for y in 0..h {
-            let row_db = self.waterfall_row_db(y, &view, data_span, w, avg);
-            Self::write_row_pixels(&mut self.waterfall_pixels, y, w, &row_db, ref_db, range_db);
-        }
-        self.upload_waterfall_texture(ctx, w, h);
-    }
+        let n_new = self.pending_row_appends.min(h);
+        let can_append = n_new > 0
+            && n_new < h
+            && !self.force_texture_full
+            && self.last_storage_key == Some(key)
+            && self.storage_tex_width == w
+            && self.waterfall_storage_pixels.len() == w * h;
 
-    fn sync_waterfall_texture(&mut self, ctx: &egui::Context) {
-        if !self.textures_dirty {
+        if can_append {
+            let stride = w;
+            for y in (0..h - n_new).rev() {
+                let src = y * stride;
+                self.waterfall_storage_pixels
+                    .copy_within(src..src + stride, (y + n_new) * stride);
+            }
+            for y in 0..n_new {
+                self.waterfall_row_scratch =
+                    self.waterfall_row_db_for_storage(y, &storage, w, avg);
+                Self::write_row_pixels(
+                    &mut self.waterfall_storage_pixels,
+                    y,
+                    w,
+                    &self.waterfall_row_scratch,
+                    ref_db,
+                    range_db,
+                );
+            }
+            self.last_viewport_key = None;
+        } else if self.textures_dirty
+            || self.force_texture_full
+            || self.last_storage_key != Some(key)
+            || self.storage_tex_width != w
+            || self.waterfall_storage_pixels.len() != w * h
+        {
+            self.storage_tex_width = w;
+            self.waterfall_storage_pixels.resize(w * h, Color32::BLACK);
+            for y in 0..h {
+                let row_db = self.waterfall_row_db_for_storage(y, &storage, w, avg);
+                Self::write_row_pixels(
+                    &mut self.waterfall_storage_pixels,
+                    y,
+                    w,
+                    &row_db,
+                    ref_db,
+                    range_db,
+                );
+            }
+            self.last_storage_key = Some(key);
+            self.last_viewport_key = None;
+        } else {
             return;
         }
-        // Full rebuild keeps spectrum/waterfall aligned when zoom, pan, or levels change.
-        self.rebuild_waterfall_texture(ctx);
+
         self.textures_dirty = false;
         self.force_texture_full = false;
         self.pending_row_appends = 0;
+        let _ = ctx; // storage is CPU-side; viewport upload happens in sync_waterfall_viewport
+    }
+
+    fn sync_waterfall_viewport(&mut self, ctx: &egui::Context, plot_width: usize) {
+        if self.storage_tex_width == 0 || self.waterfall_storage_pixels.is_empty() {
+            return;
+        }
         let view = self.spectrum_view();
-        let pan_track = if self.stats.spectrum_zoomed {
-            self.plot_view.pan_offset_hz
-        } else {
-            view.pan_offset_hz
-        };
-        self.last_tex_span = view.view_span_hz;
-        self.last_tex_pan = pan_track;
-        self.last_tex_row_rate = view.row_rate_hz;
+        let storage_span = self.waterfall_storage_view().view_span_hz;
+        let map = crate::interaction::PlotFreqMapping::new(
+            view.view_span_hz,
+            view.pan_offset_hz,
+            storage_span,
+        );
+        let dst_w = plot_width.max(1);
+        let h = WATERFALL_ROWS;
+        let key = ViewportKey::from_view(
+            view.view_span_hz,
+            view.pan_offset_hz,
+            dst_w,
+            self.waterfall_rows,
+        );
+        if self.last_viewport_key == Some(key)
+            && self.waterfall_viewport_texture.is_some()
+            && self.viewport_tex_width == dst_w
+            && self.waterfall_viewport_pixels.len() == dst_w * h
+        {
+            return;
+        }
+
+        self.waterfall_viewport_pixels = crate::widgets::resample_waterfall_viewport(
+            &self.waterfall_storage_pixels,
+            self.storage_tex_width,
+            h,
+            map,
+            dst_w,
+        );
+        self.viewport_tex_width = dst_w;
+        self.upload_waterfall_viewport(ctx, dst_w, h);
+        self.last_viewport_key = Some(key);
     }
 
     fn history_panel(&mut self, ui: &mut egui::Ui) {
@@ -1771,6 +2076,24 @@ impl WaterfallApp {
             }
             ui.separator();
             ui.label(
+                egui::RichText::new(format!("RX {:.6} MHz", self.center_khz / 1000.0))
+                    .small()
+                    .monospace()
+                    .color(MUTED),
+            );
+            if let Some(offset) = self.hover_offset_hz {
+                let cursor_hz = self.center_hz() + offset;
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Cursor {}",
+                        crate::interaction::format_absolute_freq_hz(cursor_hz)
+                    ))
+                    .small()
+                    .monospace()
+                    .color(ACCENT),
+                );
+            }
+            ui.label(
                 egui::RichText::new(format!("listen {:.0} Hz", self.listen_offset_hz()))
                     .small()
                     .color(MUTED),
@@ -1805,6 +2128,19 @@ impl WaterfallApp {
                 }
             }
             ui.label(format!("{:.0} kS/s", self.stats.effective_sps / 1000.0));
+            if !self.is_kiwi
+                && self.stats.sample_rate > 0.0
+                && (self.stats.effective_sps / self.stats.sample_rate) < 0.85
+            {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "({:.0} kS/s device)",
+                        self.stats.sample_rate / 1000.0
+                    ))
+                    .small()
+                    .color(MUTED),
+                );
+            }
             if self.stats.iq_playback {
                 ui.separator();
                 ui.colored_label(OK, "PLAYBACK");
@@ -1899,6 +2235,11 @@ impl WaterfallApp {
             });
             if !self.skimmer_enabled {
                 ui.colored_label(MUTED, "Enable skimmer to decode callsigns on the band.");
+            } else if !self.skimmer_spectrum_ok() {
+                ui.colored_label(
+                    WARN,
+                    "Skimmer needs Process IQ ≤96 kHz on Airspy (Connection → Process IQ), then reconnect.",
+                );
             }
             scroll_slider_f32(ui, &mut self.min_spot_snr, 0.0..=40.0, "Table min SNR");
             scroll_slider_f32(ui, &mut self.spot_max_age_secs, 0.0..=300.0, "Max age (s, 0=all)");
@@ -2016,6 +2357,100 @@ impl WaterfallApp {
                 }
             });
         });
+
+        #[cfg(feature = "airspy")]
+        if self.form_kind == SourceKind::Airspy {
+            popup_section(ui, "Airspy HF+", None, |ui| {
+                egui::Grid::new("connect_airspy_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .min_col_width(100.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Sample rate").small().color(MUTED));
+                        preset_combo_u32(
+                            ui,
+                            "airspy_sr",
+                            &mut self.form_sample_rate,
+                            AIRSPY_SAMPLE_RATE_PRESETS,
+                            "Hz ",
+                            3_000..=768_000,
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Process IQ").small().color(MUTED));
+                        preset_combo_u32(
+                            ui,
+                            "airspy_proc",
+                            &mut self.form_airspy.iq_process_hz,
+                            AIRSPY_PROCESS_RATE_PRESETS,
+                            "Hz ",
+                            0..=768_000,
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("HF AGC").small().color(MUTED));
+                        ui.toggle_value(&mut self.form_airspy.hf_agc, "On");
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("AGC threshold").small().color(MUTED));
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(
+                                &mut self.form_airspy.hf_agc_threshold_high,
+                                false,
+                                "Low",
+                            );
+                            ui.selectable_value(
+                                &mut self.form_airspy.hf_agc_threshold_high,
+                                true,
+                                "High",
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.form_airspy.hf_att)
+                                .range(0..=8)
+                                .suffix(" ×6 dB"),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Preamp").small().color(MUTED));
+                        ui.toggle_value(&mut self.form_airspy.hf_lna, "+6 dB LNA (passive ant.)");
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Bias tee").small().color(MUTED));
+                        ui.toggle_value(
+                            &mut self.form_airspy.bias_tee,
+                            "Antenna DC (active preamp)",
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Frontend").small().color(MUTED));
+                        ui.vertical(|ui| {
+                            ui.toggle_value(
+                                &mut self.form_airspy.frontend_optimize_band_iii,
+                                "Optimize VHF Band III",
+                            );
+                            ui.toggle_value(
+                                &mut self.form_airspy.frontend_optimize_pll_boundary,
+                                "Optimize PLL int. boundary",
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Lib DSP").small().color(MUTED));
+                        ui.toggle_value(&mut self.form_airspy.lib_dsp, "IQ correction");
+                        ui.end_row();
+                    });
+                section_hint(
+                    ui,
+                    "384 kHz is a good CW default. Lower “Process IQ” cuts CPU load (reconnect). \
+                     Preamp/Att/AGC apply live when connected. Discovery HF+ band-tracking \
+                     preselectors are automatic — no manual filter-bank setting in libairspyhf.",
+                );
+            });
+        }
 
         if self.form_kind == SourceKind::Kiwi {
             popup_section(ui, "Kiwi IQ", None, |ui| {
@@ -2151,6 +2586,10 @@ impl WaterfallApp {
                     self.form_host = req.host.clone();
                     self.form_port = req.port;
                     self.form_kiwi = req.kiwi.clone();
+                    if req.sample_rate != 0 {
+                        self.form_sample_rate = req.sample_rate;
+                    }
+                    self.form_airspy = req.airspy.clone();
                     self.connect_now();
                 }
             });
@@ -2195,26 +2634,28 @@ impl WaterfallApp {
             ui.horizontal(|ui| {
                 if ui.small_button("Full IQ (F)").clicked() {
                     self.plot_view.zoom_to_full_span();
-                    self.invalidate_waterfall_history();
                 }
-                if ui.small_button("CW band view").clicked() {
-                    let full_span = self.plot_full_span_hz();
-                    let max_zoom = self.plot_max_zoom_out();
-                    let segment = self.default_cw_segment_hz();
-                    self.plot_view
-                        .zoom_to_cw_segment(segment, full_span, max_zoom);
-                    self.invalidate_waterfall_history();
+                if self.is_kiwi {
+                    if ui.small_button("CW band view").clicked() {
+                        let full_span = self.plot_full_span_hz();
+                        let max_zoom = self.plot_max_zoom_out();
+                        let segment = self.default_cw_segment_hz();
+                        self.plot_view
+                            .zoom_to_cw_segment(segment, full_span, max_zoom);
+                    }
                 }
             });
-            toggle(
-                ui,
-                &mut self.show_band_overview,
-                "Band overview minimap (M)",
-            );
-            section_hint(
-                ui,
-                "Top-right inset: CW band context + IQ data + viewport box. Click to pan.",
-            );
+            if self.is_kiwi {
+                toggle(
+                    ui,
+                    &mut self.show_band_overview,
+                    "Band overview minimap (M)",
+                );
+                section_hint(
+                    ui,
+                    "Top-right inset: CW band context + IQ data + viewport box. Click to pan.",
+                );
+            }
             let floor_db = self.ref_db - self.range_db;
             ui.label(
                 egui::RichText::new(format!(
@@ -2280,6 +2721,14 @@ impl WaterfallApp {
     fn performance_section(&mut self, ui: &mut egui::Ui) {
         collapsible_section(ui, "perf", "Performance", false, |ui| {
             ui.checkbox(&mut self.fft_auto, "Auto FFT size (wideband)");
+            ui.checkbox(
+                &mut self.full_drain_spectrum,
+                "Full-drain spectrum (wideband, more CPU)",
+            )
+            .on_hover_text(
+                "FFT every drained IQ sample instead of the recent tail only. \
+                 Row budget still adapts to CPU headroom.",
+            );
             if self.fft_auto {
                 let rate = self.stats.spectrum_rate;
                 let bin = rate / self.stats.spectrum_fft.max(1) as f32;
@@ -2610,11 +3059,12 @@ impl WaterfallApp {
             "Pre-demod: removes hets while the carrier is still recoverable. Drag purple markers on the spectrum.",
         );
         section_hint(ui, "Keys 1–4 toggle notches · new ones land on listen ±80 Hz.");
-        if let Some(hover) = self.hover_offset_hz {
+        if self.hover_offset_hz.is_some() {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("Cursor {hover:.0} Hz")).small().color(MUTED));
                 if ui.small_button("Notch at cursor").clicked() {
-                    if let Some(slot) = self.first_free_notch_slot() {
+                    if let (Some(slot), Some(hover)) =
+                        (self.first_free_notch_slot(), self.hover_offset_hz)
+                    {
                         self.arm_manual_notch(slot, Some(hover as f32));
                     }
                 }
@@ -2678,6 +3128,80 @@ impl WaterfallApp {
                 None,
             );
         }
+        #[cfg(feature = "airspy")]
+        if self.is_airspy_streaming() {
+            self.airspy_rf_controls(ui);
+        }
+    }
+
+    #[cfg(feature = "airspy")]
+    fn airspy_rf_controls(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(
+            egui::RichText::new("Airspy RF — hardware gain & frontend")
+                .small()
+                .color(MUTED),
+        );
+        stage_toggle(
+            ui,
+            &mut self.form_airspy.hf_lna,
+            "Preamp (+6 dB LNA)",
+            Some("Enable for passive loop/wire antennas; off for max dynamic range"),
+            None,
+        );
+        stage_toggle(
+            ui,
+            &mut self.form_airspy.hf_agc,
+            "HF AGC",
+            Some("Hardware AGC on the Airspy front end"),
+            None,
+        );
+        if self.form_airspy.hf_agc {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("AGC threshold").small().color(MUTED));
+                ui.selectable_value(
+                    &mut self.form_airspy.hf_agc_threshold_high,
+                    false,
+                    "Low",
+                );
+                ui.selectable_value(
+                    &mut self.form_airspy.hf_agc_threshold_high,
+                    true,
+                    "High",
+                );
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
+                ui.add(
+                    egui::DragValue::new(&mut self.form_airspy.hf_att)
+                        .range(0..=8)
+                        .suffix(" ×6 dB"),
+                );
+            });
+        }
+        stage_toggle(
+            ui,
+            &mut self.form_airspy.bias_tee,
+            "Bias tee",
+            Some("DC on antenna port for active preamps/upconverters"),
+            None,
+        );
+        ui.collapsing("Frontend options (Discovery / Ranger)", |ui| {
+            ui.toggle_value(
+                &mut self.form_airspy.frontend_optimize_band_iii,
+                "Optimize VHF Band III",
+            );
+            ui.toggle_value(
+                &mut self.form_airspy.frontend_optimize_pll_boundary,
+                "Optimize PLL integer boundary",
+            );
+            section_hint(
+                ui,
+                "HF filter banks and band-tracking preselectors follow tuned frequency \
+                 automatically on Discovery HF+.",
+            );
+        });
     }
 
     fn skimmer_settings_body(&mut self, ui: &mut egui::Ui) {
@@ -2968,12 +3492,13 @@ impl WaterfallApp {
             &mut self.trace_view_key,
             view.row_rate_hz,
             view.view_span_hz,
-            plot_full_span,
-            view.pan_offset_hz,
+            view.data_span_hz,
+            view.compose_pan_offset_hz,
+            view.allow_band_padding,
             self.smooth_alpha,
             self.latest_frame_tick,
         );
-        if self.show_band_overview {
+        if self.show_band_overview && self.is_kiwi {
             update_trace(
                 &self.latest,
                 &mut self.overview_smoothed,
@@ -2983,13 +3508,13 @@ impl WaterfallApp {
                 plot_full_span,
                 plot_full_span,
                 0.0,
+                true,
                 self.smooth_alpha,
                 self.latest_frame_tick,
             );
         }
         let overview_span_hz = self.band_overview_span_hz();
 
-        let mut plot_actions = Vec::new();
         let tune_preview_offset_hz = self.tune_preview_offset_hz.unwrap_or(0.0);
         let listen_center_hz = self.listen_offset_hz();
         let notches = self.enabled_notches();
@@ -3000,8 +3525,16 @@ impl WaterfallApp {
         };
 
         let bw_max = self.passband_max_hz();
-        let plot_width = ui.available_width();
-        let mut params = crate::widgets::PlotParams {
+        let plot_width = ui.available_width().round() as usize;
+        self.sync_waterfall_storage(ui.ctx());
+        self.sync_waterfall_viewport(ui.ctx(), plot_width);
+        let storage_span = self.waterfall_storage_view().view_span_hz;
+        let freq_map = PlotFreqMapping::new(
+            view.view_span_hz,
+            view.pan_offset_hz,
+            storage_span,
+        );
+        let params = crate::widgets::PlotParams {
             view_bandwidth_hz: plot_full_span,
             max_zoom,
             view_span_hz: view.view_span_hz,
@@ -3016,63 +3549,29 @@ impl WaterfallApp {
             notches: &notches,
             labels: &labels,
             trace: &self.smoothed_trace,
-            overview_trace: if self.show_band_overview {
+            overview_trace: if self.show_band_overview && self.is_kiwi {
                 &self.overview_smoothed
             } else {
                 &[]
             },
             overview_span_hz,
-            show_overview: self.show_band_overview,
+            show_overview: self.show_band_overview && self.is_kiwi,
             ref_db: self.ref_db,
             range_db: self.range_db,
             height: SCOPE_HEIGHT,
-            plot_width,
+            plot_width: plot_width as f32,
+            waterfall_display: self.waterfall_viewport_texture.as_ref(),
         };
 
-        // Reset before drawing; whichever plot the pointer is over claims the crosshair.
-        self.hover_offset_hz = None;
-
-        let (_, spec_actions) = self.spectrum_widget.show(
+        let plot_actions = self.panadapter_plot.show(
             ui,
             &mut self.plot_interaction,
             &mut self.plot_view,
+            freq_map,
             &params,
             &mut self.hover_offset_hz,
+            &mut self.last_plot_interaction_rect,
         );
-        plot_actions.extend(spec_actions);
-
-        show_freq_axis_bar(
-            ui,
-            plot_width,
-            view.view_span_hz,
-            view.pan_offset_hz,
-            params.center_freq_hz,
-            &mut self.hover_offset_hz,
-        );
-
-        if self.texture.is_some() {
-            let tex = self.texture.clone().unwrap();
-            params.trace = &[];
-            let wf_actions = self.waterfall_widget.show(
-                ui,
-                &mut self.plot_interaction,
-                &mut self.plot_view,
-                &tex,
-                &params,
-                &mut self.hover_offset_hz,
-            );
-            plot_actions.extend(wf_actions);
-        } else {
-            ui.allocate_space(egui::vec2(ui.available_width(), ui.available_height().max(120.0)));
-            ui.centered_and_justified(|ui| {
-                let msg = if matches!(self.conn_state, ConnState::Disconnected) {
-                    "Connect to a receiver to see live spectrum"
-                } else {
-                    "Waiting for IQ data…"
-                };
-                ui.label(egui::RichText::new(msg).color(MUTED));
-            });
-        }
 
         self.apply_plot_actions(plot_actions);
     }
@@ -3186,6 +3685,10 @@ impl eframe::App for WaterfallApp {
             self.form_host = req.host.clone();
             self.form_port = req.port;
             self.form_kiwi = req.kiwi.clone();
+            if req.sample_rate != 0 {
+                self.form_sample_rate = req.sample_rate;
+            }
+            self.form_airspy = req.airspy.clone();
             self.center_khz = req.center_hz / 1000.0;
             self.clamp_center_to_ham_bands();
             req.center_hz = self.center_khz * 1000.0;
@@ -3200,6 +3703,9 @@ impl eframe::App for WaterfallApp {
         self.pump_engine();
         self.frame_visible_spots = self.visible_spots();
 
+        self.update_plot_hover(&ctx);
+
+        self.update_plot_hover(&ctx);
         egui::Panel::top("status").show_inside(ui, |ui| self.status_banner(ui));
 
         if self.show_left {
@@ -3236,30 +3742,6 @@ impl eframe::App for WaterfallApp {
                 self.central_panel(ui);
             });
 
-        // Waterfall texture after plot interaction.
-        let dragging = self.plot_interaction.is_dragging();
-        if self.was_plot_dragging && !dragging {
-            self.force_texture_full = true;
-            self.textures_dirty = true;
-        }
-        self.was_plot_dragging = dragging;
-
-        let view = self.spectrum_view();
-        let pan_track = if self.stats.spectrum_zoomed {
-            self.plot_view.pan_offset_hz
-        } else {
-            view.pan_offset_hz
-        };
-        let view_changed = (view.view_span_hz - self.last_tex_span).abs()
-            > (view.view_span_hz * 0.003).max(2.0)
-            || (pan_track - self.last_tex_pan).abs()
-                > (view.view_span_hz as f64 * 0.003).max(2.0)
-            || (view.row_rate_hz - self.last_tex_row_rate).abs() > 1.0;
-        if view_changed {
-            self.force_texture_full = true;
-            self.textures_dirty = true;
-        }
-        self.sync_waterfall_texture(&ctx);
         self.latest_frame_tick = false;
 
         self.connection_popup(&ctx);

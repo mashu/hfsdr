@@ -9,6 +9,8 @@ use std::f32::consts::PI;
 
 use crate::source::Complex32;
 
+use super::super::simd::dot_f32;
+
 /// Window applied to the ideal sinc — the "shape" of the CW filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowKind {
@@ -95,6 +97,10 @@ impl FirFilter {
         self.taps.is_empty()
     }
 
+    pub fn taps(&self) -> &[f32] {
+        &self.taps
+    }
+
     pub fn reset_state(&mut self) {
         self.delay_i.fill(0.0);
         self.delay_q.fill(0.0);
@@ -109,20 +115,60 @@ impl FirFilter {
         self.delay_i[self.pos] = sample.re;
         self.delay_q[self.pos] = sample.im;
 
-        let mut acc_i = 0.0f32;
-        let mut acc_q = 0.0f32;
-        let mut idx = self.pos;
-        for &tap in &self.taps {
-            acc_i += self.delay_i[idx] * tap;
-            acc_q += self.delay_q[idx] * tap;
-            idx = if idx == 0 { n - 1 } else { idx - 1 };
-        }
+        let (acc_i, acc_q) = if n >= 32 {
+            (
+                fir_dot_delay(&self.delay_i, &self.taps, self.pos, n),
+                fir_dot_delay(&self.delay_q, &self.taps, self.pos, n),
+            )
+        } else {
+            let mut acc_i = 0.0f32;
+            let mut acc_q = 0.0f32;
+            let mut idx = self.pos;
+            for &tap in &self.taps {
+                acc_i += self.delay_i[idx] * tap;
+                acc_q += self.delay_q[idx] * tap;
+                idx = if idx == 0 { n - 1 } else { idx - 1 };
+            }
+            (acc_i, acc_q)
+        };
 
         self.pos = if self.pos + 1 == n { 0 } else { self.pos + 1 };
         Complex32 {
             re: acc_i,
             im: acc_q,
         }
+    }
+}
+
+/// Reverse-order delay line dot product (linear-phase FIR).
+#[inline]
+fn fir_dot_delay(delay: &[f32], taps: &[f32], pos: usize, n: usize) -> f32 {
+    if n >= 32 {
+        const CHUNK: usize = 32;
+        let mut ti = [0.0f32; CHUNK];
+        let mut di = [0.0f32; CHUNK];
+        let mut acc = 0.0f32;
+        let mut tap_idx = 0usize;
+        let mut idx = pos;
+        while tap_idx < n {
+            let chunk = (n - tap_idx).min(CHUNK);
+            for k in 0..chunk {
+                ti[k] = taps[tap_idx + k];
+                di[k] = delay[idx];
+                idx = if idx == 0 { n - 1 } else { idx - 1 };
+            }
+            acc += dot_f32(&di[..chunk], &ti[..chunk]);
+            tap_idx += chunk;
+        }
+        acc
+    } else {
+        let mut acc = 0.0f32;
+        let mut idx = pos;
+        for &tap in taps {
+            acc += delay[idx] * tap;
+            idx = if idx == 0 { n - 1 } else { idx - 1 };
+        }
+        acc
     }
 }
 
@@ -180,6 +226,33 @@ pub fn design_lowpass_with(
 /// Gaussian-shaped CW channel filter (default — cleanest tone).
 pub fn design_gaussian_lowpass(sample_rate: f32, bandwidth_hz: f32) -> FirFilter {
     design_lowpass(sample_rate, bandwidth_hz, WindowKind::Gaussian)
+}
+
+/// Minimal-tap Gaussian lowpass for wideband IQ decimation (23 taps, fixed cost).
+pub fn design_gaussian_lowpass_compact(sample_rate: f32, bandwidth_hz: f32) -> FirFilter {
+    const TAPS: usize = 23;
+    let cutoff = (bandwidth_hz * 0.5).max(100.0);
+    let fc = cutoff / sample_rate;
+    let m = (TAPS - 1) as f32;
+    let mut taps = Vec::with_capacity(TAPS);
+    let mut sum = 0.0f32;
+    for k in 0..TAPS {
+        let x = k as f32 - m / 2.0;
+        let sinc = if x.abs() < 1e-6 {
+            2.0 * fc
+        } else {
+            (2.0 * PI * fc * x).sin() / (PI * x)
+        };
+        let tap = sinc * window_value(WindowKind::Gaussian, k, TAPS, 6.0);
+        taps.push(tap);
+        sum += tap;
+    }
+    if sum.abs() > f32::EPSILON {
+        for tap in &mut taps {
+            *tap /= sum;
+        }
+    }
+    FirFilter::new(taps)
 }
 
 /// Short inverse-sinc compensator for upstream boxcar/CIC passband droop.

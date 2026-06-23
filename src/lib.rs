@@ -18,6 +18,8 @@
 
 #[cfg(feature = "airspy")]
 pub mod airspyhf;
+#[cfg(feature = "rtlsdr")]
+pub mod rtlsdr;
 pub mod cty;
 pub mod dsp;
 pub mod history;
@@ -29,6 +31,8 @@ pub mod source;
 
 #[cfg(feature = "airspy")]
 pub use airspyhf::AirspyHf;
+#[cfg(feature = "rtlsdr")]
+pub use rtlsdr::RtlSdr;
 pub use cty::{Continent, ContinentResolver};
 pub use history::{Annotation, RowFold, SlowWaterfall};
 pub use iq_record::{default_capture_dir, read_meta, timestamped_capture_path, timestamped_capture_path_in, IqCaptureMeta, IqPlayback, IqRecorder};
@@ -37,10 +41,13 @@ pub use dsp::{
     design_lowpass,
     effective_decimation, audio_sample_rate, compose_panadapter_row, fit_panadapter_row_width,
     extract_passband_view, extract_view_window, panadapter_output_bins, iq_to_audio, spectrum_plan, spectrum_view_mapping,
-    AgcSettings, ApfSettings, AutoNotchSettings, CwChannel, CwChannelSettings, IqAudioDemod,
+    waterfall_storage_mapping, waterfall_storage_span_hz, waterfall_texture_u_range,
+    view_t_to_offset_hz, offset_hz_to_view_t, offset_hz_to_storage_u, stretch_row_to_width,
+    AgcSettings, ApfSettings, AutoNotchSettings, CwChannel, CwChannelSettings, FirDecimator,
+    IngressWorker, IqAudioDemod,
     NoiseBlankerSettings, NoiseReductionSettings, NotchSpec, SpectrumAnalyzer, SpectrumFrontEnd,
     SpectrumViewMapping, WindowKind, MAX_FFT_SIZE, MAX_NOTCHES, TARGET_BIN_HZ,
-    ZOOM_DECIM_THRESHOLD,
+    ZOOM_DECIM_THRESHOLD, spectrum_hop,
 };
 pub use kiwi::protocol::{kiwi_iq_half_hz, KIWI_IQ_HALF_HZ, KIWI_IQ_RATE};
 pub use kiwi::KiwiSource;

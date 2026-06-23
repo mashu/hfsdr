@@ -1,13 +1,14 @@
 //! Interactive spectrum + waterfall rendering.
 
 use eframe::egui::{
-    Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2,
+    Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2,
 };
 use hfsdr::compose_panadapter_row;
 
 use crate::interaction::{
     center_grab_px, edge_grab_px, filter_edges, format_freq_hz, format_offset_label,
-    nice_freq_step_hz, offset_hz_to_x, NotchMarker, PlotAction, PlotInteraction, PlotViewState,
+    nice_freq_step_hz, offset_hz_to_x, NotchMarker, PlotAction, PlotFreqMapping, PlotInteraction,
+    PlotViewState,
 };
 
 use crate::smooth::spatial_smooth;
@@ -97,92 +98,117 @@ pub struct PlotParams<'a> {
     pub height: f32,
     /// Shared plot column width — scope, axis, and waterfall must match.
     pub plot_width: f32,
+    /// Viewport waterfall texture (same frequency mapping as the scope trace).
+    pub waterfall_display: Option<&'a eframe::egui::TextureHandle>,
 }
 
-pub struct SpectrumWidget;
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_unmultiplied(
+        lerp(a.r(), b.r()),
+        lerp(a.g(), b.g()),
+        lerp(a.b(), b.b()),
+        lerp(a.a(), b.a()),
+    )
+}
 
-impl SpectrumWidget {
+/// Resample full-band waterfall rows to the visible viewport using the same Hz↔x map as clicks.
+pub fn resample_waterfall_viewport(
+    src: &[Color32],
+    src_width: usize,
+    height: usize,
+    map: PlotFreqMapping,
+    dst_width: usize,
+) -> Vec<Color32> {
+    let dst_width = dst_width.max(1);
+    let mut dst = vec![Color32::BLACK; dst_width * height.max(1)];
+    if src_width == 0 || height == 0 || src.is_empty() {
+        return dst;
+    }
+    let dst_denom = dst_width.saturating_sub(1).max(1) as f64;
+    let src_denom = src_width.saturating_sub(1).max(1) as f32;
+
+    for y in 0..height {
+        let src_row = &src[y * src_width..(y + 1) * src_width];
+        let dst_row = &mut dst[y * dst_width..(y + 1) * dst_width];
+        for (dst_x, pixel) in dst_row.iter_mut().enumerate() {
+            let t = dst_x as f64 / dst_denom;
+            let offset = hfsdr::view_t_to_offset_hz(t, map.view_span_hz, map.pan_offset_hz);
+            let u = hfsdr::offset_hz_to_storage_u(offset, map.storage_span_hz) as f32;
+            let src_x = u * src_denom;
+            let x0 = src_x.floor() as usize;
+            let x1 = (x0 + 1).min(src_width - 1);
+            let frac = src_x - x0 as f32;
+            *pixel = if x0 == x1 || frac <= 0.0 {
+                src_row[x0]
+            } else {
+                lerp_color(src_row[x0], src_row[x1], frac)
+            };
+        }
+    }
+    dst
+}
+
+pub struct PanadapterPlot;
+
+impl PanadapterPlot {
     pub fn new() -> Self {
         Self
     }
 
+    /// Scope + frequency axis + waterfall with one shared frequency map and one interaction target.
     pub fn show(
         &mut self,
         ui: &mut Ui,
         interaction: &mut PlotInteraction,
         view: &mut PlotViewState,
+        freq_map: PlotFreqMapping,
         p: &PlotParams,
         hover_out: &mut Option<f64>,
-    ) -> (Response, Vec<PlotAction>) {
+        plot_rect_out: &mut Option<Rect>,
+    ) -> Vec<PlotAction> {
         let full_span = p.view_bandwidth_hz.max(1.0);
         let max_zoom = p.max_zoom.max(1.0);
-        let view_span = p.view_span_hz;
-        let pan = p.pan_offset_hz;
+        let view_span = freq_map.view_span_hz;
+        let pan = freq_map.pan_offset_hz;
         let plot_w = p.plot_width.max(1.0);
-        let (response, painter) = ui.allocate_painter(
+
+        let (scope_response, scope_painter) = ui.allocate_painter(
             Vec2::new(plot_w, p.height),
-            Sense::click_and_drag(),
+            Sense::hover(),
         );
-        let rect = response.rect;
-        draw_plot_background(&painter, rect);
-
-        if p.filter_editable {
-            draw_filter_band(
-                &painter,
-                rect,
-                view_span,
-                pan,
-                p.listen_center_hz,
-                p.passband_hz,
-                true,
-            );
-        }
-
-        for notch in p.notches {
-            draw_notch_marker(
-                &painter,
-                rect,
-                view_span,
-                pan,
-                notch.slot,
-                notch.offset_hz,
-                notch.width_hz,
-                true,
-            );
-        }
-
-        draw_db_scale(&painter, rect, p.ref_db, p.range_db);
-        draw_freq_vertical_grid(&painter, rect, view_span, pan);
-        draw_trace(
-            &painter,
-            rect,
-            p.trace,
-            p.ref_db,
-            p.range_db,
+        let scope_rect = scope_response.rect;
+        draw_scope_layer(
+            &scope_painter,
+            scope_rect,
+            freq_map,
+            p,
         );
 
-        draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, true);
+        show_freq_axis_bar(
+            ui,
+            plot_w,
+            view_span,
+            pan,
+            p.center_freq_hz,
+            hover_out,
+        );
 
-        if let Some(offset) = *hover_out {
-            let x = offset_hz_to_x(offset, rect, view_span, pan);
-            painter.line_segment(
-                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                Stroke::new(1.0, Color32::from_rgba_unmultiplied(200, 200, 255, 100)),
-            );
-            painter.text(
-                Pos2::new(x, rect.top() + 4.0),
-                Align2::CENTER_TOP,
-                format_offset_label(offset),
-                FontId::proportional(11.0),
-                ACCENT,
-            );
-        }
+        let wf_height = ui.available_height().max(120.0);
+        let (wf_response, wf_painter) =
+            ui.allocate_painter(Vec2::new(plot_w, wf_height), Sense::hover());
+        let wf_rect = wf_response.rect;
+        draw_waterfall_layer(&wf_painter, wf_rect, freq_map, p);
 
-        draw_spot_labels(&painter, rect, view_span, pan, p.labels);
+        let interaction_rect = scope_rect.union(wf_rect);
+        *plot_rect_out = Some(interaction_rect);
+        let interact_id = ui.id().with("panadapter_interact");
+        let response = ui.interact(interaction_rect, interact_id, Sense::click_and_drag());
 
         let mut actions = interaction.handle(
             ui,
-            rect,
+            interaction_rect,
             &response,
             view,
             full_span,
@@ -198,18 +224,11 @@ impl SpectrumWidget {
             p.notches,
         );
 
-        if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-            if rect.contains(pos) {
-                *hover_out =
-                    Some(crate::interaction::x_to_offset_hz(pos.x, rect, view_span, pan));
-            }
-        }
-
         if p.show_overview && !p.overview_trace.is_empty() {
             actions.extend(draw_band_overview(
                 ui,
-                &painter,
-                rect,
+                &scope_painter,
+                scope_rect,
                 full_span,
                 p.overview_span_hz,
                 view_span,
@@ -220,97 +239,130 @@ impl SpectrumWidget {
             ));
         }
 
-        (response, actions)
-    }
-}
-
-pub struct WaterfallWidget;
-
-impl WaterfallWidget {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn show(
-        &mut self,
-        ui: &mut Ui,
-        interaction: &mut PlotInteraction,
-        view: &mut PlotViewState,
-        texture: &eframe::egui::TextureHandle,
-        p: &PlotParams,
-        hover_out: &mut Option<f64>,
-    ) -> Vec<PlotAction> {
-        let full_span = p.view_bandwidth_hz.max(1.0);
-        let max_zoom = p.max_zoom.max(1.0);
-        let view_span = p.view_span_hz;
-        let pan = p.pan_offset_hz;
-        let plot_w = p.plot_width.max(1.0);
-        let size = Vec2::new(plot_w, ui.available_height());
-        let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
-        let rect = response.rect;
-
-        painter.image(
-            texture.id(),
-            rect,
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
-
-        painter.rect_stroke(
-            rect,
-            6.0,
-            Stroke::new(1.0, Color32::from_rgb(40, 48, 64)),
-            eframe::egui::StrokeKind::Outside,
-        );
-
-        if p.filter_editable {
-            draw_filter_band(&painter, rect, view_span, pan, p.listen_center_hz, p.passband_hz, false);
-        }
-
-        for notch in p.notches {
-            draw_notch_marker(
-                &painter,
-                rect,
-                view_span,
-                pan,
-                notch.slot,
-                notch.offset_hz,
-                notch.width_hz,
-                false,
-            );
-        }
-
-        draw_center_line(&painter, rect, view_span, pan, p.tune_preview_offset_hz, false);
-
-        draw_freq_vertical_grid(&painter, rect, view_span, pan);
-
-        let actions = interaction.handle(
-            ui,
-            rect,
-            &response,
-            view,
-            full_span,
-            max_zoom,
-            view_span,
-            pan,
-            p.passband_hz,
-            p.passband_min_hz,
-            p.passband_max_hz,
-            p.filter_editable,
-            p.listen_center_hz,
-            p.tune_preview_offset_hz,
-            p.notches,
-        );
-
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-            if rect.contains(pos) {
-                *hover_out =
-                    Some(crate::interaction::x_to_offset_hz(pos.x, rect, view_span, pan));
+            if interaction_rect.contains(pos) {
+                *hover_out = Some(freq_map.x_to_offset(pos.x, interaction_rect));
             }
         }
 
         actions
     }
+}
+
+fn draw_scope_layer(
+    painter: &Painter,
+    rect: Rect,
+    freq_map: PlotFreqMapping,
+    p: &PlotParams,
+) {
+    let view_span = freq_map.view_span_hz;
+    let pan = freq_map.pan_offset_hz;
+
+    draw_plot_background(painter, rect);
+
+    if p.filter_editable {
+        draw_filter_band(
+            painter,
+            rect,
+            view_span,
+            pan,
+            p.listen_center_hz,
+            p.passband_hz,
+            true,
+        );
+    }
+
+    for notch in p.notches {
+        draw_notch_marker(
+            painter,
+            rect,
+            view_span,
+            pan,
+            notch.slot,
+            notch.offset_hz,
+            notch.width_hz,
+            true,
+        );
+    }
+
+    draw_db_scale(painter, rect, p.ref_db, p.range_db);
+    draw_freq_vertical_grid(painter, rect, view_span, pan);
+    draw_trace(painter, rect, p.trace, p.ref_db, p.range_db);
+    draw_center_line(
+        painter,
+        rect,
+        view_span,
+        pan,
+        p.tune_preview_offset_hz,
+        true,
+    );
+
+    draw_spot_labels(painter, rect, view_span, pan, p.labels);
+}
+
+fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: PlotFreqMapping, p: &PlotParams) {
+    let view_span = freq_map.view_span_hz;
+    let pan = freq_map.pan_offset_hz;
+
+    if let Some(tex) = p.waterfall_display {
+        painter.image(
+            tex.id(),
+            rect,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    } else {
+        painter.rect_filled(rect, 6.0, Color32::from_rgb(10, 12, 18));
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "Waiting for IQ data…",
+            FontId::proportional(13.0),
+            Color32::from_rgb(120, 130, 150),
+        );
+    }
+
+    painter.rect_stroke(
+        rect,
+        6.0,
+        Stroke::new(1.0, Color32::from_rgb(40, 48, 64)),
+        eframe::egui::StrokeKind::Outside,
+    );
+
+    if p.filter_editable {
+        draw_filter_band(
+            painter,
+            rect,
+            view_span,
+            pan,
+            p.listen_center_hz,
+            p.passband_hz,
+            false,
+        );
+    }
+
+    for notch in p.notches {
+        draw_notch_marker(
+            painter,
+            rect,
+            view_span,
+            pan,
+            notch.slot,
+            notch.offset_hz,
+            notch.width_hz,
+            false,
+        );
+    }
+
+    draw_center_line(
+        painter,
+        rect,
+        view_span,
+        pan,
+        p.tune_preview_offset_hz,
+        false,
+    );
+    draw_freq_vertical_grid(painter, rect, view_span, pan);
 }
 
 fn draw_center_line(
@@ -840,7 +892,8 @@ pub fn update_trace(
     row_rate_hz: f32,
     view_span_hz: f32,
     data_span_hz: f32,
-    center_offset_hz: f64,
+    compose_pan_offset_hz: f64,
+    allow_band_padding: bool,
     smooth_alpha: f32,
     latest_changed: bool,
 ) {
@@ -848,7 +901,7 @@ pub fn update_trace(
         row_rate_hz,
         view_span_hz,
         data_span_hz,
-        center_offset_hz,
+        compose_pan_offset_hz,
         latest.len(),
     );
     if latest_changed || *view_key != key {
@@ -857,7 +910,8 @@ pub fn update_trace(
             row_rate_hz,
             view_span_hz,
             data_span_hz,
-            center_offset_hz,
+            compose_pan_offset_hz,
+            allow_band_padding,
         );
         *view_key = key;
     }

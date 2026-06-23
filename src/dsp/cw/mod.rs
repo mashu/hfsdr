@@ -31,8 +31,8 @@ pub use channel::CwChannel;
 pub use decimator::{audio_sample_rate, decimation_factor, effective_decimation, Decimator};
 pub use detector::ProductDetector;
 pub use fir::{
-    channel_group_delay_ms, design_gaussian_lowpass, design_lowpass, design_lowpass_with,
-    FirFilter, LowpassDesign, WindowKind,
+    channel_group_delay_ms, design_gaussian_lowpass, design_gaussian_lowpass_compact,
+    design_lowpass, design_lowpass_with, FirFilter, LowpassDesign, WindowKind,
 };
 pub use lms::{LmsPredictor, LmsStep};
 pub use nco::ComplexNco;

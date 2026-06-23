@@ -7,11 +7,13 @@
 use crate::source::Complex32;
 
 use super::cw::{CwChannel, CwChannelSettings};
+use super::wideband_cw::{demod_wideband, WidebandCwIngress, WIDEBAND_IQ_THRESHOLD};
 
 /// Stateful CW demodulator backed by [`CwChannel`].
 pub struct IqAudioDemod {
     channel: CwChannel,
-    last_iq_rate: f32,
+    last_audio_rate: f32,
+    wideband: Option<WidebandCwIngress>,
 }
 
 impl Default for IqAudioDemod {
@@ -24,7 +26,8 @@ impl IqAudioDemod {
     pub fn new() -> Self {
         Self {
             channel: CwChannel::new(12_000.0),
-            last_iq_rate: 12_000.0,
+            last_audio_rate: 12_000.0,
+            wideband: None,
         }
     }
 
@@ -45,9 +48,32 @@ impl IqAudioDemod {
         if samples.is_empty() || sample_rate <= 0.0 {
             return;
         }
-        if sample_rate != self.last_iq_rate {
+
+        if sample_rate > WIDEBAND_IQ_THRESHOLD {
+            let ingress = self.wideband.get_or_insert_with(|| {
+                WidebandCwIngress::new(sample_rate, settings.decimation)
+            });
+            ingress.sync(sample_rate, settings.decimation);
+            let audio_rate = ingress.audio_rate();
+            if (audio_rate - self.last_audio_rate).abs() > 1.0 {
+                self.channel = CwChannel::new(audio_rate);
+                self.last_audio_rate = audio_rate;
+            }
+            demod_wideband(
+                ingress,
+                &mut self.channel,
+                samples,
+                sample_rate,
+                settings,
+                out,
+            );
+            return;
+        }
+
+        self.wideband = None;
+        if (sample_rate - self.last_audio_rate).abs() > 1.0 {
             self.channel = CwChannel::new(sample_rate);
-            self.last_iq_rate = sample_rate;
+            self.last_audio_rate = sample_rate;
         }
         self.channel.process(samples, sample_rate, settings, out);
     }
@@ -141,5 +167,22 @@ mod tests {
         let rms_mixed =
             (audio_mixed.iter().map(|x| x * x).sum::<f32>() / audio_mixed.len() as f32).sqrt();
         assert!(rms_mixed < rms_clean * 1.4, "adjacent leaked: {rms_clean} vs {rms_mixed}");
+    }
+
+    #[test]
+    fn wideband_384k_demod_produces_audio() {
+        let iq_rate = 384_000.0;
+        let iq = tone_iq(iq_rate, 300.0, 8192);
+        let mut demod = IqAudioDemod::new();
+        let mut settings = CwChannelSettings {
+            listen_offset_hz: 300.0,
+            bfo_hz: 650.0,
+            passband_hz: 500.0,
+            ..CwChannelSettings::default()
+        };
+        settings.agc.enabled = false;
+        let mut audio = Vec::new();
+        demod.process(&iq, iq_rate, &settings, &mut audio);
+        assert!(!audio.is_empty());
     }
 }

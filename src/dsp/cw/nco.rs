@@ -1,52 +1,54 @@
 //! Complex numerically controlled oscillator (software LO / BFO).
 
-use std::f32::consts::TAU;
-
 use crate::source::Complex32;
 
-/// Phase accumulator driving sin/cos for complex mixing.
-#[derive(Clone, Debug, Default)]
+use crate::dsp::preprocess::IqRotator;
+
+/// Phase accumulator driving complex mixing (rotation recurrence — no per-sample trig).
+#[derive(Clone, Debug)]
 pub struct ComplexNco {
-    phase: f32,
+    down: IqRotator,
+    up: IqRotator,
+}
+
+impl Default for ComplexNco {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ComplexNco {
     pub fn new() -> Self {
-        Self { phase: 0.0 }
+        Self {
+            down: IqRotator::default(),
+            up: IqRotator::new(true),
+        }
     }
 
     pub fn reset(&mut self) {
-        self.phase = 0.0;
+        self.down.reset();
+        self.up.reset();
     }
 
     /// Multiply by `exp(-j·2π·f·t)` — shifts `+freq_hz` down to DC.
     pub fn mix_down(&mut self, sample: Complex32, freq_hz: f32, sample_rate: f32) -> Complex32 {
-        let (sin, cos) = self.phase.sin_cos();
-        self.advance(freq_hz, sample_rate);
-        Complex32 {
-            re: sample.re * cos + sample.im * sin,
-            im: -sample.re * sin + sample.im * cos,
-        }
+        self.down.mix_one(sample, freq_hz, sample_rate)
     }
 
     /// Multiply by `exp(+j·2π·f·t)` — shifts DC up to `+freq_hz`.
     pub fn mix_up(&mut self, sample: Complex32, freq_hz: f32, sample_rate: f32) -> Complex32 {
-        let (sin, cos) = self.phase.sin_cos();
-        self.advance(freq_hz, sample_rate);
-        Complex32 {
-            re: sample.re * cos - sample.im * sin,
-            im: sample.re * sin + sample.im * cos,
-        }
+        self.up.mix_one(sample, freq_hz, sample_rate)
     }
 
-    fn advance(&mut self, freq_hz: f32, sample_rate: f32) {
-        if sample_rate <= 0.0 {
-            return;
-        }
-        self.phase += TAU * freq_hz / sample_rate;
-        if self.phase >= TAU {
-            self.phase -= TAU;
-        }
+    /// Block mix-down into `output` (efficient for wideband preprocess).
+    pub fn mix_down_block(
+        &mut self,
+        input: &[Complex32],
+        output: &mut Vec<Complex32>,
+        freq_hz: f32,
+        sample_rate: f32,
+    ) {
+        self.down.mix_block(input, output, freq_hz, sample_rate);
     }
 }
 

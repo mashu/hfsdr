@@ -2,7 +2,7 @@
 name = "hfsdr"
 version = "0.2.0"
 edition = "2021"
-description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, KiwiSDR)"
+description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR)"
 license = "MIT"
 authors = ["Mateusz Kaduk (SO5KM)"]
 
@@ -16,7 +16,8 @@ pkg-config = "0.3"
 [dependencies]
 num-complex = "0.4"
 rtrb = "0.3"
-rustfft = "6"
+rustfft = { version = "6", features = ["avx", "sse"] }
+rayon = "1.10"
 tungstenite = "0.29"
 cpal = { version = "0.15", optional = true }
 eframe = { version = "0.34", optional = true, default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
@@ -33,6 +34,8 @@ default = ["airspy"]
 # Links libairspyhf (system package). Disable on platforms without the library
 # (e.g. Windows CI builds use `--no-default-features --features gui` for Kiwi-only).
 airspy = []
+# Links librtlsdr (system package). Enable with `--features rtlsdr`.
+rtlsdr = []
 gui = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd"]
 
 [[bin]]
@@ -43,6 +46,11 @@ required-features = ["gui"]
 [[bin]]
 name = "airspy-probe"
 path = "src/bin/airspy_probe.rs"
+required-features = ["airspy"]
+
+[[bin]]
+name = "pipeline-bench"
+path = "src/bin/pipeline_bench.rs"
 required-features = ["airspy"]
 
 [profile.release]
