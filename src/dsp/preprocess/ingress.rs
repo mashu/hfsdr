@@ -54,6 +54,7 @@ impl IqShiftDecim {
         input: &[Complex32],
         shift_hz: f32,
         iq_rate_hz: f32,
+        bypass_decim_fir: bool,
     ) -> &[Complex32] {
         self.sync(iq_rate_hz, self.decim_factor);
         self.output.clear();
@@ -61,8 +62,14 @@ impl IqShiftDecim {
             return &self.output;
         }
         self.output.reserve(input.len() / self.decim_factor.max(1));
-        self.mixer
-            .mix_and_decimate(input, shift_hz, iq_rate_hz, &mut self.decim, &mut self.output);
+        self.mixer.mix_and_decimate(
+            input,
+            shift_hz,
+            iq_rate_hz,
+            &mut self.decim,
+            &mut self.output,
+            bypass_decim_fir,
+        );
         &self.output
     }
 }
@@ -81,7 +88,7 @@ mod tests {
                 Complex32::new(p.cos(), p.sin())
             })
             .collect();
-        let out = ingress.process(&input, 500.0, 48_000.0);
+        let out = ingress.process(&input, 500.0, 48_000.0, false);
         assert!(!out.is_empty());
         assert!(out.len() < input.len());
     }
@@ -89,7 +96,7 @@ mod tests {
     #[test]
     fn empty_input_returns_empty_slice() {
         let mut ingress = IqShiftDecim::new(12_000.0, 2, false);
-        let out = ingress.process(&[], 0.0, 12_000.0);
+        let out = ingress.process(&[], 0.0, 12_000.0, false);
         assert!(out.is_empty());
     }
 

@@ -46,8 +46,15 @@ impl WidebandCwIngress {
         input: &[Complex32],
         iq_rate: f32,
         listen_offset_hz: ChannelOffsetHz,
+        diagnostic: &super::cw::DiagnosticBypassSettings,
     ) -> &[Complex32] {
-        self.ingress.process(input, listen_offset_hz.hz(), iq_rate)
+        let shift = if diagnostic.listen_nco {
+            0.0
+        } else {
+            listen_offset_hz.hz()
+        };
+        self.ingress
+            .process(input, shift, iq_rate, diagnostic.decim_fir)
     }
 }
 
@@ -67,7 +74,7 @@ pub fn demod_wideband(
     ingress.sync(iq_rate, settings.decimation);
     let audio_rate = ingress.audio_rate();
     let listen = settings.listen_offset_hz;
-    let bb = ingress.to_baseband(input, iq_rate, listen);
+    let bb = ingress.to_baseband(input, iq_rate, listen, &settings.diagnostic);
     if bb.is_empty() {
         return;
     }

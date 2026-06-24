@@ -35,6 +35,12 @@ impl ChannelOffsetHz {
         BasebandOffsetHz::new(self.0 - listen.0)
     }
 
+    /// Plot / storage `f32` → channel frame.
+    #[inline]
+    pub fn from_plot_hz(hz: f32) -> Self {
+        Self::new(hz)
+    }
+
     /// Channel offset for a tone at `baseband` when listen sits at `listen`.
     #[inline]
     pub fn from_baseband(baseband: BasebandOffsetHz, listen: ChannelOffsetHz) -> Self {
@@ -95,6 +101,14 @@ impl ListenOrigin {
     pub fn channel_to_baseband(&self, ch: ChannelOffsetHz) -> BasebandOffsetHz {
         ch.to_baseband(self.listen)
     }
+
+    /// Single DSP entry point: channel notch marker → baseband mix Hz for [`IqNotch`].
+    ///
+    /// Do not subtract `listen_offset_hz` by hand in the receive chain — use this instead.
+    #[inline]
+    pub fn convert_for_notch(self, notch: ChannelOffsetHz) -> f32 {
+        self.channel_to_baseband(notch).hz()
+    }
 }
 
 #[cfg(test)]
@@ -111,9 +125,31 @@ mod tests {
     }
 
     #[test]
-    fn listen_origin_matches_channel_subtract() {
-        let origin = ListenOrigin::from_settings(ChannelOffsetHz::new(150.0));
-        let bb = origin.channel_to_baseband(ChannelOffsetHz::new(400.0));
-        assert!((bb.hz() - 250.0).abs() < f32::EPSILON);
+    fn convert_for_notch_matches_subtract() {
+        let origin = ListenOrigin::from_settings(ChannelOffsetHz::new(100.0));
+        assert!((origin.convert_for_notch(ChannelOffsetHz::new(400.0)) - 300.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dsp_sources_use_convert_for_notch_not_raw_subtract() {
+        let channel = std::fs::read_to_string("src/dsp/cw/channel.rs").expect("channel.rs");
+        assert!(
+            !channel.contains("offset_hz - settings.listen_offset"),
+            "channel.rs: use ListenOrigin::convert_for_notch instead of manual subtraction"
+        );
+        assert!(
+            channel.contains("convert_for_notch"),
+            "channel.rs: must call ListenOrigin::convert_for_notch for IQ notches"
+        );
+
+        let wideband = std::fs::read_to_string("src/dsp/wideband_cw.rs").expect("wideband_cw.rs");
+        assert!(
+            wideband.contains("ListenOrigin::after_upstream_mix"),
+            "wideband_cw.rs: must pass listen origin after ingress mix"
+        );
+        assert!(
+            !wideband.contains("n.offset_hz -="),
+            "wideband_cw.rs: do not rewrite notch offsets — use ListenOrigin"
+        );
     }
 }

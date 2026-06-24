@@ -101,7 +101,7 @@ fn main() {
         t.audio_ns += t1.elapsed().as_nanos() as u64;
 
         let t2 = Instant::now();
-        spectrum_ingress.decimate_block(&drain, &mut drain_decim);
+        spectrum_ingress.decimate_block(&drain, &mut drain_decim, false);
         t.ingress_decim_ns += t2.elapsed().as_nanos() as u64;
 
         let fft_cap = (hop * 2 + fft_size).min(20_480);

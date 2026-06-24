@@ -119,6 +119,7 @@ impl IqRotator {
         sample_rate_hz: f32,
         decim: &mut FirDecimator,
         output: &mut Vec<Complex32>,
+        bypass_decim_fir: bool,
     ) {
         if input.is_empty() || sample_rate_hz <= 0.0 {
             return;
@@ -129,7 +130,7 @@ impl IqRotator {
         for &sample in input {
             let mixed = complex_mul(sample, r);
             r = complex_mul(r, step);
-            if let Some(z) = decim.push(mixed) {
+            if let Some(z) = decim.push(mixed, bypass_decim_fir) {
                 output.push(z);
             }
         }
@@ -184,7 +185,7 @@ mod tests {
         let mut decim = FirDecimator::with_factor(48_000.0, 4, true);
         let block = tone_block(200, 48_000.0, 1_000.0);
         let mut out = Vec::new();
-        rot.mix_and_decimate(&block, 1_000.0, 48_000.0, &mut decim, &mut out);
+        rot.mix_and_decimate(&block, 1_000.0, 48_000.0, &mut decim, &mut out, false);
         assert!(!out.is_empty());
         assert!(out.len() < block.len());
     }

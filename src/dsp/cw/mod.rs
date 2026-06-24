@@ -17,6 +17,7 @@ mod channel;
 mod decimator;
 mod detector;
 mod fir;
+mod iir_channel;
 mod lms;
 mod nco;
 mod noiseblanker;
@@ -39,7 +40,9 @@ pub use nco::ComplexNco;
 pub use noiseblanker::NoiseBlanker;
 pub use noisereduction::NoiseReduction;
 pub use notch::IqNotch;
+pub use iir_channel::IirChannelFilter;
 pub use settings::{
-    AgcSettings, ApfSettings, AutoNotchSettings, CwChannelSettings, NoiseBlankerSettings,
-    NoiseReductionSettings, NotchSpec, MAX_NOTCHES,
+    AgcMode, AgcSettings, ApfSettings, AutoNotchSettings, ChannelFilterKind, CwChannelSettings,
+    DiagnosticBypassSettings, NoiseBlankerSettings, NoiseReductionSettings, NotchSpec,
+    MAX_NOTCHES,
 };

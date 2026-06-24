@@ -16,7 +16,7 @@ use egui_extras::{Column, TableBuilder};
 use hfsdr::{
     decimation_factor, compose_panadapter_row, panadapter_output_bins, stretch_row_to_width,
     strongest_offset_hz, Continent,
-    ContinentResolver, ChannelOffsetHz, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
+    ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, WindowKind,
     MAX_NOTCHES,
 };
@@ -46,7 +46,7 @@ use crate::interaction::{
 use crate::interaction::{CW_PASSBAND_MAX_HZ, CW_PASSBAND_MIN_HZ, CW_PASSBAND_NARROW_MAX_HZ};
 use crate::kiwi_directory::{GeoLocation, KiwiReceiver};
 use crate::log;
-use crate::pipeline_flow::{PipelineFlow, PipelineSnapshot};
+use crate::pipeline_flow::{PipelineFlow, PipelineSnapshot, PipelineStage};
 use crate::settings::{AppSettings, NotchData};
 use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind};
 use crate::spot_filter::{
@@ -331,6 +331,8 @@ pub struct WaterfallApp {
     show_iq_drawer: bool,
     show_pipeline_drawer: bool,
     pipeline_flow: PipelineFlow,
+    /// Saved manual-notch `enabled` flags while bypassed from the pipeline diagram.
+    notch_bypass_stash: Option<[bool; MAX_NOTCHES]>,
     iq: IqPanel,
 
     last_settings_snapshot: Option<AppSettings>,
@@ -458,6 +460,7 @@ impl WaterfallApp {
             show_iq_drawer: false,
             show_pipeline_drawer: false,
             pipeline_flow: PipelineFlow::new(),
+            notch_bypass_stash: None,
             iq: IqPanel::new(hfsdr::default_capture_dir()),
 
             last_settings_snapshot: None,
@@ -597,6 +600,7 @@ impl WaterfallApp {
     fn apply_settings(&mut self, s: &AppSettings) {
         self.cw.bfo_hz = s.bfo_hz;
         self.cw.passband_hz = s.passband_hz;
+        self.cw.channel_filter = channel_filter_from_u8(s.channel_filter);
         self.cw.window = window_from_u8(s.window);
         self.cw.kaiser_beta = s.kaiser_beta.clamp(2.0, 14.0);
         self.cw.passband_flatten = s.passband_flatten;
@@ -617,6 +621,7 @@ impl WaterfallApp {
         self.cw.agc.attack_ms = s.agc_attack_ms;
         self.cw.agc.decay_ms = s.agc_decay_ms;
         self.cw.agc.manual_gain = s.agc_manual_gain;
+        self.cw.agc_mode = agc_mode_from_u8(s.agc_mode);
         for (slot, data) in self.cw.notches.iter_mut().zip(s.notches.iter()) {
             slot.enabled = data.enabled;
             slot.offset_hz = ChannelOffsetHz::new(data.offset_hz);
@@ -693,6 +698,7 @@ impl WaterfallApp {
         AppSettings {
             bfo_hz: self.cw.bfo_hz,
             passband_hz: self.cw.passband_hz,
+            channel_filter: channel_filter_to_u8(self.cw.channel_filter),
             window: window_to_u8(self.cw.window),
             kaiser_beta: self.cw.kaiser_beta,
             passband_flatten: self.cw.passband_flatten,
@@ -713,6 +719,7 @@ impl WaterfallApp {
             agc_attack_ms: self.cw.agc.attack_ms,
             agc_decay_ms: self.cw.agc.decay_ms,
             agc_manual_gain: self.cw.agc.manual_gain,
+            agc_mode: agc_mode_to_u8(self.cw.agc_mode),
             notches: self
                 .cw
                 .notches
@@ -1004,7 +1011,7 @@ impl WaterfallApp {
                 }
                 PlotAction::SetNotchOffset { slot, offset_hz } => {
                     if let Some(n) = self.cw.notches.get_mut(slot) {
-                        n.offset_hz = ChannelOffsetHz::new(offset_hz);
+                        n.offset_hz = offset_hz;
                     }
                 }
                 PlotAction::SetNotchWidth { slot, width_hz } => {
@@ -1227,25 +1234,96 @@ impl WaterfallApp {
         ));
     }
 
-    fn arm_manual_notch(&mut self, slot: usize, offset_hz: Option<f32>) {
-        let listen = self.listen_offset_hz() as f32;
-        let other: Vec<f32> = self
+    fn toggle_pipeline_stage(&mut self, stage: PipelineStage) {
+        match stage {
+            PipelineStage::NoiseBlanker => {
+                self.cw.noise_blanker.enabled = !self.cw.noise_blanker.enabled;
+            }
+            PipelineStage::ManualNotches => self.toggle_notch_bypass(),
+            PipelineStage::ListenNco => {
+                self.cw.diagnostic.listen_nco = !self.cw.diagnostic.listen_nco;
+            }
+            PipelineStage::DecimatorFir => {
+                self.cw.diagnostic.decim_fir = !self.cw.diagnostic.decim_fir;
+            }
+            PipelineStage::ChannelFir => {
+                self.cw.diagnostic.channel_fir = !self.cw.diagnostic.channel_fir;
+            }
+            PipelineStage::Bfo => {
+                self.cw.diagnostic.bfo = !self.cw.diagnostic.bfo;
+            }
+            PipelineStage::Agc => self.cw.agc.enabled = !self.cw.agc.enabled,
+            PipelineStage::Apf => self.cw.apf.enabled = !self.cw.apf.enabled,
+            PipelineStage::AutoNotch => self.cw.auto_notch.enabled = !self.cw.auto_notch.enabled,
+            PipelineStage::NoiseReduction => {
+                self.cw.noise_reduction.enabled = !self.cw.noise_reduction.enabled;
+            }
+            PipelineStage::Skimmer => self.skimmer_enabled = !self.skimmer_enabled,
+            PipelineStage::AudioOutput => self.audio_enabled = !self.audio_enabled,
+        }
+        let on = match stage {
+            PipelineStage::NoiseBlanker => self.cw.noise_blanker.enabled,
+            PipelineStage::ManualNotches => self.cw.notches.iter().any(|n| n.enabled),
+            PipelineStage::ListenNco => !self.cw.diagnostic.listen_nco,
+            PipelineStage::DecimatorFir => !self.cw.diagnostic.decim_fir,
+            PipelineStage::ChannelFir => !self.cw.diagnostic.channel_fir,
+            PipelineStage::Bfo => !self.cw.diagnostic.bfo,
+            PipelineStage::Agc => self.cw.agc.enabled,
+            PipelineStage::Apf => self.cw.apf.enabled,
+            PipelineStage::AutoNotch => self.cw.auto_notch.enabled,
+            PipelineStage::NoiseReduction => self.cw.noise_reduction.enabled,
+            PipelineStage::Skimmer => self.skimmer_enabled,
+            PipelineStage::AudioOutput => self.audio_enabled,
+        };
+        let tag = if stage.is_diagnostic() { "diag" } else { "pipeline" };
+        log::info(&format!(
+            "{tag} {} {}",
+            stage.label(),
+            if on { "on" } else { "bypassed" }
+        ));
+        if !stage.is_diagnostic() {
+            self.settings_dirty_at = Some(Instant::now());
+        }
+    }
+
+    fn toggle_notch_bypass(&mut self) {
+        let any = self.cw.notches.iter().any(|n| n.enabled);
+        if any {
+            let mut stash = [false; MAX_NOTCHES];
+            for (slot, n) in self.cw.notches.iter_mut().enumerate() {
+                stash[slot] = n.enabled;
+                n.enabled = false;
+            }
+            self.notch_bypass_stash = Some(stash);
+            return;
+        }
+        if let Some(stash) = self.notch_bypass_stash.take() {
+            for (n, was) in self.cw.notches.iter_mut().zip(stash.iter()) {
+                n.enabled = *was;
+            }
+        }
+    }
+
+    fn arm_manual_notch(&mut self, slot: usize, offset_hz: Option<ChannelOffsetHz>) {
+        let listen = ChannelOffsetHz::new(self.listen_offset_hz() as f32);
+        let other: Vec<ChannelOffsetHz> = self
             .cw
             .notches
             .iter()
             .enumerate()
             .filter(|(i, n)| *i != slot && n.enabled)
-            .map(|(_, n)| n.offset_hz.hz())
+            .map(|(_, n)| n.offset_hz)
             .collect();
         let offset = offset_hz.unwrap_or_else(|| suggest_notch_offset_hz(listen, &other));
         let Some(notch) = self.cw.notches.get_mut(slot) else {
             return;
         };
         notch.enabled = true;
-        notch.offset_hz = ChannelOffsetHz::new(offset);
+        notch.offset_hz = offset;
         if notch.width_hz < NOTCH_WIDTH_MIN_HZ {
             notch.width_hz = 50.0;
         }
+        self.notch_bypass_stash = None;
     }
 
     fn enabled_notches(&self) -> Vec<crate::interaction::NotchMarker> {
@@ -1256,7 +1334,7 @@ impl WaterfallApp {
             .filter(|(_, n)| n.enabled)
             .map(|(slot, n)| crate::interaction::NotchMarker {
                 slot,
-                offset_hz: n.offset_hz.hz(),
+                offset_hz: n.offset_hz,
                 width_hz: n.width_hz,
             })
             .collect()
@@ -2433,7 +2511,10 @@ impl WaterfallApp {
                     audio_enabled: self.audio_enabled,
                     stats: &self.stats,
                 };
-                self.pipeline_flow.show(ui, &snap);
+                let toggled = self.pipeline_flow.show(ui, &snap);
+                for stage in toggled {
+                    self.toggle_pipeline_stage(stage);
+                }
             });
         });
         self.show_pipeline_drawer = open;
@@ -3628,62 +3709,88 @@ impl WaterfallApp {
                 CW_PASSBAND_MIN_HZ..=bw_max,
                 "Channel filter",
             );
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Architecture").small().color(MUTED));
+                if ui
+                    .selectable_label(
+                        self.cw.channel_filter == ChannelFilterKind::LinearFir,
+                        "FIR (linear)",
+                    )
+                    .on_hover_text("Linear-phase windowed sinc — best CW keying, tunable shape")
+                    .clicked()
+                {
+                    self.cw.channel_filter = ChannelFilterKind::LinearFir;
+                }
+                if ui
+                    .selectable_label(
+                        self.cw.channel_filter == ChannelFilterKind::Iir2Pole,
+                        "IIR 2-pole",
+                    )
+                    .on_hover_text("Biquad lowpass — steeper skirts, may ring on edges (A/B)")
+                    .clicked()
+                {
+                    self.cw.channel_filter = ChannelFilterKind::Iir2Pole;
+                }
+            });
             section_hint(
                 ui,
                 "Complex IQ filter before demod (not post-audio). Rejects adjacent signals while the carrier is still recoverable.",
             );
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Shape").small().color(MUTED));
-                window_choice(
+            if self.cw.channel_filter == ChannelFilterKind::LinearFir {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Shape").small().color(MUTED));
+                    window_choice(
+                        ui,
+                        &mut self.cw.window,
+                        WindowKind::Gaussian,
+                        "Gauss",
+                        "Softest tone, gentle skirts — clean signals, minimal ringing",
+                    );
+                    window_choice(
+                        ui,
+                        &mut self.cw.window,
+                        WindowKind::RaisedCosine,
+                        "RaisedCos",
+                        "Balanced default — good tone with moderate adjacent rejection",
+                    );
+                    window_choice(
+                        ui,
+                        &mut self.cw.window,
+                        WindowKind::Blackman,
+                        "Blackman",
+                        "Steepest skirts — reject nearby QRM before narrowing bandwidth",
+                    );
+                    window_choice(
+                        ui,
+                        &mut self.cw.window,
+                        WindowKind::Kaiser,
+                        "Kaiser",
+                        "Tunable β — flat passband vs steep skirts (adjust β below)",
+                    );
+                });
+                if self.cw.window == WindowKind::Kaiser {
+                    scroll_slider_f32(ui, &mut self.cw.kaiser_beta, 2.0..=14.0, "Kaiser β");
+                }
+                toggle(
                     ui,
-                    &mut self.cw.window,
-                    WindowKind::Gaussian,
-                    "Gauss",
-                    "Softest tone, gentle skirts — clean signals, minimal ringing",
+                    &mut self.cw.passband_flatten,
+                    "Flatten passband (inv-sinc)",
                 );
-                window_choice(
-                    ui,
-                    &mut self.cw.window,
-                    WindowKind::RaisedCosine,
-                    "RaisedCos",
-                    "Balanced default — good tone with moderate adjacent rejection",
-                );
-                window_choice(
-                    ui,
-                    &mut self.cw.window,
-                    WindowKind::Blackman,
-                    "Blackman",
-                    "Steepest skirts — reject nearby QRM before narrowing bandwidth",
-                );
-                window_choice(
-                    ui,
-                    &mut self.cw.window,
-                    WindowKind::Kaiser,
-                    "Kaiser",
-                    "Tunable β — flat passband vs steep skirts (adjust β below)",
-                );
-            });
-            if self.cw.window == WindowKind::Kaiser {
-                scroll_slider_f32(ui, &mut self.cw.kaiser_beta, 2.0..=14.0, "Kaiser β");
-            }
-            toggle(
-                ui,
-                &mut self.cw.passband_flatten,
-                "Flatten passband (inv-sinc)",
-            );
-            if self.cw.passband_flatten {
-                section_hint(
-                    ui,
-                    "Lifts upstream boxcar/CIC droop (N≈7). Off by default — enable if the tone sounds dull at band edges.",
-                );
+                if self.cw.passband_flatten {
+                    section_hint(
+                        ui,
+                        "Lifts upstream boxcar/CIC droop (N≈7). Off by default — enable if the tone sounds dull at band edges.",
+                    );
+                }
             }
             let audio_rate = hfsdr::audio_sample_rate(self.sample_rate, self.cw.decimation);
-            let delay_ms = channel_group_delay_ms(audio_rate, self.cw.passband_hz);
-            ui.label(
-                egui::RichText::new(format!("Filter delay ~{delay_ms:.0} ms (linear-phase FIR)"))
-                    .small()
-                    .color(MUTED),
-            );
+            let delay_note = if self.cw.channel_filter == ChannelFilterKind::LinearFir {
+                let delay_ms = channel_group_delay_ms(audio_rate, self.cw.passband_hz);
+                format!("Filter delay ~{delay_ms:.0} ms (linear-phase FIR)")
+            } else {
+                "IIR 2-pole — minimal delay, non-linear phase (may ring)".to_string()
+            };
+            ui.label(egui::RichText::new(delay_note).small().color(MUTED));
             section_hint(ui, "③ Channel filter — complex IQ, before the BFO detector.");
             self.agc_controls(ui);
             section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan band = RIT · cyan edges = width · purple notches draggable");
@@ -3821,6 +3928,23 @@ impl WaterfallApp {
             Some("A"),
         );
         if self.cw.agc.enabled {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Mode").small().color(MUTED));
+                if ui
+                    .selectable_label(self.cw.agc_mode == AgcMode::Envelope, "Envelope")
+                    .on_hover_text("Symmetric attack/decay on gain")
+                    .clicked()
+                {
+                    self.cw.agc_mode = AgcMode::Envelope;
+                }
+                if ui
+                    .selectable_label(self.cw.agc_mode == AgcMode::Hang, "Hang")
+                    .on_hover_text("Fast gain reduction, slow recovery — less noise lift between dits")
+                    .clicked()
+                {
+                    self.cw.agc_mode = AgcMode::Hang;
+                }
+            });
             scroll_slider_f32(ui, &mut self.cw.agc.attack_ms, 1.0..=20.0, "Attack ms");
             scroll_slider_f32(ui, &mut self.cw.agc.decay_ms, 20.0..=600.0, "Decay ms");
             scroll_slider_f32(ui, &mut self.cw.agc.target, 0.05..=0.6, "Target");
@@ -4443,6 +4567,34 @@ fn window_from_u8(v: u8) -> WindowKind {
         2 => WindowKind::Blackman,
         3 => WindowKind::Kaiser,
         _ => WindowKind::Gaussian,
+    }
+}
+
+fn channel_filter_to_u8(k: ChannelFilterKind) -> u8 {
+    match k {
+        ChannelFilterKind::LinearFir => 0,
+        ChannelFilterKind::Iir2Pole => 1,
+    }
+}
+
+fn channel_filter_from_u8(v: u8) -> ChannelFilterKind {
+    match v {
+        1 => ChannelFilterKind::Iir2Pole,
+        _ => ChannelFilterKind::LinearFir,
+    }
+}
+
+fn agc_mode_to_u8(m: AgcMode) -> u8 {
+    match m {
+        AgcMode::Envelope => 0,
+        AgcMode::Hang => 1,
+    }
+}
+
+fn agc_mode_from_u8(v: u8) -> AgcMode {
+    match v {
+        1 => AgcMode::Hang,
+        _ => AgcMode::Envelope,
     }
 }
 

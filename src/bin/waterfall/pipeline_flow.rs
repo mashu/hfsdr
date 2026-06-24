@@ -6,13 +6,56 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke,
     StrokeKind, Ui, Vec2,
 };
-use hfsdr::CwChannelSettings;
+use hfsdr::{AgcMode, ChannelFilterKind, CwChannelSettings};
 
 use crate::engine::EngineStats;
 use crate::theme::{chip_hovered, ACCENT, MUTED, OK, TRACE, WARN};
 
-const NODE_W: f32 = 128.0;
-const NODE_H: f32 = 44.0;
+/// Bypassable stage in the receive pipeline (click node in the flow diagram).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipelineStage {
+    NoiseBlanker,
+    ManualNotches,
+    ListenNco,
+    DecimatorFir,
+    ChannelFir,
+    Agc,
+    Bfo,
+    Apf,
+    AutoNotch,
+    NoiseReduction,
+    Skimmer,
+    AudioOutput,
+}
+
+impl PipelineStage {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NoiseBlanker => "Noise blanker",
+            Self::ManualNotches => "IQ notches",
+            Self::ListenNco => "NCO / listen shift",
+            Self::DecimatorFir => "Decimator anti-alias FIR",
+            Self::ChannelFir => "Channel FIR",
+            Self::Agc => "AGC",
+            Self::Bfo => "BFO detector",
+            Self::Apf => "Audio peak filter",
+            Self::AutoNotch => "Auto-notch",
+            Self::NoiseReduction => "Noise reduction",
+            Self::Skimmer => "Skimmer",
+            Self::AudioOutput => "Audio output",
+        }
+    }
+
+    pub const fn is_diagnostic(self) -> bool {
+        matches!(
+            self,
+            Self::ListenNco | Self::DecimatorFir | Self::ChannelFir | Self::Bfo
+        )
+    }
+}
+
+const NODE_W: f32 = 136.0;
+const NODE_H: f32 = 48.0;
 const CANVAS_W: f32 = 820.0;
 const CANVAS_H: f32 = 560.0;
 
@@ -35,7 +78,6 @@ enum NodeId {
     Fft,
     Waterfall,
     Skimmer,
-    Spots,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,12 +146,14 @@ impl PipelineFlow {
         }
     }
 
-    pub fn show(&mut self, ui: &mut Ui, snap: &PipelineSnapshot<'_>) {
+    /// Draw the diagram; returns stages the user clicked to bypass / restore.
+    pub fn show(&mut self, ui: &mut Ui, snap: &PipelineSnapshot<'_>) -> Vec<PipelineStage> {
+        let mut toggled = Vec::new();
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("Drag blocks to rearrange · links follow ports")
-                    .small()
-                    .color(MUTED),
+                egui::RichText::new("Drag blocks · use toggles to bypass stages (A/B)")
+                .small()
+                .color(MUTED),
             );
             if ui.small_button("Reset layout").clicked() {
                 self.layout.reset();
@@ -156,14 +200,48 @@ impl PipelineFlow {
             let Some(node_rect) = rects.get(&node.id).copied() else {
                 continue;
             };
+            let body_rect = if node.toggle.is_some() {
+                node_rect.with_max_x(node_rect.right() - 26.0)
+            } else {
+                node_rect
+            };
             let id = ui.id().with(("pipeline_node", node.id as u8));
-            let node_resp = ui.interact(node_rect, id, Sense::click_and_drag());
+            let node_resp = ui.interact(body_rect, id, Sense::drag());
             if node_resp.dragged() {
                 drag_delta = node_resp.drag_delta();
                 dragged = Some(node.id);
             }
-            let node_hovered = chip_hovered(ui, node_rect, &node_resp);
+            let node_hovered = chip_hovered(ui, body_rect, &node_resp);
             paint_node(&painter, node_rect, &node, node_hovered);
+        }
+
+        for node in &graph.nodes {
+            let Some(stage) = node.toggle else {
+                continue;
+            };
+            let Some(node_rect) = rects.get(&node.id).copied() else {
+                continue;
+            };
+            let toggle_rect = Rect::from_min_size(
+                Pos2::new(node_rect.right() - 24.0, node_rect.top() + 8.0),
+                Vec2::new(20.0, 20.0),
+            );
+            let mut on = node.enabled;
+            let toggle_id = ui.id().with(("pipeline_toggle", node.id as u8));
+            let toggle_resp = ui.put(toggle_rect, |ui: &mut Ui| {
+                ui.set_enabled(true);
+                ui.add(egui::Checkbox::without_text(&mut on))
+            });
+            if toggle_resp.changed() && on != node.enabled {
+                toggled.push(stage);
+            }
+            toggle_resp.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Checkbox,
+                    true,
+                    format!("{} {}", node.title, if on { "on" } else { "bypassed" }),
+                )
+            });
         }
 
         if let Some(id) = dragged {
@@ -176,6 +254,7 @@ impl PipelineFlow {
 
         ui.add_space(6.0);
         legend_row(ui, snap);
+        toggled
     }
 }
 
@@ -186,6 +265,8 @@ struct NodeSpec {
     enabled: bool,
     kind: NodeKind,
     size: Vec2,
+    /// Click toggles bypass when `Some` (same flags as the settings panel).
+    toggle: Option<PipelineStage>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -218,21 +299,23 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             snap.streaming,
             NodeKind::Source,
         ),
-        node(
+        node_toggle(
             NodeId::NoiseBlanker,
             "Noise blanker",
             "IQ impulse blanker".to_string(),
             snap.cw.noise_blanker.enabled,
             NodeKind::Process,
+            PipelineStage::NoiseBlanker,
         ),
-        node(
+        node_toggle(
             NodeId::Nco,
             "NCO shift",
             format!("RIT {:.0} Hz", snap.cw.listen_offset_hz.hz()),
-            true,
+            !snap.cw.diagnostic.listen_nco,
             NodeKind::Process,
+            PipelineStage::ListenNco,
         ),
-        node(
+        node_toggle(
             NodeId::Decimator,
             "Decimator",
             format!(
@@ -241,10 +324,11 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
                     / decim_factor(snap.cw.decimation, snap.device_rate_hz) as f32
                     / 1000.0
             ),
-            true,
+            !snap.cw.diagnostic.decim_fir,
             NodeKind::Process,
+            PipelineStage::DecimatorFir,
         ),
-        node(
+        node_toggle(
             NodeId::Notches,
             "IQ notches",
             if any_notch {
@@ -254,54 +338,74 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             },
             any_notch,
             NodeKind::Process,
+            PipelineStage::ManualNotches,
         ),
-        node(
+        node_toggle(
             NodeId::ChannelFir,
             "Channel FIR",
-            format!("BW {:.0} Hz", snap.cw.passband_hz),
-            true,
+            format!(
+                "BW {:.0} Hz · {}",
+                snap.cw.passband_hz,
+                match snap.cw.channel_filter {
+                    ChannelFilterKind::LinearFir => "FIR",
+                    ChannelFilterKind::Iir2Pole => "IIR",
+                }
+            ),
+            !snap.cw.diagnostic.channel_fir,
             NodeKind::Process,
+            PipelineStage::ChannelFir,
         ),
-        node(
+        node_toggle(
             NodeId::Agc,
             "AGC",
             if snap.cw.agc.enabled {
-                "auto gain".to_string()
+                format!(
+                    "{} gain",
+                    match snap.cw.agc_mode {
+                        AgcMode::Envelope => "envelope",
+                        AgcMode::Hang => "hang",
+                    }
+                )
             } else {
                 format!("manual {:.1}×", snap.cw.agc.manual_gain)
             },
             snap.cw.agc.enabled,
             NodeKind::Process,
+            PipelineStage::Agc,
         ),
-        node(
+        node_toggle(
             NodeId::Bfo,
             "BFO detector",
             format!("tone {:.0} Hz", snap.cw.bfo_hz),
-            true,
+            !snap.cw.diagnostic.bfo,
             NodeKind::Process,
+            PipelineStage::Bfo,
         ),
-        node(
+        node_toggle(
             NodeId::Apf,
             "Audio peak filter",
             "resonant boost".to_string(),
             snap.cw.apf.enabled,
             NodeKind::Process,
+            PipelineStage::Apf,
         ),
-        node(
+        node_toggle(
             NodeId::AutoNotch,
             "Auto-notch",
             format!("guard ±{:.0} Hz", snap.cw.auto_notch.guard_hz),
             snap.cw.auto_notch.enabled,
             NodeKind::Process,
+            PipelineStage::AutoNotch,
         ),
-        node(
+        node_toggle(
             NodeId::NoiseReduction,
             "Noise reduction",
             "post-demod LMS".to_string(),
             snap.cw.noise_reduction.enabled,
             NodeKind::Process,
+            PipelineStage::NoiseReduction,
         ),
-        node(
+        node_toggle(
             NodeId::AudioOut,
             "Audio sink",
             snap.stats
@@ -310,8 +414,9 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
                 .unwrap_or_else(|| "speakers".to_string()),
             snap.audio_enabled,
             NodeKind::Sink,
+            PipelineStage::AudioOutput,
         ),
-        node(
+        node_fixed(
             NodeId::SpectrumFront,
             "Spectrum front",
             if snap.stats.spectrum_zoomed {
@@ -322,7 +427,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             true,
             NodeKind::Process,
         ),
-        node(
+        node_fixed(
             NodeId::Fft,
             "FFT",
             format!(
@@ -333,36 +438,31 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             true,
             NodeKind::Process,
         ),
-        node(
+        node_fixed(
             NodeId::Waterfall,
             "Waterfall sink",
             format!("{} rows/pump", snap.stats.spectrum_rows_per_pump),
             true,
             NodeKind::Sink,
         ),
-        node(
+        node_toggle(
             NodeId::Skimmer,
             "Skimmer",
-            format!("{} decoders", snap.stats.skimmer_channels),
+            format!("{} decoders → spots", snap.stats.skimmer_channels),
             snap.skimmer_enabled,
             NodeKind::Process,
-        ),
-        node(
-            NodeId::Spots,
-            "Spots sink",
-            "callsign table".to_string(),
-            snap.skimmer_enabled,
-            NodeKind::Sink,
+            PipelineStage::Skimmer,
         ),
     ];
 
     if ingress_on {
-        nodes.push(node(
+        nodes.push(node_toggle(
             NodeId::IngressDecim,
             "Ingress FIR",
             format!("÷{} → {:.0} kS/s", snap.ingress_decim, snap.stats.sample_rate / 1000.0),
-            true,
+            !snap.cw.diagnostic.decim_fir,
             NodeKind::Process,
+            PipelineStage::DecimatorFir,
         ));
     }
 
@@ -380,7 +480,6 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         NodeId::AudioOut,
     ];
     let spectrum_chain = [NodeId::SpectrumFront, NodeId::Fft, NodeId::Waterfall];
-    let skimmer_chain = [NodeId::Skimmer, NodeId::Spots];
 
     let mut edges = Vec::new();
 
@@ -406,7 +505,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         ));
         edges.push(edge(
             port(NodeId::IngressDecim, PortSide::Right, 0.65),
-            port(skimmer_chain[0], PortSide::Left, 0.5),
+            port(NodeId::Skimmer, PortSide::Left, 0.5),
             false,
             snap.streaming,
         ));
@@ -426,7 +525,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         ));
         edges.push(edge(
             port(NodeId::Source, PortSide::Right, 0.75),
-            port(skimmer_chain[0], PortSide::Left, 0.5),
+            port(NodeId::Skimmer, PortSide::Left, 0.5),
             false,
             snap.streaming && snap.skimmer_enabled,
         ));
@@ -434,7 +533,6 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
 
     chain_edges(&mut edges, &listen_chain, true);
     chain_edges(&mut edges, &spectrum_chain, false);
-    chain_edges(&mut edges, &skimmer_chain, false);
 
     Graph { nodes, edges }
 }
@@ -451,7 +549,13 @@ fn chain_edges(edges: &mut Vec<Edge>, chain: &[NodeId], accent: bool) {
     }
 }
 
-fn node(id: NodeId, title: &'static str, subtitle: String, enabled: bool, kind: NodeKind) -> NodeSpec {
+fn node_fixed(
+    id: NodeId,
+    title: &'static str,
+    subtitle: String,
+    enabled: bool,
+    kind: NodeKind,
+) -> NodeSpec {
     NodeSpec {
         id,
         title,
@@ -459,7 +563,31 @@ fn node(id: NodeId, title: &'static str, subtitle: String, enabled: bool, kind: 
         enabled,
         kind,
         size: Vec2::new(NODE_W, NODE_H),
+        toggle: None,
     }
+}
+
+fn node_toggle(
+    id: NodeId,
+    title: &'static str,
+    subtitle: String,
+    enabled: bool,
+    kind: NodeKind,
+    stage: PipelineStage,
+) -> NodeSpec {
+    NodeSpec {
+        id,
+        title,
+        subtitle,
+        enabled,
+        kind,
+        size: Vec2::new(NODE_W, NODE_H),
+        toggle: Some(stage),
+    }
+}
+
+fn node(id: NodeId, title: &'static str, subtitle: String, enabled: bool, kind: NodeKind) -> NodeSpec {
+    node_fixed(id, title, subtitle, enabled, kind)
 }
 
 fn edge(from: Port, to: Port, accent: bool, active: bool) -> Edge {
@@ -493,8 +621,7 @@ fn default_pos(id: NodeId) -> Pos2 {
         NodeId::SpectrumFront => Pos2::new(346.0, 168.0),
         NodeId::Fft => Pos2::new(346.0, 248.0),
         NodeId::Waterfall => Pos2::new(346.0, 328.0),
-        NodeId::Skimmer => Pos2::new(668.0, 168.0),
-        NodeId::Spots => Pos2::new(668.0, 248.0),
+        NodeId::Skimmer => Pos2::new(668.0, 200.0),
     }
 }
 
@@ -603,6 +730,9 @@ fn legend_row(ui: &mut Ui, snap: &PipelineSnapshot<'_>) {
         legend_chip(ui, "Listen path", ACCENT);
         legend_chip(ui, "Spectrum", TRACE);
         legend_chip(ui, "Skimmer", WARN);
+        if snap.cw.diagnostic.any_active() {
+            legend_chip(ui, "Diagnostic bypass active", WARN);
+        }
         if snap.stats.iq_recording {
             legend_chip(ui, "IQ recording", WARN);
         }

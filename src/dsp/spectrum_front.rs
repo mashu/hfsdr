@@ -46,7 +46,7 @@ impl SpectrumFrontEnd {
             output.extend_from_slice(input);
             return;
         }
-        let slice = self.ingress.process(input, self.shift_hz, self.iq_rate);
+        let slice = self.ingress.process(input, self.shift_hz, self.iq_rate, false);
         output.extend_from_slice(slice);
     }
 }

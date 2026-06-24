@@ -42,6 +42,8 @@ pub struct AppSettings {
     // CW demod / filter chain.
     pub bfo_hz: f32,
     pub passband_hz: f32,
+    #[serde(default)]
+    pub channel_filter: u8,
     pub window: u8,
     pub kaiser_beta: f32,
     pub passband_flatten: bool,
@@ -62,6 +64,8 @@ pub struct AppSettings {
     pub agc_attack_ms: f32,
     pub agc_decay_ms: f32,
     pub agc_manual_gain: f32,
+    #[serde(default)]
+    pub agc_mode: u8,
     pub notches: Vec<NotchData>,
 
     // Receiver controls.
@@ -152,6 +156,7 @@ impl Default for AppSettings {
         Self {
             bfo_hz: 650.0,
             passband_hz: 200.0,
+            channel_filter: 0,
             window: 0,
             kaiser_beta: 6.0,
             passband_flatten: false,
@@ -172,6 +177,7 @@ impl Default for AppSettings {
             agc_attack_ms: 3.0,
             agc_decay_ms: 120.0,
             agc_manual_gain: 1.0,
+            agc_mode: 0,
             notches: vec![NotchData::default(); 4],
             rit_hz: 0.0,
             pitch_lock: false,

@@ -957,7 +957,7 @@ impl Engine {
                 self.drain_decim = decimated;
             } else {
                 self.spectrum_ingress
-                    .decimate_block(batch.as_slice(), &mut self.drain_decim);
+                    .decimate_block(batch.as_slice(), &mut self.drain_decim, false);
             }
         } else if wideband && ingress_decim > 1 && self.spectrum_decim <= 1 {
             let batch_demod = Arc::clone(&batch);
@@ -970,12 +970,12 @@ impl Engine {
             );
             join(
                 || demod.process(demod_input, device_rate, &cw, audio_scratch),
-                || ingress.decimate_block(batch.as_slice(), decim_buf),
+                || ingress.decimate_block(batch.as_slice(), decim_buf, false),
             );
         } else {
             if ingress_decim > 1 {
                 self.spectrum_ingress
-                    .decimate_block(batch.as_slice(), &mut self.drain_decim);
+                    .decimate_block(batch.as_slice(), &mut self.drain_decim, false);
             }
             if wideband && self.spectrum_decim > 1 {
                 let ingress_base: &[Complex32] = if ingress_decim > 1 {

@@ -5,6 +5,8 @@
 //! fixed manual gain instead — many contesters prefer that so a loud neighbour
 //! cannot pump the wanted signal down.
 
+use super::settings::AgcMode;
+
 /// Envelope-following AGC with configurable attack/decay.
 #[derive(Clone, Debug)]
 pub struct CwAgc {
@@ -39,6 +41,7 @@ impl CwAgc {
         target: f32,
         attack_ms: f32,
         decay_ms: f32,
+        mode: AgcMode,
     ) -> f32 {
         if sample_rate <= 0.0 {
             return 1.0;
@@ -52,7 +55,17 @@ impl CwAgc {
         }
 
         let desired = target / self.envelope.max(1e-7);
-        self.gain = 0.9 * self.gain + 0.1 * desired;
+        self.gain = match mode {
+            AgcMode::Envelope => 0.9 * self.gain + 0.1 * desired,
+            AgcMode::Hang => {
+                if desired < self.gain {
+                    0.85 * self.gain + 0.15 * desired
+                } else {
+                    let hang = (-1.0 / (sample_rate * (decay_ms.max(1.0) * 4.0 / 1000.0))).exp();
+                    hang * self.gain + (1.0 - hang) * desired
+                }
+            }
+        };
         self.gain = self.gain.clamp(0.02, 64.0);
         self.gain
     }
@@ -62,11 +75,13 @@ impl CwAgc {
 mod tests {
     use super::*;
 
+    use super::super::settings::AgcMode;
+
     #[test]
     fn tracks_envelope_and_clamps_gain() {
         let mut agc = CwAgc::new();
-        let g0 = agc.gain_for(0.5, 12_000.0, 0.25, 3.0, 120.0);
-        let g1 = agc.gain_for(0.5, 12_000.0, 0.25, 3.0, 120.0);
+        let g0 = agc.gain_for(0.5, 12_000.0, 0.25, 3.0, 120.0, AgcMode::Envelope);
+        let g1 = agc.gain_for(0.5, 12_000.0, 0.25, 3.0, 120.0, AgcMode::Envelope);
         assert!(g0 > 0.0);
         assert!(g1 > 0.0);
         assert!(g1 <= 64.0);
@@ -75,13 +90,13 @@ mod tests {
     #[test]
     fn zero_sample_rate_returns_unity() {
         let mut agc = CwAgc::new();
-        assert_eq!(agc.gain_for(1.0, 0.0, 0.25, 3.0, 120.0), 1.0);
+        assert_eq!(agc.gain_for(1.0, 0.0, 0.25, 3.0, 120.0, AgcMode::Envelope), 1.0);
     }
 
     #[test]
     fn reset_restores_defaults() {
         let mut agc = CwAgc::new();
-        let _ = agc.gain_for(2.0, 12_000.0, 0.25, 3.0, 120.0);
+        let _ = agc.gain_for(2.0, 12_000.0, 0.25, 3.0, 120.0, AgcMode::Envelope);
         agc.reset_state();
         assert_eq!(agc.gain, 1.0);
     }

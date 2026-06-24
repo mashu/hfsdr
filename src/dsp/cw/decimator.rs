@@ -57,8 +57,15 @@ impl Decimator {
     }
 
     /// Push one input sample; returns a decimated output when the factor divides.
-    pub fn push(&mut self, sample: Complex32) -> Option<Complex32> {
-        let filtered = self.fir.process_complex(sample);
+    pub fn push(&mut self, sample: Complex32, bypass_fir: bool) -> Option<Complex32> {
+        if self.factor == 1 {
+            return Some(sample);
+        }
+        let filtered = if bypass_fir {
+            sample
+        } else {
+            self.fir.process_complex(sample)
+        };
         self.counter += 1;
         if self.counter.is_multiple_of(self.factor) {
             Some(filtered)

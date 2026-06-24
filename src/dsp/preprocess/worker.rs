@@ -86,7 +86,7 @@ fn worker_loop(cmd_rx: Receiver<WorkerCmd>, done_tx: SyncSender<WorkerDone>) {
             last_factor = cmd.factor;
         }
         let mut decimated = Vec::new();
-        decim.decimate_block(cmd.raw.as_slice(), &mut decimated);
+        decim.decimate_block(cmd.raw.as_slice(), &mut decimated, false);
         let _ = done_tx.send(WorkerDone { decimated });
     }
 }

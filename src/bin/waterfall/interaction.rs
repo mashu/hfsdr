@@ -1,6 +1,7 @@
 //! Mouse interaction for RF plots: tune, zoom, pan view, filter/notch editing.
 
 use eframe::egui::{Pos2, Rect, Response, Ui};
+use hfsdr::ChannelOffsetHz;
 
 const CENTER_GRAB_PX: f32 = 18.0;
 const EDGE_GRAB_PX: f32 = 12.0;
@@ -43,8 +44,7 @@ enum NotchHit {
 #[derive(Clone, Copy, Debug)]
 pub struct NotchMarker {
     pub slot: usize,
-    /// Channel offset (Hz from tune center); same frame as [`hfsdr::ChannelOffsetHz`].
-    pub offset_hz: f32,
+    pub offset_hz: ChannelOffsetHz,
     pub width_hz: f32,
 }
 
@@ -62,7 +62,7 @@ pub enum PlotAction {
     SetRitHz(f32),
     SetNotchOffset {
         slot: usize,
-        offset_hz: f32,
+        offset_hz: ChannelOffsetHz,
     },
     SetNotchWidth {
         slot: usize,
@@ -287,7 +287,9 @@ impl PlotInteraction {
                 }
                 DragMode::DragNotch(slot) => {
                     if let Some(pos) = response.interact_pointer_pos() {
-                        let offset = x_to_offset_hz(pos.x, rect, view_span, pan) as f32;
+                        let offset = ChannelOffsetHz::from_plot_hz(
+                            x_to_offset_hz(pos.x, rect, view_span, pan) as f32,
+                        );
                         actions.push(PlotAction::SetNotchOffset { slot, offset_hz: offset });
                     }
                 }
@@ -408,7 +410,7 @@ fn pick_notch_hit(
     let mut best: Option<(usize, NotchHit, f32)> = None;
     for n in notches {
         let half = n.width_hz as f64 / 2.0;
-        let center = n.offset_hz as f64;
+        let center = n.offset_hz.hz() as f64;
         let left = offset_hz_to_x(center - half, rect, view_span_hz, pan_offset_hz);
         let right = offset_hz_to_x(center + half, rect, view_span_hz, pan_offset_hz);
         let cx = offset_hz_to_x(center, rect, view_span_hz, pan_offset_hz);
@@ -432,23 +434,27 @@ fn pick_notch_hit(
     best.map(|(slot, part, _)| (slot, part))
 }
 
-pub fn notch_width_from_edge(center_hz: f32, edge_offset_hz: f64) -> f32 {
-    (2.0 * (edge_offset_hz - center_hz as f64).abs() as f32)
+pub fn notch_width_from_edge(center: ChannelOffsetHz, edge_offset_hz: f64) -> f32 {
+    (2.0 * (edge_offset_hz - center.hz() as f64).abs() as f32)
         .clamp(NOTCH_WIDTH_MIN_HZ, NOTCH_WIDTH_MAX_HZ)
 }
 
 /// Suggested channel offset when the user arms a manual notch (listen point + stagger).
-pub fn suggest_notch_offset_hz(listen_offset_hz: f32, other_offsets: &[f32]) -> f32 {
+pub fn suggest_notch_offset_hz(
+    listen_offset_hz: ChannelOffsetHz,
+    other_offsets: &[ChannelOffsetHz],
+) -> ChannelOffsetHz {
     if other_offsets.is_empty() {
-        return listen_offset_hz + NOTCH_STAGGER_HZ;
+        return ChannelOffsetHz::new(listen_offset_hz.hz() + NOTCH_STAGGER_HZ);
     }
 
     for step in 1..=4 {
         for sign in [1.0_f32, -1.0] {
-            let candidate = listen_offset_hz + sign * step as f32 * NOTCH_STAGGER_HZ;
+            let candidate =
+                ChannelOffsetHz::new(listen_offset_hz.hz() + sign * step as f32 * NOTCH_STAGGER_HZ);
             if other_offsets
                 .iter()
-                .all(|&o| (candidate - o).abs() >= NOTCH_MIN_SEPARATION_HZ)
+                .all(|&o| (candidate.hz() - o.hz()).abs() >= NOTCH_MIN_SEPARATION_HZ)
             {
                 return candidate;
             }
@@ -458,16 +464,16 @@ pub fn suggest_notch_offset_hz(listen_offset_hz: f32, other_offsets: &[f32]) -> 
     let nearest = other_offsets
         .iter()
         .min_by(|a, b| {
-            (*a - listen_offset_hz)
+            (a.hz() - listen_offset_hz.hz())
                 .abs()
-                .total_cmp(&(*b - listen_offset_hz).abs())
+                .total_cmp(&(b.hz() - listen_offset_hz.hz()).abs())
         })
         .copied()
         .unwrap_or(listen_offset_hz);
-    let mirrored = 2.0 * listen_offset_hz - nearest;
+    let mirrored = ChannelOffsetHz::new(2.0 * listen_offset_hz.hz() - nearest.hz());
     if other_offsets
         .iter()
-        .all(|&o| (mirrored - o).abs() >= NOTCH_MIN_SEPARATION_HZ)
+        .all(|&o| (mirrored.hz() - o.hz()).abs() >= NOTCH_MIN_SEPARATION_HZ)
     {
         return mirrored;
     }
@@ -475,16 +481,16 @@ pub fn suggest_notch_offset_hz(listen_offset_hz: f32, other_offsets: &[f32]) -> 
     let extreme = other_offsets
         .iter()
         .fold(listen_offset_hz, |acc, &o| {
-            if (o - listen_offset_hz).abs() > (acc - listen_offset_hz).abs() {
+            if (o.hz() - listen_offset_hz.hz()).abs() > (acc.hz() - listen_offset_hz.hz()).abs() {
                 o
             } else {
                 acc
             }
         });
-    if extreme >= listen_offset_hz {
-        extreme + NOTCH_STAGGER_HZ
+    if extreme.hz() >= listen_offset_hz.hz() {
+        ChannelOffsetHz::new(extreme.hz() + NOTCH_STAGGER_HZ)
     } else {
-        extreme - NOTCH_STAGGER_HZ
+        ChannelOffsetHz::new(extreme.hz() - NOTCH_STAGGER_HZ)
     }
 }
 
@@ -673,7 +679,7 @@ mod tests {
 
     #[test]
     fn notch_width_from_edge_symmetric() {
-        let w = notch_width_from_edge(100.0, 150.0);
+        let w = notch_width_from_edge(ChannelOffsetHz::new(100.0), 150.0);
         assert!((w - 100.0).abs() < 0.1);
     }
 
@@ -685,26 +691,43 @@ mod tests {
 
     #[test]
     fn suggest_notch_first_staggers_from_listen() {
-        assert!((suggest_notch_offset_hz(120.0, &[]) - 200.0).abs() < f32::EPSILON);
+        assert_eq!(
+            suggest_notch_offset_hz(ChannelOffsetHz::new(120.0), &[]),
+            ChannelOffsetHz::new(200.0)
+        );
     }
 
     #[test]
     fn suggest_notch_staggers_from_listen() {
-        let o = suggest_notch_offset_hz(0.0, &[0.0]);
-        assert!((o - 80.0).abs() < f32::EPSILON);
-        let o = suggest_notch_offset_hz(0.0, &[0.0, 80.0]);
-        assert!((o + 80.0).abs() < f32::EPSILON);
+        let o = suggest_notch_offset_hz(ChannelOffsetHz::ZERO, &[ChannelOffsetHz::ZERO]);
+        assert_eq!(o, ChannelOffsetHz::new(80.0));
+        let o = suggest_notch_offset_hz(
+            ChannelOffsetHz::ZERO,
+            &[ChannelOffsetHz::ZERO, ChannelOffsetHz::new(80.0)],
+        );
+        assert_eq!(o, ChannelOffsetHz::new(-80.0));
     }
 
     #[test]
     fn suggest_notch_mirrors_across_listen() {
-        let o = suggest_notch_offset_hz(100.0, &[180.0]);
-        assert!((o - 20.0).abs() < f32::EPSILON);
+        let o = suggest_notch_offset_hz(
+            ChannelOffsetHz::new(100.0),
+            &[ChannelOffsetHz::new(180.0)],
+        );
+        assert_eq!(o, ChannelOffsetHz::new(20.0));
     }
 
     #[test]
     fn suggest_notch_extends_when_cluster_full() {
-        let o = suggest_notch_offset_hz(0.0, &[80.0, -80.0, 160.0, -160.0]);
-        assert!((o - 240.0).abs() < f32::EPSILON);
+        let o = suggest_notch_offset_hz(
+            ChannelOffsetHz::ZERO,
+            &[
+                ChannelOffsetHz::new(80.0),
+                ChannelOffsetHz::new(-80.0),
+                ChannelOffsetHz::new(160.0),
+                ChannelOffsetHz::new(-160.0),
+            ],
+        );
+        assert_eq!(o, ChannelOffsetHz::new(240.0));
     }
 }

@@ -386,7 +386,7 @@ fn main() {
 
         let t_demod = Instant::now();
         if ingress_decim > 1 {
-            spectrum_ingress.decimate_block(&drain, &mut drain_decim);
+            spectrum_ingress.decimate_block(&drain, &mut drain_decim, false);
         }
         demod.process(&drain, device_rate, &cw, &mut audio_scratch);
         t.demod_ns += t_demod.elapsed().as_nanos() as u64;

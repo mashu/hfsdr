@@ -20,11 +20,12 @@ use super::autonotch::AutoNotch;
 use super::decimator::Decimator;
 use super::detector::ProductDetector;
 use super::fir::{design_lowpass_with, FirFilter, LowpassDesign, WindowKind};
+use super::iir_channel::IirChannelFilter;
 use super::nco::ComplexNco;
 use super::noiseblanker::NoiseBlanker;
 use super::noisereduction::NoiseReduction;
 use super::notch::IqNotch;
-use super::settings::{CwChannelSettings, MAX_NOTCHES};
+use super::settings::{ChannelFilterKind, CwChannelSettings, MAX_NOTCHES};
 
 /// Allocation-free CW receiver channel for one tuned signal.
 #[derive(Clone, Debug)]
@@ -34,6 +35,7 @@ pub struct CwChannel {
     decimator: Decimator,
     notches: [IqNotch; MAX_NOTCHES],
     channel_fir: FirFilter,
+    channel_iir: IirChannelFilter,
     agc: CwAgc,
     detector: ProductDetector,
     apf: AudioPeakFilter,
@@ -47,6 +49,7 @@ pub struct CwChannel {
     last_window: WindowKind,
     last_kaiser_beta: f32,
     last_passband_flatten: bool,
+    last_channel_filter: ChannelFilterKind,
 }
 
 impl CwChannel {
@@ -63,6 +66,7 @@ impl CwChannel {
                 200.0,
                 LowpassDesign::default(),
             ),
+            channel_iir: IirChannelFilter::new(),
             agc: CwAgc::new(),
             detector: ProductDetector::new(),
             apf: AudioPeakFilter::new(),
@@ -76,6 +80,7 @@ impl CwChannel {
             last_window: WindowKind::Gaussian,
             last_kaiser_beta: 6.0,
             last_passband_flatten: false,
+            last_channel_filter: ChannelFilterKind::LinearFir,
         }
     }
 
@@ -103,6 +108,12 @@ impl CwChannel {
 
         self.sync_chain(iq_rate, settings);
         let audio_rate = self.decimator.output_rate(iq_rate);
+        let diag = settings.diagnostic;
+        let notch_origin = if diag.listen_nco {
+            ListenOrigin::at_center()
+        } else {
+            origin
+        };
 
         for &sample in input {
             let mut iq = sample;
@@ -114,23 +125,32 @@ impl CwChannel {
                 );
             }
 
-            iq = self
-                .shift_nco
-                .mix_down(iq, settings.listen_offset_hz.hz(), iq_rate);
+            if !diag.listen_nco {
+                iq = self
+                    .shift_nco
+                    .mix_down(iq, settings.listen_offset_hz.hz(), iq_rate);
+            }
 
-            let Some(mut z) = self.decimator.push(iq) else {
+            let Some(mut z) = self.decimator.push(iq, diag.decim_fir) else {
                 continue;
             };
 
             for (notch, spec) in self.notches.iter_mut().zip(settings.notches.iter()) {
                 if spec.enabled {
                     notch.sync(audio_rate, spec.width_hz);
-                    let rel = origin.channel_to_baseband(spec.offset_hz);
-                    z = notch.process(z, rel.hz(), audio_rate);
+                    let rel = notch_origin.convert_for_notch(spec.offset_hz);
+                    z = notch.process(z, rel, audio_rate);
                 }
             }
 
-            let filtered = self.channel_fir.process_complex(z);
+            let filtered = if diag.channel_fir {
+                z
+            } else {
+                match settings.channel_filter {
+                    ChannelFilterKind::LinearFir => self.channel_fir.process_complex(z),
+                    ChannelFilterKind::Iir2Pole => self.channel_iir.process_complex(z),
+                }
+            };
             let level = filtered.norm().max(1e-7);
             self.track_snr(level);
 
@@ -141,6 +161,7 @@ impl CwChannel {
                     settings.agc.target,
                     settings.agc.attack_ms,
                     settings.agc.decay_ms,
+                    settings.agc_mode,
                 )
             } else {
                 settings.agc.manual_gain
@@ -150,7 +171,11 @@ impl CwChannel {
                 im: filtered.im * gain,
             };
 
-            let mut audio = self.detector.process(scaled, settings.bfo_hz, audio_rate);
+            let mut audio = if diag.bfo {
+                scaled.re
+            } else {
+                self.detector.process(scaled, settings.bfo_hz, audio_rate)
+            };
 
             if settings.apf.enabled {
                 audio = self.apf.process(
@@ -214,6 +239,13 @@ impl CwChannel {
 
         let bandwidth = settings.channel_bandwidth_hz();
         let audio_rate = self.decimator.output_rate(iq_rate);
+        if settings.channel_filter != self.last_channel_filter {
+            self.channel_iir.reset_state();
+            self.last_channel_filter = settings.channel_filter;
+        }
+        if settings.channel_filter == ChannelFilterKind::Iir2Pole {
+            self.channel_iir.sync(audio_rate, bandwidth);
+        }
         let design = LowpassDesign {
             window: settings.window,
             kaiser_beta: settings.kaiser_beta,
@@ -224,7 +256,7 @@ impl CwChannel {
             || settings.passband_flatten != self.last_passband_flatten
             || (settings.window == WindowKind::Kaiser
                 && (settings.kaiser_beta - self.last_kaiser_beta).abs() > 0.05);
-        if design_changed {
+        if design_changed && settings.channel_filter == ChannelFilterKind::LinearFir {
             self.channel_fir = design_lowpass_with(audio_rate, bandwidth, design);
             self.last_bandwidth = bandwidth;
             self.last_window = settings.window;
@@ -238,6 +270,7 @@ impl CwChannel {
 mod tests {
     use super::*;
     use super::super::super::freq_offset::{ChannelOffsetHz, ListenOrigin};
+    use super::super::settings::{AgcMode, DiagnosticBypassSettings};
     use std::f32::consts::TAU;
 
     fn tone_iq(rate: f32, offset_hz: f32, n: usize) -> Vec<Complex32> {
@@ -329,6 +362,39 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_channel_fir_bypass_leaks_adjacent() {
+        let rate = 12_000.0;
+        let n = rate as usize * 2;
+        let mut iq = tone_iq(rate, 0.0, n);
+        let interferer = tone_iq(rate, 800.0, n);
+        for (a, b) in iq.iter_mut().zip(interferer.iter()) {
+            a.re += b.re * 0.8;
+            a.im += b.im * 0.8;
+        }
+        let mut channel = CwChannel::new(rate);
+        let mut settings = CwChannelSettings {
+            bfo_hz: 650.0,
+            passband_hz: 150.0,
+            ..CwChannelSettings::default()
+        };
+        settings.agc.enabled = false;
+        let origin = ListenOrigin::at_center();
+        let mut filtered = Vec::new();
+        channel.process(&iq, rate, &settings, origin, &mut filtered);
+        settings.diagnostic.channel_fir = true;
+        let mut bypassed = Vec::new();
+        channel.process(&iq, rate, &settings, origin, &mut bypassed);
+        let rms = |v: &[f32]| {
+            let s = &v[n / 4..];
+            (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+        };
+        assert!(
+            rms(&bypassed) > rms(&filtered) * 1.2,
+            "bypass FIR should leak more adjacent energy"
+        );
+    }
+
+    #[test]
     fn full_filter_chain_produces_audio_and_snr() {
         let rate = 12_000.0;
         let n = rate as usize * 2;
@@ -338,6 +404,7 @@ mod tests {
             listen_offset_hz: ChannelOffsetHz::new(120.0),
             bfo_hz: 650.0,
             passband_hz: 250.0,
+            channel_filter: ChannelFilterKind::LinearFir,
             window: WindowKind::Kaiser,
             kaiser_beta: 8.0,
             passband_flatten: true,
@@ -370,6 +437,8 @@ mod tests {
                 enabled: true,
                 ..Default::default()
             },
+            agc_mode: AgcMode::Envelope,
+            diagnostic: DiagnosticBypassSettings::default(),
         };
         let mut audio = Vec::new();
         let origin = ListenOrigin::from_settings(settings.listen_offset_hz);

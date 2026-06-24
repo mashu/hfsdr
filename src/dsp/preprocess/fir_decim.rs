@@ -41,11 +41,15 @@ impl FirDecimator {
         self.counter = 0;
     }
 
-    pub fn push(&mut self, sample: Complex32) -> Option<Complex32> {
+    pub fn push(&mut self, sample: Complex32, bypass_fir: bool) -> Option<Complex32> {
         if self.factor == 1 {
             return Some(sample);
         }
-        let filtered = self.fir.process_complex(sample);
+        let filtered = if bypass_fir {
+            sample
+        } else {
+            self.fir.process_complex(sample)
+        };
         self.counter += 1;
         if self.counter.is_multiple_of(self.factor) {
             Some(filtered)
@@ -55,7 +59,12 @@ impl FirDecimator {
     }
 
     /// Decimate a block into `output` (state carries across calls).
-    pub fn decimate_block(&mut self, input: &[Complex32], output: &mut Vec<Complex32>) {
+    pub fn decimate_block(
+        &mut self,
+        input: &[Complex32],
+        output: &mut Vec<Complex32>,
+        bypass_fir: bool,
+    ) {
         output.clear();
         if self.factor == 1 {
             output.extend_from_slice(input);
@@ -63,7 +72,7 @@ impl FirDecimator {
         }
         output.reserve(input.len() / self.factor.max(1));
         for &sample in input {
-            if let Some(z) = self.push(sample) {
+            if let Some(z) = self.push(sample, bypass_fir) {
                 output.push(z);
             }
         }
@@ -83,7 +92,7 @@ mod tests {
             .collect();
         let mut out = Vec::new();
         let t0 = Instant::now();
-        decim.decimate_block(&raw, &mut out);
+        decim.decimate_block(&raw, &mut out, false);
         assert!(t0.elapsed() < Duration::from_secs(1));
         assert!(!out.is_empty());
         assert!(out.len() < raw.len());
@@ -93,7 +102,7 @@ mod tests {
     fn unity_factor_passthrough() {
         let mut d = FirDecimator::with_factor(48_000.0, 1, false);
         let s = Complex32::new(1.0, -1.0);
-        assert_eq!(d.push(s), Some(s));
+        assert_eq!(d.push(s, false), Some(s));
     }
 
     #[test]
@@ -103,7 +112,7 @@ mod tests {
             .map(|i| Complex32::new(i as f32, 0.0))
             .collect();
         let mut out = Vec::new();
-        d.decimate_block(&input, &mut out);
+        d.decimate_block(&input, &mut out, false);
         assert!(!out.is_empty());
         assert!(out.len() <= input.len() / 4 + 1);
     }
@@ -118,10 +127,10 @@ mod tests {
     #[test]
     fn reset_state_clears_counter() {
         let mut d = FirDecimator::with_factor(48_000.0, 4, false);
-        let _ = d.push(Complex32::new(1.0, 0.0));
+        let _ = d.push(Complex32::new(1.0, 0.0), false);
         d.reset_state();
         let mut out = Vec::new();
-        d.decimate_block(&[Complex32::new(1.0, 0.0); 8], &mut out);
+        d.decimate_block(&[Complex32::new(1.0, 0.0); 8], &mut out, false);
         assert!(!out.is_empty());
     }
 }

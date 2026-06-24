@@ -122,6 +122,47 @@ impl Default for AgcSettings {
     }
 }
 
+/// Channel selectivity implementation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChannelFilterKind {
+    /// Windowed-sinc FIR (linear phase, default for CW keying).
+    #[default]
+    LinearFir,
+    /// 2-pole biquad lowpass per rail (steeper, may ring).
+    Iir2Pole,
+}
+
+/// AGC gain law.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AgcMode {
+    /// Symmetric envelope follower (current behaviour).
+    #[default]
+    Envelope,
+    /// Fast gain reduction, slow recovery — less lift between dits (contest-style hang).
+    Hang,
+}
+
+/// Session-only A/B bypass flags (not persisted to settings.json).
+///
+/// Skipping a stage changes what you hear — use only to judge that stage's effect.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DiagnosticBypassSettings {
+    /// Skip listen NCO (and wideband ingress mix). Hear hardware center, not RIT/tune.
+    pub listen_nco: bool,
+    /// Skip anti-alias FIR inside decimators (boxcar decimation; may alias).
+    pub decim_fir: bool,
+    /// Skip channel FIR (full IQ passband hits demod).
+    pub channel_fir: bool,
+    /// Skip BFO product detector (emit I-channel only, no pitch tone).
+    pub bfo: bool,
+}
+
+impl DiagnosticBypassSettings {
+    pub fn any_active(self) -> bool {
+        self.listen_nco || self.decim_fir || self.channel_fir || self.bfo
+    }
+}
+
 /// Complete listen-chain configuration for one CW slice (VFO).
 #[derive(Clone, Debug)]
 pub struct CwChannelSettings {
@@ -129,6 +170,7 @@ pub struct CwChannelSettings {
     pub listen_offset_hz: ChannelOffsetHz,
     pub bfo_hz: f32,
     pub passband_hz: f32,
+    pub channel_filter: ChannelFilterKind,
     pub window: WindowKind,
     /// Kaiser β when `window == Kaiser` (typical 4–10).
     pub kaiser_beta: f32,
@@ -142,6 +184,9 @@ pub struct CwChannelSettings {
     pub apf: ApfSettings,
     pub noise_reduction: NoiseReductionSettings,
     pub agc: AgcSettings,
+    pub agc_mode: AgcMode,
+    /// Diagnostic bypass (flow diagram / A/B); not saved to disk.
+    pub diagnostic: DiagnosticBypassSettings,
 }
 
 impl Default for CwChannelSettings {
@@ -150,6 +195,7 @@ impl Default for CwChannelSettings {
             listen_offset_hz: ChannelOffsetHz::ZERO,
             bfo_hz: 650.0,
             passband_hz: 200.0,
+            channel_filter: ChannelFilterKind::LinearFir,
             window: WindowKind::Gaussian,
             kaiser_beta: 6.0,
             passband_flatten: false,
@@ -160,6 +206,8 @@ impl Default for CwChannelSettings {
             apf: ApfSettings::default(),
             noise_reduction: NoiseReductionSettings::default(),
             agc: AgcSettings::default(),
+            agc_mode: AgcMode::Envelope,
+            diagnostic: DiagnosticBypassSettings::default(),
         }
     }
 }

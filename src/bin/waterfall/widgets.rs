@@ -233,7 +233,7 @@ fn draw_scope_layer(
             view_span,
             pan,
             notch.slot,
-            notch.offset_hz,
+            notch.offset_hz.hz(),
             notch.width_hz,
             true,
         );
@@ -302,7 +302,7 @@ fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: PlotFreqMapping
             view_span,
             pan,
             notch.slot,
-            notch.offset_hz,
+            notch.offset_hz.hz(),
             notch.width_hz,
             false,
         );
