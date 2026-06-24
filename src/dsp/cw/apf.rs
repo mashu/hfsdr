@@ -54,3 +54,33 @@ impl AudioPeakFilter {
         sample + gain.max(0.0) * self.band.process(sample)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boosts_tone_at_pitch() {
+        let mut apf = AudioPeakFilter::new();
+        let rate = 8_000.0;
+        let pitch = 650.0;
+        let mut boosted = 0.0f32;
+        let mut dry = 0.0f32;
+        for i in 0..rate as usize {
+            let t = i as f32 / rate;
+            let s = (std::f32::consts::TAU * pitch * t).sin();
+            boosted = apf.process(s, rate, pitch, 120.0, 2.0);
+            dry = s;
+        }
+        assert!(boosted.abs() > dry.abs());
+    }
+
+    #[test]
+    fn reset_clears_filter_state() {
+        let mut apf = AudioPeakFilter::new();
+        let _ = apf.process(1.0, 8_000.0, 650.0, 120.0, 1.0);
+        apf.reset_state();
+        let out = apf.process(0.0, 8_000.0, 650.0, 120.0, 1.0);
+        assert!(out.abs() < 1e-3);
+    }
+}

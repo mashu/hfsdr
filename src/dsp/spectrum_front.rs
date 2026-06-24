@@ -50,3 +50,47 @@ impl SpectrumFrontEnd {
         output.extend_from_slice(slice);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::TAU;
+
+    fn tone(n: usize, rate: f32, hz: f32) -> Vec<Complex32> {
+        (0..n)
+            .map(|i| {
+                let p = TAU * hz * i as f32 / rate;
+                Complex32::new(p.cos(), p.sin())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn passthrough_when_decim_one() {
+        let mut fe = SpectrumFrontEnd::new(12_000.0, 1, 0.0);
+        let input = tone(128, 12_000.0, 100.0);
+        let mut out = Vec::new();
+        fe.process(&input, &mut out);
+        assert_eq!(out.len(), input.len());
+    }
+
+    #[test]
+    fn decimates_when_zoomed() {
+        let mut fe = SpectrumFrontEnd::new(384_000.0, 4, 50.0);
+        let input = tone(400, 384_000.0, 1_000.0);
+        let mut out = Vec::new();
+        fe.process(&input, &mut out);
+        assert!(!out.is_empty());
+        assert!(out.len() < input.len());
+    }
+
+    #[test]
+    fn sync_rebuilds_on_rate_change() {
+        let mut fe = SpectrumFrontEnd::new(12_000.0, 2, 0.0);
+        fe.sync(48_000.0, 4, 10.0);
+        let input = tone(200, 48_000.0, 200.0);
+        let mut out = Vec::new();
+        fe.process(&input, &mut out);
+        assert!(!out.is_empty());
+    }
+}

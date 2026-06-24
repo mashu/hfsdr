@@ -123,7 +123,10 @@ impl CwChannel {
             for (notch, spec) in self.notches.iter_mut().zip(settings.notches.iter()) {
                 if spec.enabled {
                     notch.sync(audio_rate, spec.width_hz);
-                    z = notch.process(z, spec.offset_hz, audio_rate);
+                    // UI stores pan offsets from channel center; after listen NCO the
+                    // interferer sits at (spec.offset_hz - listen_offset_hz) in baseband.
+                    let rel_hz = spec.offset_hz - settings.listen_offset_hz;
+                    z = notch.process(z, rel_hz, audio_rate);
                 }
             }
 
@@ -274,5 +277,98 @@ mod tests {
             power_bfo += s * (TAU * bfo * t).sin();
         }
         assert!(power_bfo.abs() > 0.1);
+    }
+
+    fn audio_rms(audio: &[f32], skip: usize) -> f32 {
+        let slice = &audio[skip..];
+        if slice.is_empty() {
+            return 0.0;
+        }
+        let p = slice.iter().map(|s| s * s).sum::<f32>() / slice.len() as f32;
+        p.sqrt()
+    }
+
+    #[test]
+    fn manual_notch_uses_absolute_plot_offset_with_rit() {
+        let rate = 12_000.0;
+        let listen = 100.0;
+        let interferer = 400.0;
+        let n = rate as usize * 3;
+        let iq = tone_iq(rate, interferer, n);
+        let mut channel = CwChannel::new(rate);
+        let mut base = CwChannelSettings {
+            listen_offset_hz: listen,
+            bfo_hz: 650.0,
+            passband_hz: 500.0,
+            ..CwChannelSettings::default()
+        };
+        base.agc.enabled = false;
+        let mut without = Vec::new();
+        channel.process(&iq, rate, &base, &mut without);
+
+        let mut with_notch = base.clone();
+        with_notch.notches[0].enabled = true;
+        with_notch.notches[0].offset_hz = interferer;
+        with_notch.notches[0].width_hz = 80.0;
+        let mut with = Vec::new();
+        channel.process(&iq, rate, &with_notch, &mut with);
+
+        let skip = without.len() / 2;
+        let rms_without = audio_rms(&without, skip);
+        let rms_with = audio_rms(&with, skip);
+        assert!(
+            rms_with < rms_without * 0.5,
+            "notch at plot {interferer} Hz with listen {listen} Hz: \
+             rms with={rms_with} without={rms_without}"
+        );
+    }
+
+    #[test]
+    fn full_filter_chain_produces_audio_and_snr() {
+        let rate = 12_000.0;
+        let n = rate as usize * 2;
+        let iq = tone_iq(rate, 120.0, n);
+        let mut channel = CwChannel::new(rate);
+        let settings = CwChannelSettings {
+            listen_offset_hz: 120.0,
+            bfo_hz: 650.0,
+            passband_hz: 250.0,
+            window: WindowKind::Kaiser,
+            kaiser_beta: 8.0,
+            passband_flatten: true,
+            decimation: 2,
+            noise_blanker: super::super::settings::NoiseBlankerSettings {
+                enabled: true,
+                threshold: 8.0,
+                width: 4,
+            },
+            notches: [{
+                let mut n = super::super::settings::NotchSpec::default();
+                n.enabled = true;
+                n.offset_hz = 300.0;
+                n.width_hz = 60.0;
+                n
+            }; MAX_NOTCHES],
+            auto_notch: super::super::settings::AutoNotchSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            apf: super::super::settings::ApfSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            noise_reduction: super::super::settings::NoiseReductionSettings {
+                enabled: true,
+                level: 0.4,
+            },
+            agc: super::super::settings::AgcSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        };
+        let mut audio = Vec::new();
+        channel.process(&iq, rate, &settings, &mut audio);
+        assert!(!audio.is_empty());
+        assert!(channel.snr_db().is_finite());
     }
 }

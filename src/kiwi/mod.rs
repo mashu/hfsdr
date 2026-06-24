@@ -352,3 +352,49 @@ impl Drop for KiwiSource {
         let _ = self.stop();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::IqSource;
+
+    #[test]
+    fn builder_sets_passband_and_agc() {
+        let src = KiwiSource::new("kiwi.test", 8073)
+            .with_passband(-3_000, 3_000)
+            .with_agc(false)
+            .with_freq_offset_khz(5.0)
+            .with_ar_out_hz(48_000);
+        assert!(!src.agc_on);
+        assert_eq!(src.low_cut, -3_000);
+        assert_eq!(src.high_cut, 3_000);
+        assert_eq!(src.ar_out_hz, 48_000);
+    }
+
+    #[test]
+    fn iq_source_trait_before_streaming() {
+        let mut src = KiwiSource::new("kiwi.test", 8073);
+        assert_eq!(src.sample_rate(), KIWI_IQ_RATE);
+        assert!(src.set_sample_rate(KIWI_IQ_RATE).is_ok());
+        assert!(src.set_sample_rate(48_000).is_err());
+        src.tune(14_030_000.0).unwrap();
+        assert_eq!(src.frequency(), 14_030_000.0);
+        assert!(!src.is_streaming());
+        assert_eq!(src.dropped_samples(), 0);
+        assert!(src.supports_passband());
+        src.set_passband(-4_000, 4_000).unwrap();
+        src.set_agc(true).unwrap();
+        assert!(src.rssi_dbm().is_some());
+        assert!(!src.link_ready());
+        assert!(!src.link_alive());
+        assert!(src.link_error().is_none());
+        src.stop().unwrap();
+    }
+
+    #[test]
+    fn meter_dbm_reads_atomic() {
+        let src = KiwiSource::new("kiwi.test", 8073);
+        src.rssi_cdbm.store(1_234, Ordering::Relaxed);
+        assert!((src.meter_dbm() - 12.34).abs() < 1e-3);
+    }
+}

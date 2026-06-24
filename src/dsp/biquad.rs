@@ -57,25 +57,6 @@ impl Biquad {
         self.a2 = (1.0 - alpha) / a0;
     }
 
-    pub fn set_notch(&mut self, sample_rate: f32, fc: f32, bandwidth: f32) {
-        self.reset_state();
-        if sample_rate <= 0.0 || fc <= 0.0 || bandwidth <= 0.0 {
-            return;
-        }
-        let fc = fc.clamp(20.0, sample_rate * 0.45);
-        let q = (fc / bandwidth).clamp(0.5, 50.0);
-        let omega = 2.0 * PI * fc / sample_rate;
-        let sin = omega.sin();
-        let cos = omega.cos();
-        let alpha = sin / (2.0 * q);
-        let a0 = 1.0 + alpha;
-        self.b0 = 1.0 / a0;
-        self.b1 = (-2.0 * cos) / a0;
-        self.b2 = 1.0 / a0;
-        self.a1 = (-2.0 * cos) / a0;
-        self.a2 = (1.0 - alpha) / a0;
-    }
-
 }
 
 #[cfg(test)]

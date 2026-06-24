@@ -57,3 +57,32 @@ impl CwAgc {
         self.gain
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracks_envelope_and_clamps_gain() {
+        let mut agc = CwAgc::new();
+        let g0 = agc.gain_for(0.5, 12_000.0, 0.25, 3.0, 120.0);
+        let g1 = agc.gain_for(0.5, 12_000.0, 0.25, 3.0, 120.0);
+        assert!(g0 > 0.0);
+        assert!(g1 > 0.0);
+        assert!(g1 <= 64.0);
+    }
+
+    #[test]
+    fn zero_sample_rate_returns_unity() {
+        let mut agc = CwAgc::new();
+        assert_eq!(agc.gain_for(1.0, 0.0, 0.25, 3.0, 120.0), 1.0);
+    }
+
+    #[test]
+    fn reset_restores_defaults() {
+        let mut agc = CwAgc::new();
+        let _ = agc.gain_for(2.0, 12_000.0, 0.25, 3.0, 120.0);
+        agc.reset_state();
+        assert_eq!(agc.gain, 1.0);
+    }
+}

@@ -151,6 +151,13 @@ impl SlowWaterfall {
 }
 
 #[cfg(test)]
+impl SlowWaterfall {
+    fn finish_accumulator(&mut self) {
+        self.commit();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -165,5 +172,40 @@ mod tests {
         let mut wf = SlowWaterfall::new(1.0, 10.0, RowFold::Peak);
         wf.annotate(300.0, "CQ AA1A", 20.0);
         assert_eq!(wf.annotations().len(), 1);
+    }
+
+    #[test]
+    fn peak_fold_commits_row() {
+        let mut wf = SlowWaterfall::new(1.0, 10.0, RowFold::Peak);
+        wf.push_row(&[1.0, 3.0, 2.0]);
+        wf.push_row(&[0.5, 4.0, 1.0]);
+        assert!(wf.rows().is_empty());
+        wf.finish_accumulator();
+        assert_eq!(wf.rows().len(), 1);
+        assert_eq!(wf.rows()[0], vec![1.0, 4.0, 2.0]);
+    }
+
+    #[test]
+    fn average_fold_divides_accumulator() {
+        let mut wf = SlowWaterfall::new(1.0, 10.0, RowFold::Average);
+        wf.push_row(&[2.0, 4.0]);
+        wf.push_row(&[4.0, 8.0]);
+        wf.finish_accumulator();
+        let row = &wf.rows()[0];
+        assert!((row[0] - 3.0).abs() < 1e-3);
+        assert!((row[1] - 6.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn set_window_trims_old_rows() {
+        let mut wf = SlowWaterfall::new(1.0, 10.0, RowFold::Peak);
+        for v in 1..=5 {
+            wf.push_row(&[v as f32]);
+            wf.finish_accumulator();
+        }
+        assert_eq!(wf.rows().len(), 5);
+        wf.set_window(1.0, 2.0);
+        assert_eq!(wf.rows().len(), 2);
+        wf.set_fold(RowFold::Average);
     }
 }

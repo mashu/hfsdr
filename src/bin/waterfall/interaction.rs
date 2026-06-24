@@ -439,7 +439,7 @@ pub fn notch_width_from_edge(center_hz: f32, edge_offset_hz: f64) -> f32 {
 /// Suggested RF offset when the user arms a manual notch (listen point + stagger).
 pub fn suggest_notch_offset_hz(listen_offset_hz: f32, other_offsets: &[f32]) -> f32 {
     if other_offsets.is_empty() {
-        return listen_offset_hz;
+        return listen_offset_hz + NOTCH_STAGGER_HZ;
     }
 
     for step in 1..=4 {
@@ -683,8 +683,8 @@ mod tests {
     }
 
     #[test]
-    fn suggest_notch_first_at_listen() {
-        assert!((suggest_notch_offset_hz(120.0, &[]) - 120.0).abs() < f32::EPSILON);
+    fn suggest_notch_first_staggers_from_listen() {
+        assert!((suggest_notch_offset_hz(120.0, &[]) - 200.0).abs() < f32::EPSILON);
     }
 
     #[test]

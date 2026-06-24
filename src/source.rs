@@ -178,4 +178,71 @@ mod tests {
             "invalid state: streaming"
         );
     }
+
+    struct StubSource;
+
+    impl IqSource for StubSource {
+        fn sample_rates(&self) -> Vec<u32> {
+            vec![48_000]
+        }
+
+        fn sample_rate(&self) -> u32 {
+            48_000
+        }
+
+        fn set_sample_rate(&mut self, sr: u32) -> Result<()> {
+            if sr == 48_000 {
+                Ok(())
+            } else {
+                Err(SourceError::Unsupported("rate".into()))
+            }
+        }
+
+        fn tune(&mut self, hz: f64) -> Result<()> {
+            let _ = hz;
+            Ok(())
+        }
+
+        fn frequency(&self) -> f64 {
+            14_030_000.0
+        }
+
+        fn start(&mut self) -> Result<Consumer<Complex32>> {
+            Err(SourceError::InvalidState("offline"))
+        }
+
+        fn stop(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn dropped_samples(&self) -> u64 {
+            0
+        }
+
+        fn is_streaming(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn trait_default_controls_are_noops() {
+        let mut src = StubSource;
+        assert!(src.rssi_dbm().is_none());
+        assert!(!src.supports_passband());
+        src.set_passband(-2_500, 2_500).unwrap();
+        src.set_agc(true).unwrap();
+        src.set_hf_att(3).unwrap();
+        src.set_hf_lna(true).unwrap();
+        src.set_hf_agc_threshold(true).unwrap();
+        src.set_frontend_options(0).unwrap();
+        src.set_bias_tee(false).unwrap();
+        src.set_tuner_gain(200).unwrap();
+        src.set_tuner_gain_mode(true).unwrap();
+        src.set_freq_correction(1).unwrap();
+        src.set_rf_gain_db(10).unwrap();
+        assert!(src.link_ready());
+        assert!(src.link_alive());
+        assert!(src.link_error().is_none());
+        assert_eq!(src.frequency(), 14_030_000.0);
+    }
 }

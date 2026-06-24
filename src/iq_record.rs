@@ -382,4 +382,24 @@ mod tests {
         assert_eq!(m.sample_rate, 12_000);
         assert_eq!(m.sample_count, 99_000);
     }
+
+    #[test]
+    fn timestamped_capture_path_in_dir() {
+        let dir = std::env::temp_dir().join("hfsdr_iq_paths");
+        let path = timestamped_capture_path_in(&dir);
+        assert!(path.starts_with(&dir));
+        assert!(path.to_string_lossy().contains("capture-"));
+    }
+
+    #[test]
+    fn default_capture_dir_is_under_config() {
+        let dir = default_capture_dir();
+        assert!(dir.ends_with("hfsdr/captures"));
+    }
+
+    #[test]
+    fn header_parse_rejects_bad_magic() {
+        let buf = [0u8; 32];
+        assert!(parse_header(&buf).is_err());
+    }
 }

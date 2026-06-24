@@ -83,3 +83,31 @@ impl AutoNotch {
         self.lms.step(sample, adapt).error
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn processes_steady_carrier() {
+        let mut notch = AutoNotch::new();
+        let rate = 8_000.0;
+        let pitch = 650.0;
+        let mut last = 0.0f32;
+        for i in 0..rate as usize * 2 {
+            let t = i as f32 / rate;
+            let off_pitch = (std::f32::consts::TAU * 900.0 * t).sin();
+            last = notch.process(off_pitch, rate, pitch, 120.0, 0.02);
+        }
+        assert!(last.is_finite());
+    }
+
+    #[test]
+    fn reset_clears_state() {
+        let mut notch = AutoNotch::new();
+        let _ = notch.process(1.0, 8_000.0, 650.0, 120.0, 0.02);
+        notch.reset_state();
+        let out = notch.process(0.0, 8_000.0, 650.0, 120.0, 0.02);
+        assert!(out.abs() < 1e-3);
+    }
+}

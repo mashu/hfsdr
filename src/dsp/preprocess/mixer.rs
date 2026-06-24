@@ -136,3 +136,56 @@ impl IqRotator {
         self.rot = r;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::TAU;
+
+    fn tone_block(n: usize, rate: f32, hz: f32) -> Vec<Complex32> {
+        (0..n)
+            .map(|i| {
+                let p = TAU * hz * i as f32 / rate;
+                Complex32::new(p.cos(), p.sin())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mix_one_shifts_tone() {
+        let mut rot = IqRotator::default();
+        let rate = 12_000.0;
+        let block = tone_block(256, rate, 500.0);
+        let mixed = rot.mix_one(block[128], 500.0, rate);
+        assert!(mixed.norm() > 0.5);
+    }
+
+    #[test]
+    fn mix_block_matches_length() {
+        let mut rot = IqRotator::default();
+        let block = tone_block(128, 12_000.0, 100.0);
+        let mut out = Vec::new();
+        rot.mix_block(&block, &mut out, 100.0, 12_000.0);
+        assert_eq!(out.len(), block.len());
+    }
+
+    #[test]
+    fn mix_block_uses_simd_path_for_long_input() {
+        let mut rot = IqRotator::default();
+        let block = tone_block(128, 48_000.0, 200.0);
+        let mut out = Vec::new();
+        rot.mix_block(&block, &mut out, 200.0, 48_000.0);
+        assert_eq!(out.len(), 128);
+    }
+
+    #[test]
+    fn mix_and_decimate_reduces_rate() {
+        let mut rot = IqRotator::default();
+        let mut decim = FirDecimator::with_factor(48_000.0, 4, true);
+        let block = tone_block(200, 48_000.0, 1_000.0);
+        let mut out = Vec::new();
+        rot.mix_and_decimate(&block, 1_000.0, 48_000.0, &mut decim, &mut out);
+        assert!(!out.is_empty());
+        assert!(out.len() < block.len());
+    }
+}

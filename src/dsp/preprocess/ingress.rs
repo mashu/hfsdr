@@ -66,3 +66,38 @@ impl IqShiftDecim {
         &self.output
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::TAU;
+
+    #[test]
+    fn process_decimates_mixed_block() {
+        let mut ingress = IqShiftDecim::new(48_000.0, 4, true);
+        let input: Vec<Complex32> = (0..400)
+            .map(|i| {
+                let p = TAU * 500.0 * i as f32 / 48_000.0;
+                Complex32::new(p.cos(), p.sin())
+            })
+            .collect();
+        let out = ingress.process(&input, 500.0, 48_000.0);
+        assert!(!out.is_empty());
+        assert!(out.len() < input.len());
+    }
+
+    #[test]
+    fn empty_input_returns_empty_slice() {
+        let mut ingress = IqShiftDecim::new(12_000.0, 2, false);
+        let out = ingress.process(&[], 0.0, 12_000.0);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn sync_updates_output_rate() {
+        let mut ingress = IqShiftDecim::new(12_000.0, 2, false);
+        ingress.sync(48_000.0, 4);
+        assert_eq!(ingress.output_rate_hz(), 12_000.0);
+        ingress.reset();
+    }
+}

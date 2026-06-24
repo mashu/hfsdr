@@ -2,8 +2,11 @@
 <img width="3824" height="2272" alt="image" src="https://github.com/user-attachments/assets/67d1b346-3e46-447f-9302-b77f44c7ba46" />
 
 [![CI](https://github.com/mashu/hfsdr/actions/workflows/ci.yml/badge.svg)](https://github.com/mashu/hfsdr/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/mashu/hfsdr/graph/badge.svg)](https://codecov.io/gh/mashu/hfsdr)
+[![GitHub release](https://img.shields.io/github/v/release/mashu/hfsdr)](https://github.com/mashu/hfsdr/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/)
-[![Documentation](https://img.shields.io/badge/docs-mdBook-blue)](docs/src/introduction.md)
+[![Documentation](https://img.shields.io/badge/docs-mdBook-blue)](https://mashu.github.io/hfsdr/)
 
 A **CW-focused** HF receiver and panadapter for **KiwiSDR**, **Airspy HF+**,
 **RTL-SDR**, and **QRP Labs QMX/QMX+**. The UI is built around what CW operators

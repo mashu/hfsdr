@@ -69,9 +69,16 @@ pub fn demod_wideband(
     if bb.is_empty() {
         return;
     }
+    let listen = settings.listen_offset_hz;
     let mut base = settings.clone();
     base.listen_offset_hz = 0.0;
     base.decimation = 1;
+    // Ingress already mixed listen to DC; notch offsets stay channel-absolute in settings.
+    for n in &mut base.notches {
+        if n.enabled {
+            n.offset_hz -= listen;
+        }
+    }
     channel.process(bb, audio_rate, &base, out);
 }
 
@@ -91,6 +98,51 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn wideband_notch_uses_absolute_plot_offset_with_rit() {
+        let iq_rate = 384_000.0;
+        let listen = 150.0;
+        let interferer = 420.0;
+        let n = 16_384;
+        let iq = tone_iq(iq_rate, interferer, n);
+        let mut ingress = WidebandCwIngress::new(iq_rate, 0);
+        let mut channel = CwChannel::new(12_000.0);
+        let mut settings = CwChannelSettings {
+            listen_offset_hz: listen,
+            bfo_hz: 650.0,
+            passband_hz: 500.0,
+            ..CwChannelSettings::default()
+        };
+        settings.agc.enabled = false;
+        let mut without = Vec::new();
+        demod_wideband(
+            &mut ingress,
+            &mut channel,
+            &iq,
+            iq_rate,
+            &settings,
+            &mut without,
+        );
+
+        settings.notches[0].enabled = true;
+        settings.notches[0].offset_hz = interferer;
+        settings.notches[0].width_hz = 80.0;
+        let mut with = Vec::new();
+        demod_wideband(&mut ingress, &mut channel, &iq, iq_rate, &settings, &mut with);
+
+        let skip = without.len() / 2;
+        let rms = |v: &[f32]| {
+            let s = &v[skip..];
+            (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+        };
+        assert!(
+            rms(&with) < rms(&without) * 0.5,
+            "wideband notch: with={} without={}",
+            rms(&with),
+            rms(&without)
+        );
     }
 
     #[test]

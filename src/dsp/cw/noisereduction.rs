@@ -37,3 +37,28 @@ impl NoiseReduction {
         (1.0 - level) * sample + level * step.prediction
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blends_tonal_estimate() {
+        let mut nr = NoiseReduction::new();
+        let rate = 8_000.0;
+        let tone_hz = 700.0;
+        let mut out = 0.0f32;
+        for i in 0..rate as usize * 2 {
+            let t = i as f32 / rate;
+            let s = (std::f32::consts::TAU * tone_hz * t).sin();
+            out = nr.process(s, 0.5);
+        }
+        assert!(out.abs() > 0.1);
+    }
+
+    #[test]
+    fn zero_level_passes_through() {
+        let mut nr = NoiseReduction::new();
+        assert_eq!(nr.process(0.42, 0.0), 0.42);
+    }
+}

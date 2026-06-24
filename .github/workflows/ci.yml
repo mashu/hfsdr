@@ -51,6 +51,35 @@ jobs:
           fi
         shell: bash
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libairspyhf-dev librtlsdr-dev
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: cargo llvm-cov --features airspy,rtlsdr --lcov --output-path lcov.info
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: mashu/hfsdr
+          files: lcov.info
+          fail_ci_if_error: false
+
   build-gui:
     name: Build hfsdr GUI (${{ matrix.label }})
     runs-on: ${{ matrix.os }}

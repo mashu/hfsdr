@@ -69,3 +69,59 @@ impl FirDecimator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn decimate_block_completes_quickly() {
+        let mut decim = FirDecimator::with_factor(48_000.0, 2, true);
+        let raw: Vec<Complex32> = (0..128)
+            .map(|i| Complex32::new((i as f32 * 0.1).cos(), 0.0))
+            .collect();
+        let mut out = Vec::new();
+        let t0 = Instant::now();
+        decim.decimate_block(&raw, &mut out);
+        assert!(t0.elapsed() < Duration::from_secs(1));
+        assert!(!out.is_empty());
+        assert!(out.len() < raw.len());
+    }
+
+    #[test]
+    fn unity_factor_passthrough() {
+        let mut d = FirDecimator::with_factor(48_000.0, 1, false);
+        let s = Complex32::new(1.0, -1.0);
+        assert_eq!(d.push(s), Some(s));
+    }
+
+    #[test]
+    fn decimate_block_reduces_length() {
+        let mut d = FirDecimator::with_factor(48_000.0, 4, true);
+        let input: Vec<Complex32> = (0..64)
+            .map(|i| Complex32::new(i as f32, 0.0))
+            .collect();
+        let mut out = Vec::new();
+        d.decimate_block(&input, &mut out);
+        assert!(!out.is_empty());
+        assert!(out.len() <= input.len() / 4 + 1);
+    }
+
+    #[test]
+    fn output_rate_scales_with_factor() {
+        let d = FirDecimator::with_factor(48_000.0, 8, false);
+        assert_eq!(d.output_rate(48_000.0), 6_000.0);
+        assert_eq!(d.factor(), 8);
+    }
+
+    #[test]
+    fn reset_state_clears_counter() {
+        let mut d = FirDecimator::with_factor(48_000.0, 4, false);
+        let _ = d.push(Complex32::new(1.0, 0.0));
+        d.reset_state();
+        let mut out = Vec::new();
+        d.decimate_block(&[Complex32::new(1.0, 0.0); 8], &mut out);
+        assert!(!out.is_empty());
+    }
+}

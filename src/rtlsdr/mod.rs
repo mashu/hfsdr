@@ -336,4 +336,33 @@ mod tests {
     fn iq_ring_capacity_scales_with_rate() {
         assert!(iq_ring_capacity(2_048_000) >= iq_ring_capacity(250_000));
     }
+
+    #[test]
+    fn stream_cb_decodes_unsigned_iq() {
+        let (prod, mut cons) = RingBuffer::<Complex32>::new(8);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let mut ctx = StreamCtx {
+            prod,
+            dropped: Arc::clone(&dropped),
+        };
+        let mut raw = [255u8, 127, 128, 0];
+        stream_cb(
+            raw.as_mut_ptr(),
+            raw.len() as u32,
+            &mut ctx as *mut StreamCtx as *mut c_void,
+        );
+        drop(ctx);
+        let mut out = Vec::new();
+        while let Ok(s) = cons.pop() {
+            out.push(s);
+        }
+        assert_eq!(out.len(), 2);
+        assert!(out[0].re > 0.9);
+    }
+
+    #[test]
+    fn check_maps_success_and_error() {
+        assert!(check("ok", sys::SUCCESS).is_ok());
+        assert!(check("fail", -1).is_err());
+    }
 }
