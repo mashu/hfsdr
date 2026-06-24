@@ -3,8 +3,8 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Response,
-    RichText, Sense, Stroke, TextStyle, Ui, Vec2, Visuals,
+    Align, Align2, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Pos2, Rect,
+    Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2, Visuals,
 };
 
 /// Pointer is over the painted `rect` and nothing opaque covers this widget.
@@ -39,23 +39,82 @@ pub fn apply(ctx: &eframe::egui::Context) {
     visuals.widgets.active.bg_fill = Color32::from_rgb(52, 72, 96);
     visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(32, 38, 50);
     visuals.selection.bg_fill = ACCENT_DIM;
+    visuals.hyperlink_color = ACCENT;
+    visuals.warn_fg_color = WARN;
+    visuals.error_fg_color = Color32::from_rgb(248, 113, 113);
+    visuals.override_text_color = Some(Color32::from_rgb(226, 232, 244));
     style.visuals = visuals;
     // Avoid tooltip-under-cursor hover flicker on compact status chips.
-    style.interaction.tooltip_delay = 0.75;
+    style.interaction.tooltip_delay = 0.55;
     style.spacing.item_spacing = eframe::egui::vec2(8.0, 6.0);
     style.spacing.button_padding = eframe::egui::vec2(10.0, 5.0);
+    style.spacing.indent = 16.0;
+    style.spacing.scroll = eframe::egui::style::ScrollStyle {
+        bar_width: 8.0,
+        ..Default::default()
+    };
     style.text_styles.insert(TextStyle::Heading, FontId::new(18.0, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Body, FontId::new(13.0, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Small, FontId::new(11.0, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
     ctx.set_global_style(style);
+}
+
+/// Top status bar chrome.
+pub fn status_panel_frame() -> Frame {
+    Frame::new()
+        .fill(PANEL)
+        .inner_margin(eframe::egui::Margin::symmetric(10, 6))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(38, 46, 62)))
+        .corner_radius(CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: 8,
+            se: 8,
+        })
+}
+
+/// Compact panel visibility toggle for the status bar.
+pub fn panel_toggle(ui: &mut Ui, on: &mut bool, label: &str, tooltip: &str) -> bool {
+    let accent = if *on { ACCENT } else { MUTED };
+    let bg = if *on {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 34)
+    } else {
+        Color32::from_rgb(30, 36, 48)
+    };
+    let border = Color32::from_rgba_unmultiplied(
+        accent.r(),
+        accent.g(),
+        accent.b(),
+        if *on { 150 } else { 70 },
+    );
+    let resp = ui.add(
+        Button::new(RichText::new(label).small().color(accent))
+            .fill(bg)
+            .stroke(Stroke::new(1.0, border))
+            .min_size(Vec2::new(34.0, 20.0)),
+    );
+    let mut changed = false;
+    if resp.clicked() {
+        *on = !*on;
+        changed = true;
+    }
+    resp.on_hover_text(tooltip);
+    changed
 }
 
 pub fn section_frame() -> eframe::egui::Frame {
     eframe::egui::Frame::new()
         .fill(Color32::from_rgb(28, 33, 44))
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(10))
         .inner_margin(12.0)
         .stroke(Stroke::new(1.0, Color32::from_rgb(45, 52, 68)))
+        .shadow(eframe::egui::epaint::Shadow {
+            offset: [0, 2],
+            blur: 6,
+            spread: 0,
+            color: Color32::from_black_alpha(40),
+        })
 }
 
 /// Full-width section card within the current panel.

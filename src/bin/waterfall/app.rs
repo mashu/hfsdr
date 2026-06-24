@@ -53,8 +53,9 @@ use crate::spot_filter::{
     build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
 };
 use crate::theme::{
-    apply, band_lock_toggle, clickable_badge, collapsible_section, section_card, section_heading,
-    section_hint, stat_row, stage_toggle, toggle, MUTED, OK, WARN,
+    apply, band_lock_toggle, clickable_badge, collapsible_section, panel_toggle, section_card,
+    section_heading, section_hint, stat_row, stage_toggle, status_panel_frame, toggle, ACCENT,
+    MUTED, OK, WARN,
 };
 use crate::widgets::{
     update_trace, PanadapterPlot, SpotLabel, TraceViewKey, SCOPE_HEIGHT,
@@ -312,6 +313,7 @@ pub struct WaterfallApp {
     last_scp_loaded: bool,
     filter_wide: bool,
     show_console: bool,
+    show_shortcuts: bool,
     frame_visible_spots: Vec<Spot>,
     resolver: ContinentResolver,
     annotated: HashSet<String>,
@@ -439,6 +441,7 @@ impl WaterfallApp {
             last_scp_loaded: false,
             filter_wide: false,
             show_console: false,
+            show_shortcuts: false,
             frame_visible_spots: Vec::new(),
             resolver: ContinentResolver::new(),
             annotated: HashSet::new(),
@@ -1645,6 +1648,11 @@ impl WaterfallApp {
         self.engine.send(EngineCommand::Connect(req));
     }
 
+    fn cancel_connection(&mut self) {
+        self.engine.abort_connect();
+        self.engine.send(EngineCommand::Disconnect);
+    }
+
     fn remember_host(&mut self, req: &ConnectRequest) {
         self.recent_hosts.retain(|r| r != req);
         self.recent_hosts.insert(0, req.clone());
@@ -1760,6 +1768,7 @@ impl WaterfallApp {
             console,
             f11,
             overview,
+            help,
             notch1,
             notch2,
             notch3,
@@ -1786,6 +1795,7 @@ impl WaterfallApp {
                 i.key_pressed(Key::Backtick),
                 i.key_pressed(Key::F11),
                 i.key_pressed(Key::M),
+                i.key_pressed(Key::Questionmark),
                 i.key_pressed(Key::Num1),
                 i.key_pressed(Key::Num2),
                 i.key_pressed(Key::Num3),
@@ -1852,6 +1862,9 @@ impl WaterfallApp {
         }
         if overview {
             self.show_band_overview = !self.show_band_overview;
+        }
+        if help {
+            self.show_shortcuts = !self.show_shortcuts;
         }
         if notch1 {
             self.toggle_manual_notch(0);
@@ -2465,9 +2478,12 @@ impl WaterfallApp {
             ConnState::Disconnected => MUTED,
             _ => WARN,
         };
+        let streaming = matches!(self.conn_state, ConnState::Streaming);
+        let rx_color = if streaming { ACCENT } else { MUTED };
+
         ui.horizontal(|ui| {
             let badge_resp = clickable_badge(ui, &conn_label, conn_color)
-                .on_hover_text("Click to open/close connection settings");
+                .on_hover_text("Click to open connection settings");
             if badge_resp.clicked() {
                 self.show_connection_drawer = !self.show_connection_drawer;
             }
@@ -2478,7 +2494,7 @@ impl WaterfallApp {
                     self.show_connection_drawer = !self.show_connection_drawer;
                 }
                 if crate::status_widgets::disconnect_chip(ui).clicked() {
-                    self.engine.send(EngineCommand::Disconnect);
+                    self.cancel_connection();
                 }
             } else if matches!(self.conn_state, ConnState::Disconnected) {
                 let can_connect = self.can_quick_connect();
@@ -2493,18 +2509,46 @@ impl WaterfallApp {
                     self.quick_connect_last();
                 }
             }
+
             ui.separator();
             ui.label(
                 egui::RichText::new(format!("RX {:.6} MHz", self.center_khz / 1000.0))
-                    .small()
+                    .strong()
                     .monospace()
-                    .color(MUTED),
+                    .color(rx_color),
             );
             ui.label(
                 egui::RichText::new(format!("listen {:.0} Hz", self.listen_offset_hz()))
                     .small()
                     .color(MUTED),
             );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("?")
+                    .on_hover_text("Keyboard shortcuts")
+                    .clicked()
+                {
+                    self.show_shortcuts = !self.show_shortcuts;
+                }
+                if ui
+                    .button("F11")
+                    .on_hover_text("Toggle fullscreen (F11)")
+                    .clicked()
+                {
+                    let on = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+                }
+                ui.separator();
+                panel_toggle(ui, &mut self.show_console, "Log", "Application log (`)");
+                panel_toggle(ui, &mut self.show_history, "Spots", "Decoded callsign history");
+                panel_toggle(ui, &mut self.show_right, "DSP", "CW demod, skimmer, audio, display");
+                panel_toggle(ui, &mut self.show_left, "Bands", "Band presets and VFO");
+            });
+        });
+
+        ui.horizontal_wrapped(|ui| {
             ui.label(
                 egui::RichText::new(format!("SNR {:.0} dB", self.last_snr_db))
                     .small()
@@ -2524,7 +2568,6 @@ impl WaterfallApp {
             };
             crate::status_widgets::cursor_freq_slot(ui, &cursor_label, cursor_active);
             ui.separator();
-            let streaming = matches!(self.conn_state, ConnState::Streaming);
             let engine_resp = crate::status_widgets::engine_pipeline_chip(
                 ui,
                 self.show_pipeline_drawer,
@@ -2566,7 +2609,11 @@ impl WaterfallApp {
                     self.process_iq_cmds(vec![cmd]);
                 }
             }
-            ui.label(format!("{:.0} kS/s", self.stats.effective_sps / 1000.0));
+            ui.label(
+                egui::RichText::new(format!("{:.0} kS/s", self.stats.effective_sps / 1000.0))
+                    .small()
+                    .color(MUTED),
+            );
             if !self.is_kiwi
                 && self.stats.sample_rate > 0.0
                 && (self.stats.effective_sps / self.stats.sample_rate) < 0.85
@@ -2581,43 +2628,79 @@ impl WaterfallApp {
                 );
             }
             if self.stats.iq_playback {
-                ui.separator();
                 ui.colored_label(OK, "PLAYBACK");
             }
             if self.stats.dropped > 0 {
-                ui.separator();
                 ui.colored_label(WARN, format!("drops {}", self.stats.dropped));
             }
             if let Some(rssi) = self.stats.rssi_dbm {
-                ui.separator();
-                ui.label(format!("{rssi:.0} dBm"));
+                ui.label(
+                    egui::RichText::new(format!("{rssi:.0} dBm"))
+                        .small()
+                        .color(MUTED),
+                );
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("F11")
-                    .on_hover_text("Toggle fullscreen (F11)")
-                    .clicked()
-                {
-                    let on = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
-                }
-                ui.separator();
-                ui.toggle_value(&mut self.show_right, "Right");
-                ui.toggle_value(&mut self.show_history, "Spots");
-                ui.toggle_value(&mut self.show_left, "Left");
-                ui.toggle_value(&mut self.show_console, "Log");
-                if self.connection_unstable() {
-                    ui.separator();
-                    ui.colored_label(WARN, "connection unstable");
-                }
-            });
+            if self.connection_unstable() {
+                ui.colored_label(WARN, "connection unstable");
+            }
         });
+
         if let Some(err) = &self.last_error {
             if matches!(self.conn_state, ConnState::Reconnecting { .. }) {
                 ui.colored_label(WARN, err);
             }
         }
+    }
+
+    fn shortcuts_popup(&mut self, ctx: &egui::Context) {
+        if !self.show_shortcuts {
+            return;
+        }
+        let mut open = self.show_shortcuts;
+        egui::Window::new("Keyboard shortcuts")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .frame(crate::popup::popup_window_frame())
+            .show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                ui.label(
+                    egui::RichText::new("Press ? again to close")
+                        .small()
+                        .color(MUTED),
+                );
+                ui.add_space(6.0);
+                for (keys, action) in [
+                    ("← / →", "Pan view (zoomed) or tune RX · hold to accelerate"),
+                    ("Shift / Ctrl", "Fine / fast pan steps"),
+                    ("Z", "Zero-beat to strongest carrier"),
+                    ("L", "Lock pitch to BFO"),
+                    (", / .", "RIT −10 / +10 Hz"),
+                    ("\\", "Clear RIT"),
+                    ("[ / ]", "Narrow / widen filter"),
+                    ("1 – 4", "Toggle IQ notches"),
+                    ("N / B / R / A / P", "Auto-notch / blanker / NR / AGC / APF"),
+                    ("F / M", "Full IQ span / band overview"),
+                    ("Space / - / +", "Mute / volume down / up"),
+                    ("`", "Toggle log panel"),
+                    ("F11", "Fullscreen"),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(keys)
+                                .monospace()
+                                .color(ACCENT)
+                                .size(12.0),
+                        );
+                        ui.label(egui::RichText::new(action).small());
+                    });
+                }
+                ui.add_space(8.0);
+                if ui.button("Close").clicked() {
+                    open = false;
+                }
+            });
+        self.show_shortcuts = open;
     }
 
     fn left_panel(&mut self, ui: &mut egui::Ui) {
@@ -2647,7 +2730,7 @@ impl WaterfallApp {
                 ui.add_space(4.0);
                 section_hint(
                     ui,
-                    "Operator: Z zero-beat · , . RIT ±10 Hz · \\ clear RIT · L pitch lock · F full span · M overview\n\
+                    "Operator: Z zero-beat · , . RIT · \\ clear RIT · L pitch lock · F full span · M overview · ? shortcuts\n\
                      Audio: Space speakers · - + volume · QRM: 1–4 IQ notches · P APF · N auto-notch · B blanker · R NR · A AGC · [ ] filter width · F11 fullscreen",
                 );
             });
@@ -2718,8 +2801,15 @@ impl WaterfallApp {
     }
 
     fn connection_card(&mut self, ui: &mut egui::Ui) {
+        let connecting = matches!(
+            self.conn_state,
+            ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
+        );
         if self.connection_unstable() {
             alert_banner(ui, "Link unstable — tuning kept", self.last_error.as_deref());
+            if connecting {
+                section_hint(ui, "Click Cancel to stop the current attempt and disable auto-reconnect.");
+            }
         }
 
         popup_section(ui, "Connect", None, |ui| {
@@ -2751,26 +2841,24 @@ impl WaterfallApp {
                 );
             });
 
-            let connecting = matches!(
-                self.conn_state,
-                ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
-            );
+            let session_active = self.connection_session_live();
             let can_connect = is_local_source(self.form_kind) || !self.form_host.trim().is_empty();
             ui.horizontal(|ui| {
-                if primary_button(ui, "Connect", can_connect && !connecting).clicked() {
+                if primary_button(ui, "Connect", can_connect && !session_active).clicked() {
                     self.connect_now();
                 }
-                if connecting && secondary_button(ui, "Cancel").clicked() {
-                    self.engine.send(EngineCommand::Disconnect);
-                }
-                if matches!(
-                    self.conn_state,
-                    ConnState::Streaming
-                        | ConnState::Reconnecting { .. }
-                        | ConnState::Connecting { .. }
-                ) && secondary_button(ui, "Disconnect").clicked()
-                {
-                    self.engine.send(EngineCommand::Disconnect);
+                if session_active {
+                    let label = if connecting { "Cancel" } else { "Disconnect" };
+                    if secondary_button(ui, label)
+                        .on_hover_text(if connecting {
+                            "Stop connecting and cancel auto-retry"
+                        } else {
+                            "Disconnect from the receiver"
+                        })
+                        .clicked()
+                    {
+                        self.cancel_connection();
+                    }
                 }
             });
         });
@@ -4174,7 +4262,7 @@ impl WaterfallApp {
                     ConnState::Disconnected => {
                         ui.colored_label(
                             MUTED,
-                            "Not connected — click OFFLINE in the status bar to pick a receiver",
+                            "Not connected — click OFFLINE in the status bar or ⚡ to connect",
                         );
                     }
                     ConnState::Streaming => {}
@@ -4508,7 +4596,9 @@ impl eframe::App for WaterfallApp {
         self.frame_visible_spots = self.visible_spots();
 
         self.update_plot_hover(&ctx);
-        egui::Panel::top("status").show_inside(ui, |ui| self.status_banner(ui));
+        egui::Panel::top("status")
+            .frame(status_panel_frame())
+            .show_inside(ui, |ui| self.status_banner(ui));
 
         if self.show_left {
             egui::Panel::left("left")
@@ -4549,6 +4639,7 @@ impl eframe::App for WaterfallApp {
         self.connection_popup(&ctx);
         self.iq_popup(&ctx);
         self.pipeline_popup(&ctx);
+        self.shortcuts_popup(&ctx);
 
         self.apply_radio_settings();
         self.autosave();
@@ -4559,8 +4650,7 @@ impl eframe::App for WaterfallApp {
 
     fn on_exit(&mut self) {
         self.current_settings().save();
-        // Start engine teardown before eframe drops `EngineHandle` (which joins the thread).
-        self.engine.send(EngineCommand::Shutdown);
+        self.engine.shutdown_now();
     }
 }
 

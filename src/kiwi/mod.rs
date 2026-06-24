@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
@@ -135,7 +135,7 @@ impl KiwiSource {
         }
     }
 
-    fn connect_ws(&self) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+    fn connect_ws(&self, cancel: &AtomicBool) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -152,72 +152,45 @@ impl KiwiSource {
                 op: "kiwi resolve",
                 code: -3,
             })?;
-        let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|_| {
-            SourceError::Backend {
-                op: "kiwi connect",
-                code: -1,
-            }
-        })?;
         let request = url.into_client_request().map_err(|_| SourceError::Backend {
             op: "kiwi ws request",
             code: -4,
         })?;
-        let (ws, _resp) = tungstenite::client::client(
-            request,
-            MaybeTlsStream::Plain(tcp),
-        )
-        .map_err(|_| SourceError::Backend {
-            op: "kiwi handshake",
-            code: -2,
-        })?;
-        Ok(ws)
-    }
-}
-
-impl IqSource for KiwiSource {
-    fn sample_rates(&self) -> Vec<u32> {
-        vec![KIWI_IQ_RATE]
-    }
-
-    fn sample_rate(&self) -> u32 {
-        KIWI_IQ_RATE
-    }
-
-    fn set_sample_rate(&mut self, sr: u32) -> Result<()> {
-        if sr == KIWI_IQ_RATE {
-            Ok(())
-        } else {
-            Err(SourceError::Unsupported(format!(
-                "KiwiSDR IQ rate is fixed at {KIWI_IQ_RATE} S/s"
-            )))
+        let deadline = Instant::now() + CONNECT_TIMEOUT;
+        while Instant::now() < deadline {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(SourceError::Backend {
+                    op: "kiwi connect cancelled",
+                    code: -6,
+                });
+            }
+            let Ok(tcp) = TcpStream::connect_timeout(&addr, Duration::from_millis(400)) else {
+                continue;
+            };
+            let Ok((ws, _resp)) =
+                tungstenite::client::client(request.clone(), MaybeTlsStream::Plain(tcp))
+            else {
+                continue;
+            };
+            return Ok(ws);
         }
+        Err(SourceError::Backend {
+            op: "kiwi connect",
+            code: -1,
+        })
     }
 
-    fn tune(&mut self, hz: f64) -> Result<()> {
-        self.freq_hz = hz;
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(self.mod_cmd());
-        }
-        Ok(())
-    }
-
-    fn frequency(&self) -> f64 {
-        self.freq_hz
-    }
-
-    fn start(&mut self) -> Result<Consumer<Complex32>> {
+    pub fn start_cancellable(&mut self, cancel: &AtomicBool) -> Result<Consumer<Complex32>> {
         if self.streaming {
             return Err(SourceError::InvalidState("already streaming"));
         }
 
-        let mut ws = self.connect_ws()?;
+        let mut ws = self.connect_ws(cancel)?;
 
         if let MaybeTlsStream::Plain(tcp) = ws.get_ref() {
             let _ = tcp.set_read_timeout(Some(READ_TIMEOUT));
         }
 
-        // Opening handshake: auth plus early IQ setup (original hfsdr behaviour).
-        // The reader still sends the full kiwiclient command sequence after sample_rate=….
         for line in [
             "SET auth t=kiwi p=",
             "SET ident_user=hfsdr",
@@ -229,6 +202,13 @@ impl IqSource for KiwiSource {
             "SET squelch=0 max=0",
             "SET keepalive",
         ] {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = ws.close(None);
+                return Err(SourceError::Backend {
+                    op: "kiwi connect cancelled",
+                    code: -6,
+                });
+            }
             ws.send(Message::Text(line.into()))
                 .map_err(|_| SourceError::Backend {
                     op: "kiwi auth",
@@ -265,6 +245,43 @@ impl IqSource for KiwiSource {
         self.handle = Some(handle);
         self.streaming = true;
         Ok(cons)
+    }
+}
+
+impl IqSource for KiwiSource {
+    fn sample_rates(&self) -> Vec<u32> {
+        vec![KIWI_IQ_RATE]
+    }
+
+    fn sample_rate(&self) -> u32 {
+        KIWI_IQ_RATE
+    }
+
+    fn set_sample_rate(&mut self, sr: u32) -> Result<()> {
+        if sr == KIWI_IQ_RATE {
+            Ok(())
+        } else {
+            Err(SourceError::Unsupported(format!(
+                "KiwiSDR IQ rate is fixed at {KIWI_IQ_RATE} S/s"
+            )))
+        }
+    }
+
+    fn tune(&mut self, hz: f64) -> Result<()> {
+        self.freq_hz = hz;
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.send(self.mod_cmd());
+        }
+        Ok(())
+    }
+
+    fn frequency(&self) -> f64 {
+        self.freq_hz
+    }
+
+    fn start(&mut self) -> Result<Consumer<Complex32>> {
+        static NEVER: AtomicBool = AtomicBool::new(false);
+        self.start_cancellable(&NEVER)
     }
 
     fn stop(&mut self) -> Result<()> {

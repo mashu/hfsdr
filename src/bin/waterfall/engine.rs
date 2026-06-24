@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Mutex;
 use std::thread;
@@ -42,8 +43,6 @@ const MAX_SPECTRUM_ROWS_WIDEBAND: usize = 8;
 /// Catch-up pumps when the IQ ring is backing up (Airspy at 384 kHz).
 const MAX_CATCHUP_PUMPS: usize = 8;
 const MAX_CATCHUP_PUMPS_LIGHT: usize = 2;
-/// Max time the UI thread waits for the engine to exit on close (then detach).
-const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
 /// Wideband demod/FFT only need the freshest samples — not the full drain batch.
 const WIDEBAND_IQ_THRESHOLD: f32 = 96_000.0;
 const MAX_AUDIO_SAMPLES_WB: usize = 8192;
@@ -244,6 +243,7 @@ pub struct EngineHandle {
     cmd_tx: Sender<EngineCommand>,
     shared: Arc<Mutex<EngineShared>>,
     params: Arc<Mutex<EngineParams>>,
+    connect_cancel: Arc<AtomicBool>,
     join: Option<thread::JoinHandle<()>>,
 }
 
@@ -252,13 +252,15 @@ impl EngineHandle {
         let (cmd_tx, cmd_rx) = channel::<EngineCommand>();
         let shared = Arc::new(Mutex::new(EngineShared::default()));
         let params = Arc::new(Mutex::new(EngineParams::default()));
+        let connect_cancel = Arc::new(AtomicBool::new(false));
         let shared_thread = Arc::clone(&shared);
         let params_thread = Arc::clone(&params);
+        let connect_cancel_thread = Arc::clone(&connect_cancel);
 
         let join = thread::Builder::new()
             .name("engine".into())
             .spawn(move || {
-                Engine::new(cmd_rx, shared_thread, params_thread).run();
+                Engine::new(cmd_rx, shared_thread, params_thread, connect_cancel_thread).run();
             })
             .expect("spawn engine thread");
 
@@ -266,12 +268,18 @@ impl EngineHandle {
             cmd_tx,
             shared,
             params,
+            connect_cancel,
             join: Some(join),
         }
     }
 
     pub fn send(&self, cmd: EngineCommand) {
         let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Abort a blocking `connect()` from the UI thread (must run before or with Disconnect).
+    pub fn abort_connect(&self) {
+        self.connect_cancel.store(true, Ordering::Relaxed);
     }
 
     /// Overwrite the engine's view of UI settings (called once per UI frame).
@@ -294,22 +302,20 @@ impl EngineHandle {
         })
     }
 
+    /// Signal shutdown and detach the worker thread — never blocks the UI thread.
+    pub fn shutdown_now(&mut self) {
+        self.abort_connect();
+        self.send(EngineCommand::Shutdown);
+        if let Some(h) = self.join.take() {
+            // Dropping JoinHandle without join() detaches the thread.
+            drop(h);
+        }
+    }
 }
 
 impl Drop for EngineHandle {
     fn drop(&mut self) {
-        self.send(EngineCommand::Shutdown);
-        if let Some(h) = self.join.take() {
-            let deadline = Instant::now() + SHUTDOWN_JOIN_TIMEOUT;
-            while !h.is_finished() && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(16));
-            }
-            if h.is_finished() {
-                let _ = h.join();
-            } else {
-                log::warn("engine thread did not exit in time; detaching on close");
-            }
-        }
+        self.shutdown_now();
     }
 }
 
@@ -368,6 +374,9 @@ struct Engine {
     last_pump_at: Instant,
     last_spectrum_rows: usize,
     row_pool: Vec<Vec<f32>>,
+
+    /// Set by Disconnect/Cancel so an in-flight `connect()` can abort promptly.
+    connect_cancel: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -375,6 +384,7 @@ impl Engine {
         cmd_rx: Receiver<EngineCommand>,
         shared: Arc<Mutex<EngineShared>>,
         params: Arc<Mutex<EngineParams>>,
+        connect_cancel: Arc<AtomicBool>,
     ) -> Self {
         Self {
             cmd_rx,
@@ -425,6 +435,7 @@ impl Engine {
             last_pump_at: Instant::now(),
             last_spectrum_rows: MIN_SPECTRUM_ROWS_WIDEBAND,
             row_pool: Vec::new(),
+            connect_cancel,
         }
     }
 
@@ -524,6 +535,7 @@ impl Engine {
                 self.start_connect(&req);
             }
             EngineCommand::Disconnect => {
+                self.connect_cancel.store(true, Ordering::Relaxed);
                 self.teardown();
                 self.request = None;
                 self.retry_at = None;
@@ -686,17 +698,36 @@ impl Engine {
                 self.set_state(ConnState::Disconnected);
             }
             EngineCommand::Shutdown => {
+                self.connect_cancel.store(true, Ordering::Relaxed);
                 self.teardown();
+                self.audio = None;
+                self.ingress_worker.take();
                 self.running = false;
             }
         }
     }
 
     fn start_connect(&mut self, req: &ConnectRequest) {
+        self.connect_cancel.store(false, Ordering::Relaxed);
         self.teardown();
+        if self.connect_cancel.load(Ordering::Relaxed) || self.request.is_none() {
+            self.set_state(ConnState::Disconnected);
+            return;
+        }
         self.set_state(ConnState::Connecting { label: req.label() });
-        match connect(req) {
+        self.drain_commands();
+        if self.connect_cancel.load(Ordering::Relaxed) || self.request.is_none() {
+            self.set_state(ConnState::Disconnected);
+            return;
+        }
+        match connect(req, &self.connect_cancel) {
             Ok(conn) => {
+                if self.connect_cancel.load(Ordering::Relaxed) || self.request.is_none() {
+                    let mut conn = conn;
+                    let _ = conn.source.stop();
+                    self.set_state(ConnState::Disconnected);
+                    return;
+                }
                 self.demod = IqAudioDemod::new();
                 self.audio_device_open(conn.sample_rate as u32);
                 self.last_data = Instant::now();
@@ -719,8 +750,14 @@ impl Engine {
                 self.publish_stats(0);
             }
             Err(error) => {
+                if self.connect_cancel.load(Ordering::Relaxed)
+                    || self.request.is_none()
+                    || error.contains("cancelled")
+                {
+                    self.set_state(ConnState::Disconnected);
+                    return;
+                }
                 self.set_error(Some(error));
-                // Auto-reconnect with backoff; the UI still offers Disconnect.
                 self.schedule_reconnect();
                 self.set_state(ConnState::Reconnecting {
                     attempt: self.reconnect_attempt,
@@ -1448,6 +1485,11 @@ impl Engine {
 
     fn fail_connection(&mut self, reason: String) {
         self.teardown();
+        if self.request.is_none() || self.connect_cancel.load(Ordering::Relaxed) {
+            self.set_error(None);
+            self.set_state(ConnState::Disconnected);
+            return;
+        }
         self.set_error(Some(reason));
         self.schedule_reconnect();
         self.set_state(ConnState::Reconnecting {

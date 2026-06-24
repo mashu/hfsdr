@@ -366,19 +366,29 @@ pub struct Connection {
 
 /// Build, tune, and start the requested source. Blocks until the link is up
 /// (or fails); intended to be called from the engine thread, never the UI.
-pub fn connect(req: &ConnectRequest) -> Result<Connection, String> {
+/// Polls `cancel` during network setup so Disconnect/Cancel can abort promptly.
+pub fn connect(req: &ConnectRequest, cancel: &std::sync::atomic::AtomicBool) -> Result<Connection, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("connection cancelled".to_string());
+    }
     match req.kind {
-        SourceKind::Kiwi => connect_kiwi(req),
+        SourceKind::Kiwi => connect_kiwi(req, cancel),
         #[cfg(feature = "airspy")]
-        SourceKind::Airspy => connect_airspy(req),
+        SourceKind::Airspy => connect_airspy(req, cancel),
         #[cfg(feature = "rtlsdr")]
-        SourceKind::RtlSdr => connect_rtlsdr(req),
+        SourceKind::RtlSdr => connect_rtlsdr(req, cancel),
         #[cfg(feature = "qmx")]
-        SourceKind::Qmx => connect_qmx(req),
+        SourceKind::Qmx => connect_qmx(req, cancel),
     }
 }
 
-fn connect_kiwi(req: &ConnectRequest) -> Result<Connection, String> {
+fn connect_kiwi(
+    req: &ConnectRequest,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Connection, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("connection cancelled".to_string());
+    }
     if req.host.trim().is_empty() {
         return Err("KiwiSDR host is empty".to_string());
     }
@@ -388,9 +398,12 @@ fn connect_kiwi(req: &ConnectRequest) -> Result<Connection, String> {
         .with_freq_offset_khz(req.kiwi.freq_offset_khz)
         .with_ar_out_hz(req.kiwi.ar_out_hz);
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("connection cancelled".to_string());
+    }
     let reported = src.sample_rate();
     let (ingress_decim, eff_sr) = req.kiwi.ingress_decimation(reported);
-    let iq = src.start().map_err(|e| e.to_string())?;
+    let iq = src.start_cancellable(cancel).map_err(|e| e.to_string())?;
     Ok(Connection {
         source: Box::new(src),
         iq,
@@ -404,7 +417,13 @@ fn connect_kiwi(req: &ConnectRequest) -> Result<Connection, String> {
 }
 
 #[cfg(feature = "airspy")]
-fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
+fn connect_airspy(
+    req: &ConnectRequest,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Connection, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("connection cancelled".to_string());
+    }
     let mut src = AirspyHf::open().map_err(|e| e.to_string())?;
     let sr = if req.sample_rate != 0 {
         req.sample_rate
@@ -440,7 +459,13 @@ fn connect_airspy(req: &ConnectRequest) -> Result<Connection, String> {
 }
 
 #[cfg(feature = "rtlsdr")]
-fn connect_rtlsdr(req: &ConnectRequest) -> Result<Connection, String> {
+fn connect_rtlsdr(
+    req: &ConnectRequest,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Connection, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("connection cancelled".to_string());
+    }
     let mut src = RtlSdr::open_index(req.rtlsdr.device_index).map_err(|e| e.to_string())?;
     let sr = if req.sample_rate != 0 {
         req.sample_rate
@@ -479,7 +504,13 @@ fn connect_rtlsdr(req: &ConnectRequest) -> Result<Connection, String> {
 }
 
 #[cfg(feature = "qmx")]
-fn connect_qmx(req: &ConnectRequest) -> Result<Connection, String> {
+fn connect_qmx(
+    req: &ConnectRequest,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Connection, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("connection cancelled".to_string());
+    }
     let q = &req.qmx;
     let mut src = QmxSource::open(
         &q.serial_port,

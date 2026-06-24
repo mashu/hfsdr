@@ -53,6 +53,9 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "hfsdr",
         options,
-        Box::new(move |_cc| Ok(Box::new(WaterfallApp::new(autoconnect)))),
+        Box::new(move |cc| {
+            crate::theme::apply(&cc.egui_ctx);
+            Ok(Box::new(WaterfallApp::new(autoconnect)))
+        }),
     )
 }
