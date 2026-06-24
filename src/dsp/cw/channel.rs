@@ -93,6 +93,14 @@ impl CwChannel {
         20.0 * (self.snr_peak / self.snr_floor.max(1e-7)).log10()
     }
 
+    pub fn agc_gain(&self) -> f32 {
+        self.agc.gain()
+    }
+
+    pub fn agc_envelope(&self) -> f32 {
+        self.agc.envelope()
+    }
+
     pub fn process(
         &mut self,
         input: &[Complex32],

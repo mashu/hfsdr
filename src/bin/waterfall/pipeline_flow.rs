@@ -35,7 +35,7 @@ impl PipelineStage {
             Self::ManualNotches => "IQ notches",
             Self::ListenNco => "NCO / listen shift",
             Self::DecimatorFir => "Decimator anti-alias FIR",
-            Self::ChannelFir => "Channel FIR",
+            Self::ChannelFir => "Channel filter",
             Self::Agc => "AGC",
             Self::Bfo => "BFO detector",
             Self::Apf => "Audio peak filter",
@@ -160,6 +160,8 @@ impl PipelineFlow {
             }
         });
         ui.add_space(4.0);
+        legend_row(ui, snap);
+        ui.add_space(6.0);
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(CANVAS_W, CANVAS_H), Sense::click_and_drag());
@@ -252,15 +254,13 @@ impl PipelineFlow {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         }
 
-        ui.add_space(6.0);
-        legend_row(ui, snap);
         toggled
     }
 }
 
 struct NodeSpec {
     id: NodeId,
-    title: &'static str,
+    title: String,
     subtitle: String,
     enabled: bool,
     kind: NodeKind,
@@ -342,7 +342,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         ),
         node_toggle(
             NodeId::ChannelFir,
-            "Channel FIR",
+            channel_filter_title(snap.cw.channel_filter),
             format!(
                 "BW {:.0} Hz · {}",
                 snap.cw.passband_hz,
@@ -549,16 +549,23 @@ fn chain_edges(edges: &mut Vec<Edge>, chain: &[NodeId], accent: bool) {
     }
 }
 
+fn channel_filter_title(kind: ChannelFilterKind) -> String {
+    match kind {
+        ChannelFilterKind::LinearFir => "Channel FIR".to_string(),
+        ChannelFilterKind::Iir2Pole => "Channel IIR".to_string(),
+    }
+}
+
 fn node_fixed(
     id: NodeId,
-    title: &'static str,
+    title: impl Into<String>,
     subtitle: String,
     enabled: bool,
     kind: NodeKind,
 ) -> NodeSpec {
     NodeSpec {
         id,
-        title,
+        title: title.into(),
         subtitle,
         enabled,
         kind,
@@ -569,7 +576,7 @@ fn node_fixed(
 
 fn node_toggle(
     id: NodeId,
-    title: &'static str,
+    title: impl Into<String>,
     subtitle: String,
     enabled: bool,
     kind: NodeKind,
@@ -577,7 +584,7 @@ fn node_toggle(
 ) -> NodeSpec {
     NodeSpec {
         id,
-        title,
+        title: title.into(),
         subtitle,
         enabled,
         kind,
@@ -586,7 +593,7 @@ fn node_toggle(
     }
 }
 
-fn node(id: NodeId, title: &'static str, subtitle: String, enabled: bool, kind: NodeKind) -> NodeSpec {
+fn node(id: NodeId, title: impl Into<String>, subtitle: String, enabled: bool, kind: NodeKind) -> NodeSpec {
     node_fixed(id, title, subtitle, enabled, kind)
 }
 
@@ -711,7 +718,7 @@ fn paint_node(painter: &Painter, rect: Rect, node: &NodeSpec, hovered: bool) {
     painter.text(
         rect.left_top() + Vec2::new(10.0, 8.0),
         Align2::LEFT_TOP,
-        node.title,
+        &node.title,
         FontId::proportional(12.0),
         title_color,
     );

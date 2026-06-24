@@ -37,6 +37,14 @@ impl IqAudioDemod {
         self.channel.snr_db()
     }
 
+    pub fn agc_gain(&self) -> f32 {
+        self.channel.agc_gain()
+    }
+
+    pub fn agc_envelope(&self) -> f32 {
+        self.channel.agc_envelope()
+    }
+
     /// Demodulate `samples` into `out` (reused buffer, no per-call allocation).
     pub fn process(
         &mut self,

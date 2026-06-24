@@ -24,6 +24,7 @@ use hfsdr::{Complex32, CwChannelSettings, FirDecimator, IngressWorker, IqAudioDe
 
 use rayon::join;
 
+use crate::af_scope::SCOPE_LEN;
 use crate::audio::AudioOutput;
 use crate::log;
 use crate::skimmer::{ScpStatus, SkimmerHandle};
@@ -100,6 +101,14 @@ pub struct EngineStats {
     pub iq_buffer_fill: f32,
     /// Seconds of IQ currently queued at nominal sample rate.
     pub iq_buffer_secs: f32,
+    /// Smoothed peak |audio| for AF scope / RF gain tuning.
+    pub audio_peak: f32,
+    /// Smoothed RMS |audio|.
+    pub audio_rms: f32,
+    /// Current IQ-envelope AGC gain (1.0 when AGC off).
+    pub agc_gain: f32,
+    /// Smoothed IQ magnitude before AGC.
+    pub agc_envelope: f32,
 }
 
 impl Default for EngineStats {
@@ -129,6 +138,10 @@ impl Default for EngineStats {
             iq_capture_path: None,
             iq_buffer_fill: 0.0,
             iq_buffer_secs: 0.0,
+            audio_peak: 0.0,
+            audio_rms: 0.0,
+            agc_gain: 1.0,
+            agc_envelope: 0.0,
         }
     }
 }
@@ -171,6 +184,8 @@ pub struct EngineShared {
     pub spots: Vec<Spot>,
     pub last_error: Option<String>,
     pub rows_seq: u64,
+    /// Recent demod audio samples for the AF scope (oldest first).
+    pub audio_scope: Vec<f32>,
 }
 
 impl Default for EngineShared {
@@ -183,6 +198,7 @@ impl Default for EngineShared {
             spots: Vec::new(),
             last_error: None,
             rows_seq: 0,
+            audio_scope: Vec::new(),
         }
     }
 }
@@ -236,6 +252,7 @@ pub struct EnginePoll {
     pub rows: Vec<Vec<f32>>,
     pub latest: Vec<f32>,
     pub last_error: Option<String>,
+    pub audio_scope: Vec<f32>,
 }
 
 /// UI-side handle to the engine thread.
@@ -299,6 +316,7 @@ impl EngineHandle {
             rows,
             latest: guard.latest.clone(),
             last_error: guard.last_error.clone(),
+            audio_scope: guard.audio_scope.clone(),
         })
     }
 
@@ -316,6 +334,56 @@ impl EngineHandle {
 impl Drop for EngineHandle {
     fn drop(&mut self) {
         self.shutdown_now();
+    }
+}
+
+struct AudioScopeRing {
+    buf: Vec<f32>,
+    write: usize,
+    peak: f32,
+    rms: f32,
+}
+
+impl AudioScopeRing {
+    fn new() -> Self {
+        Self {
+            buf: vec![0.0; SCOPE_LEN],
+            write: 0,
+            peak: 0.0,
+            rms: 0.0,
+        }
+    }
+
+    fn push_block(&mut self, samples: &[f32]) {
+        if samples.is_empty() {
+            return;
+        }
+        let stride = (samples.len() / 48).max(1);
+        let mut block_peak = 0.0f32;
+        let mut block_sq = 0.0f32;
+        let mut n = 0u32;
+        for &s in samples.iter().step_by(stride) {
+            self.buf[self.write] = s;
+            self.write = (self.write + 1) % self.buf.len();
+            let a = s.abs();
+            block_peak = block_peak.max(a);
+            block_sq += a * a;
+            n += 1;
+        }
+        if n > 0 {
+            let block_rms = (block_sq / n as f32).sqrt();
+            self.peak = self.peak * 0.9 + block_peak * 0.1;
+            self.rms = self.rms * 0.9 + block_rms * 0.1;
+        }
+    }
+
+    fn ordered(&self) -> Vec<f32> {
+        let len = self.buf.len();
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            out.push(self.buf[(self.write + i) % len]);
+        }
+        out
     }
 }
 
@@ -342,6 +410,7 @@ struct Engine {
     spectrum_ingress_rate: f32,
     ingress_worker: Option<IngressWorker>,
     audio_scratch: Vec<f32>,
+    audio_scope: AudioScopeRing,
     latest: Vec<f32>,
     /// Max-hold spectrum for skimmer peak picking (CW carriers are intermittent).
     skimmer_peak_hold: Vec<f32>,
@@ -374,6 +443,11 @@ struct Engine {
     last_pump_at: Instant,
     last_spectrum_rows: usize,
     row_pool: Vec<Vec<f32>>,
+    level_audio_peak: f32,
+    level_audio_rms: f32,
+    level_agc_gain: f32,
+    level_agc_envelope: f32,
+    level_audio_scope: Vec<f32>,
 
     /// Set by Disconnect/Cancel so an in-flight `connect()` can abort promptly.
     connect_cancel: Arc<AtomicBool>,
@@ -406,6 +480,7 @@ impl Engine {
             spectrum_ingress_rate: 384_000.0,
             ingress_worker: Some(IngressWorker::spawn()),
             audio_scratch: Vec::new(),
+            audio_scope: AudioScopeRing::new(),
             latest: vec![-120.0; FFT_SIZE],
             skimmer_peak_hold: vec![-120.0; FFT_SIZE],
             last_skimmer_center_hz: f64::NAN,
@@ -435,6 +510,11 @@ impl Engine {
             last_pump_at: Instant::now(),
             last_spectrum_rows: MIN_SPECTRUM_ROWS_WIDEBAND,
             row_pool: Vec::new(),
+            level_audio_peak: 0.0,
+            level_audio_rms: 0.0,
+            level_agc_gain: 1.0,
+            level_agc_envelope: 0.0,
+            level_audio_scope: Vec::new(),
             connect_cancel,
         }
     }
@@ -1036,6 +1116,20 @@ impl Engine {
                 audio.push(&self.audio_scratch, audio_rate as u32, params.volume);
             }
         }
+        if !self.audio_scratch.is_empty() {
+            self.audio_scope.push_block(&self.audio_scratch);
+            self.level_audio_scope = self.audio_scope.ordered();
+        }
+
+        let agc_gain = if params.cw.agc.enabled {
+            self.demod.agc_gain()
+        } else {
+            params.cw.agc.manual_gain
+        };
+        self.level_agc_gain = agc_gain;
+        self.level_agc_envelope = self.demod.agc_envelope();
+        self.level_audio_peak = self.audio_scope.peak;
+        self.level_audio_rms = self.audio_scope.rms;
 
         let fft_input: &[Complex32] = &self.spectrum_scratch;
         let max_rows = self.adaptive_spectrum_rows(device_rate);
@@ -1344,7 +1438,12 @@ impl Engine {
                 iq_capture_path,
                 iq_buffer_fill,
                 iq_buffer_secs,
+                audio_peak: self.level_audio_peak,
+                audio_rms: self.level_audio_rms,
+                agc_gain: self.level_agc_gain,
+                agc_envelope: self.level_agc_envelope,
             };
+            guard.audio_scope = self.level_audio_scope.clone();
         }
     }
 
@@ -1429,6 +1528,10 @@ impl Engine {
                 iq_capture_path,
                 iq_buffer_fill,
                 iq_buffer_secs,
+                audio_peak: self.level_audio_peak,
+                audio_rms: self.level_audio_rms,
+                agc_gain: self.level_agc_gain,
+                agc_envelope: self.level_agc_envelope,
             };
         }
     }

@@ -69,6 +69,14 @@ impl CwAgc {
         self.gain = self.gain.clamp(0.02, 64.0);
         self.gain
     }
+
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
+    pub fn envelope(&self) -> f32 {
+        self.envelope
+    }
 }
 
 #[cfg(test)]

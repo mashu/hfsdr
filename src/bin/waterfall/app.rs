@@ -21,6 +21,7 @@ use hfsdr::{
     MAX_NOTCHES,
 };
 
+use crate::af_scope::{self, AfScopeParams, classify_level};
 use crate::audio::AudioOutput;
 use crate::colormap::db_to_colour;
 use crate::controls::{
@@ -292,6 +293,7 @@ pub struct WaterfallApp {
     last_audio_device: usize,
     audio_enabled: bool,
     volume: f32,
+    audio_scope: Vec<f32>,
 
     skimmer_enabled: bool,
     skimmer: SkimmerConfig,
@@ -423,6 +425,7 @@ impl WaterfallApp {
             last_audio_device: 0,
             audio_enabled: true,
             volume: 1.0,
+            audio_scope: Vec::new(),
             skimmer_enabled: true,
             skimmer: SkimmerConfig::default(),
             skimmer_channels: 0,
@@ -865,6 +868,7 @@ impl WaterfallApp {
         }
         self.last_error = poll.last_error;
         self.skimmer_spots = poll.spots;
+        self.audio_scope = poll.audio_scope;
         let latest = poll.latest;
         let new_rows = poll.rows;
         if matches!(self.conn_state, ConnState::Streaming)
@@ -3951,6 +3955,40 @@ impl WaterfallApp {
         } else {
             scroll_slider_f32(ui, &mut self.cw.agc.manual_gain, 0.1..=16.0, "Manual gain");
         }
+
+        let streaming = matches!(self.conn_state, ConnState::Streaming);
+        let hint = classify_level(
+            self.stats.audio_peak,
+            self.cw.agc.enabled,
+            self.stats.agc_gain,
+            streaming,
+        );
+        af_scope::show_af_tuning_panel(
+            ui,
+            &AfScopeParams {
+                samples: &self.audio_scope,
+                peak: self.stats.audio_peak,
+                rms: self.stats.audio_rms,
+                agc_gain: self.stats.agc_gain,
+                agc_envelope: self.stats.agc_envelope,
+                agc_enabled: self.cw.agc.enabled,
+                agc_target: self.cw.agc.target,
+                iq_headroom: self.stats.iq_buffer_fill,
+                hint,
+            },
+        );
+
+        ui.separator();
+        ui.label(
+            egui::RichText::new("RF front-end (hardware)")
+                .small()
+                .color(MUTED),
+        );
+        section_hint(
+            ui,
+            "Per device: Kiwi RF AGC on/off · Airspy LNA + HF AGC or 0–48 dB attenuator · \
+             RTL-SDR tuner gain · QMX CAT RF gain (dB). Use the AF scope above while adjusting.",
+        );
         if self.is_kiwi {
             stage_toggle(
                 ui,
@@ -3990,9 +4028,9 @@ impl WaterfallApp {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("RF gain").small().color(MUTED));
             ui.add(
-                egui::DragValue::new(&mut self.form_qmx.rf_gain_db)
-                    .range(0..=99)
-                    .suffix(" dB"),
+                egui::Slider::new(&mut self.form_qmx.rf_gain_db, 0..=99)
+                    .suffix(" dB")
+                    .logarithmic(false),
             );
         });
     }
@@ -4087,8 +4125,7 @@ impl WaterfallApp {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
                 ui.add(
-                    egui::DragValue::new(&mut self.form_airspy.hf_att)
-                        .range(0..=8)
+                    egui::Slider::new(&mut self.form_airspy.hf_att, 0..=8)
                         .suffix(" ×6 dB"),
                 );
             });
