@@ -1,5 +1,7 @@
 //! Interactive spectrum + waterfall rendering.
 
+mod smooth;
+
 use eframe::egui::{
     Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2,
 };
@@ -11,7 +13,7 @@ use crate::interaction::{
     PlotViewState,
 };
 
-use crate::smooth::spatial_smooth;
+use self::smooth::spatial_smooth;
 use crate::theme::{ACCENT, CENTER_LINE, FILTER_EDGE, GRID, NOTCH_LINE, OK, TRACE, TRACE_GLOW, WARN};
 
 /// A decoded-signal label floated above its spectral peak.
@@ -872,7 +874,7 @@ pub fn update_trace(
     if smoothed.len() != composed.len() {
         smoothed.resize(composed.len(), -120.0);
     }
-    crate::smooth::ema_update(smoothed, composed, smooth_alpha);
+    smooth::ema_update(smoothed, composed, smooth_alpha);
     if smoothed.len() <= 1024 {
         let filtered = spatial_smooth(smoothed);
         smoothed.copy_from_slice(&filtered);

@@ -6,7 +6,7 @@
 //!   waterfall qmx [center_hz] [process_hz] [serial_port]  (requires `qmx` feature)
 //!   waterfall kiwi <host> [port] [center_hz]
 
-mod af_scope;
+mod meters;
 mod app;
 mod audio;
 mod colormap;
@@ -15,7 +15,6 @@ mod display_levels;
 mod engine;
 mod ham_bands;
 mod interaction;
-mod iq_dialog;
 mod iq_panel;
 mod kiwi_directory;
 mod pipeline_flow;
@@ -25,7 +24,6 @@ mod popup;
 mod rf_view;
 mod settings;
 mod skimmer;
-mod smooth;
 mod source;
 mod spot_filter;
 mod status_widgets;

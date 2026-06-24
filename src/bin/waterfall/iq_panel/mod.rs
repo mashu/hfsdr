@@ -1,11 +1,12 @@
 //! IQ capture and offline playback controls.
 
+mod dialog;
+
 use std::path::PathBuf;
 
 use eframe::egui::{self, Ui};
 
 use crate::engine::EngineStats;
-use crate::iq_dialog;
 use crate::popup::{path_row, popup_section, primary_button, secondary_button};
 use crate::status_widgets::iq_playback_chip;
 use crate::theme::MUTED;
@@ -85,7 +86,7 @@ impl IqPanel {
                 &self.capture_dir.display().to_string(),
                 "Choose folder",
             ) {
-                if let Some(dir) = iq_dialog::pick_capture_dir(&self.capture_dir) {
+                if let Some(dir) = dialog::pick_capture_dir(&self.capture_dir) {
                     self.capture_dir = dir;
                     dirty = true;
                 }
@@ -126,7 +127,7 @@ impl IqPanel {
                         } else {
                             PathBuf::from(&self.playback_path)
                         };
-                        if let Some(path) = iq_dialog::pick_playback_file(&start) {
+                        if let Some(path) = dialog::pick_playback_file(&start) {
                             self.playback_path = path.display().to_string();
                             dirty = true;
                         }

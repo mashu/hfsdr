@@ -5,6 +5,13 @@
 //! (auto-connect on launch) or from the in-app connection form, and is the unit
 //! we persist as a "recent host".
 
+mod kinds;
+
+pub use kinds::{
+    is_local_source, source_kind_from_index, source_kind_index, source_kind_label,
+    source_kind_labels,
+};
+
 use std::fmt;
 
 use hfsdr::{Complex32, Consumer, IqSource, kiwi_iq_half_hz, KiwiSource, KIWI_IQ_RATE};

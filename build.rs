@@ -6,6 +6,10 @@ use std::process::Command;
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(airspyhf_extended_api)");
 
+    if std::env::var_os("CARGO_FEATURE_GUI_CORE").is_some() {
+        generate_waterfall_impl_methods();
+    }
+
     if std::env::var_os("CARGO_FEATURE_AIRSPY").is_some() {
         probe_or_panic(
             "libairspyhf",
@@ -156,6 +160,32 @@ fn has_symbol(lib: &Path, sym: &str) -> bool {
         }
     }
     false
+}
+
+fn generate_waterfall_impl_methods() {
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let script = manifest_dir.join("scripts/split_app_rs.py");
+    let methods_dir = manifest_dir.join("src/bin/waterfall/app/methods");
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default())
+        .join("waterfall_impl_methods.inc");
+
+    println!("cargo:rerun-if-changed={}", script.display());
+    println!("cargo:rerun-if-changed={}", methods_dir.display());
+
+    let status = Command::new("python3")
+        .arg(&script)
+        .arg("--regenerate-impl")
+        .arg("--out")
+        .arg(&out)
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run {}: {e}", script.display()));
+
+    if !status.success() {
+        panic!(
+            "waterfall impl_methods generation failed (exit {status}); \
+             run: python3 scripts/split_app_rs.py --regenerate-impl"
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]

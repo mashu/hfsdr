@@ -24,7 +24,7 @@ use hfsdr::{Complex32, CwChannelSettings, DecimFilterKind, FirDecimator, Ingress
 
 use rayon::join;
 
-use crate::af_scope::SCOPE_LEN;
+use crate::meters::SCOPE_LEN;
 use crate::audio::AudioOutput;
 use crate::log;
 use crate::skimmer::{ScpStatus, SkimmerHandle};
