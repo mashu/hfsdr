@@ -30,7 +30,7 @@ pub struct KiwiSettings {
     pub freq_offset_khz: f64,
     /// `SET AR OK out=` audio resampler output rate.
     pub ar_out_hz: u32,
-    /// Manual RF gain 0..=100 (`manGain` CAT param); primary when RF AGC is off.
+    /// RF gain as Kiwi `manGain` 0..=100 (−100..0 dB below max). Active only when RF AGC is off.
     #[serde(default = "default_kiwi_man_gain")]
     pub man_gain: u8,
     /// Test generator attenuation (`SET genattn=` during IQ handshake).
@@ -39,10 +39,17 @@ pub struct KiwiSettings {
     /// Hardware RF attenuator in dB (KiwiSDR 2 when `has_attn=1`).
     #[serde(default)]
     pub rf_attn_db: f32,
+    /// Kiwi hardware RF AGC (`SET agc=`); persisted with recent hosts.
+    #[serde(default = "default_true")]
+    pub rf_agc_on: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_kiwi_man_gain() -> u8 {
-    50
+    hfsdr::kiwi::protocol::KIWI_MAN_GAIN_DEFAULT
 }
 
 impl Default for KiwiSettings {
@@ -56,6 +63,7 @@ impl Default for KiwiSettings {
             man_gain: default_kiwi_man_gain(),
             gen_attn: 0,
             rf_attn_db: 0.0,
+            rf_agc_on: true,
         }
     }
 }
@@ -413,6 +421,7 @@ fn connect_kiwi(
         .with_passband(-half, half)
         .with_freq_offset_khz(req.kiwi.freq_offset_khz)
         .with_ar_out_hz(req.kiwi.ar_out_hz)
+        .with_agc(req.kiwi.rf_agc_on)
         .with_man_gain(req.kiwi.man_gain)
         .with_gen_attn(req.kiwi.gen_attn)
         .with_rf_attn_db(req.kiwi.rf_attn_db);

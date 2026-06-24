@@ -43,6 +43,8 @@ pub struct CwChannel {
     noise_reduction: NoiseReduction,
     snr_peak: f32,
     snr_floor: f32,
+    /// Pre-software-AGC level for S-meter only (independent AGC loop ballistics).
+    rf_meter: f32,
     last_iq_rate: f32,
     last_decimation: u32,
     last_bandwidth: f32,
@@ -75,6 +77,7 @@ impl CwChannel {
             noise_reduction: NoiseReduction::new(),
             snr_peak: 1e-6,
             snr_floor: 1e-6,
+            rf_meter: 1e-6,
             last_iq_rate: iq_sample_rate,
             last_decimation: 0,
             last_bandwidth: 200.0,
@@ -101,6 +104,11 @@ impl CwChannel {
 
     pub fn agc_envelope(&self) -> f32 {
         self.agc.envelope()
+    }
+
+    /// Pre-software-AGC IQ magnitude for the S-meter (never follows AGC gain reduction).
+    pub fn iq_rf_level(&self) -> f32 {
+        self.rf_meter
     }
 
     pub fn process(
@@ -163,6 +171,7 @@ impl CwChannel {
             };
             let level = filtered.norm().max(1e-7);
             self.track_snr(level);
+            self.track_rf_meter(level);
 
             let gain = if settings.agc.enabled {
                 self.agc.gain_for(
@@ -174,6 +183,13 @@ impl CwChannel {
                     settings.agc_mode,
                 )
             } else {
+                self.agc.track_envelope(
+                    level,
+                    audio_rate,
+                    settings.agc.attack_ms,
+                    settings.agc.decay_ms,
+                    settings.agc_mode,
+                );
                 settings.agc.manual_gain
             };
             let scaled = Complex32 {
@@ -212,6 +228,15 @@ impl CwChannel {
             }
 
             out.push(audio);
+        }
+    }
+
+    fn track_rf_meter(&mut self, level: f32) {
+        // Fast attack / moderate decay — classic S-meter ballistics, separate from IF AGC.
+        if level > self.rf_meter {
+            self.rf_meter += 0.40 * (level - self.rf_meter);
+        } else {
+            self.rf_meter += 0.12 * (level - self.rf_meter);
         }
     }
 

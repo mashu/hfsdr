@@ -20,7 +20,7 @@ fn default_pan_step_fast_hz() -> f32 {
 }
 
 fn default_kiwi_man_gain() -> u8 {
-    50
+    hfsdr::kiwi::protocol::KIWI_MAN_GAIN_DEFAULT
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -140,6 +140,12 @@ pub struct AppSettings {
     pub show_history: bool,
     pub show_left: bool,
     pub show_right: bool,
+    /// AF tuning scope visible in the CW demod panel.
+    #[serde(default)]
+    pub show_af_scope: bool,
+    /// S-meter + IF/AF level bars above Operator on the left.
+    #[serde(default = "default_show_smeter")]
+    pub show_smeter: bool,
 
     // Connection memory.
     pub recent_hosts: Vec<ConnectRequest>,
@@ -239,6 +245,8 @@ impl Default for AppSettings {
             show_history: false,
             show_left: true,
             show_right: true,
+            show_af_scope: true,
+            show_smeter: default_show_smeter(),
             recent_hosts: Vec::new(),
             last_center_mhz: 14.01,
             kiwi: KiwiSettings::default(),
@@ -262,6 +270,10 @@ fn settings_path() -> Option<std::path::PathBuf> {
 
 fn legacy_settings_format() -> u32 {
     0
+}
+
+fn default_show_smeter() -> bool {
+    true
 }
 
 impl AppSettings {

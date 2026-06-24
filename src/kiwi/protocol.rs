@@ -50,6 +50,21 @@ pub fn has_sample_rate(text: &str) -> bool {
     kiwi_msg_params(text).contains("sample_rate=")
 }
 
+/// Kiwi `manGain` at full manual gain (0 dB below the firmware headroom).
+pub const KIWI_MAN_GAIN_MAX: u8 = 100;
+/// Default for new sessions — max manual gain, like analog RF gain wide open (Yaesu-style).
+pub const KIWI_MAN_GAIN_DEFAULT: u8 = KIWI_MAN_GAIN_MAX;
+
+/// dB below full `manGain` (100 → 0 dB, 90 → −10 dB). Kiwi uses 1 wire step ≈ 1 dB.
+pub fn man_gain_db_below_max(man_gain: u8) -> i32 {
+    man_gain as i32 - i32::from(KIWI_MAN_GAIN_MAX)
+}
+
+/// Convert dB-below-max (−100..=0) to Kiwi `manGain` 0..=100.
+pub fn man_gain_from_db_below_max(db: i32) -> u8 {
+    (db + i32::from(KIWI_MAN_GAIN_MAX)).clamp(0, i32::from(KIWI_MAN_GAIN_MAX)) as u8
+}
+
 /// Build the Kiwi `SET agc=… manGain=…` command.
 pub fn agc_command(agc_on: bool, man_gain: u8) -> String {
     format!(
@@ -244,6 +259,15 @@ mod parse_tests {
             Some(11_999)
         );
         assert_eq!(audio_rate("audio_rate=11998.914787"), Some(11_999));
+    }
+
+    #[test]
+    fn man_gain_db_mapping() {
+        assert_eq!(man_gain_db_below_max(100), 0);
+        assert_eq!(man_gain_db_below_max(90), -10);
+        assert_eq!(man_gain_db_below_max(50), -50);
+        assert_eq!(man_gain_from_db_below_max(0), 100);
+        assert_eq!(man_gain_from_db_below_max(-10), 90);
     }
 
     #[test]

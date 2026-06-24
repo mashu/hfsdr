@@ -229,9 +229,7 @@ impl PipelineFlow {
                 Vec2::new(20.0, 20.0),
             );
             let mut on = node.enabled;
-            let toggle_id = ui.id().with(("pipeline_toggle", node.id as u8));
             let toggle_resp = ui.put(toggle_rect, |ui: &mut Ui| {
-                ui.set_enabled(true);
                 ui.add(egui::Checkbox::without_text(&mut on))
             });
             if toggle_resp.changed() && on != node.enabled {

@@ -80,6 +80,11 @@ pub trait IqSource {
         None
     }
 
+    /// Last hardware RF gain command when the backend tracks one (Kiwi `manGain`).
+    fn hw_rf_gain(&self) -> Option<u8> {
+        None
+    }
+
     /// Whether [`IqSource::set_passband`] can retune the remote filter.
     fn supports_passband(&self) -> bool {
         false
@@ -97,7 +102,7 @@ pub trait IqSource {
         Ok(())
     }
 
-    /// Kiwi manual RF gain 0..=100 (`manGain` CAT).
+    /// RF gain 0..=100 (`manGain` CAT); manual gain when Kiwi RF AGC is off (ignored when AGC on).
     fn set_man_gain(&mut self, gain: u8) -> Result<()> {
         let _ = gain;
         Ok(())

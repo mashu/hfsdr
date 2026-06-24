@@ -45,6 +45,10 @@ impl IqAudioDemod {
         self.channel.agc_envelope()
     }
 
+    pub fn iq_rf_level(&self) -> f32 {
+        self.channel.iq_rf_level()
+    }
+
     /// Demodulate `samples` into `out` (reused buffer, no per-call allocation).
     pub fn process(
         &mut self,

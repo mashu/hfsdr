@@ -109,10 +109,14 @@ pub struct EngineStats {
     pub agc_gain: f32,
     /// Smoothed IQ magnitude before AGC.
     pub agc_envelope: f32,
+    /// Pre-AGC IQ level for S-meter when hardware RSSI is unavailable.
+    pub iq_rf_level: f32,
     /// KiwiSDR 2 reports `has_attn=1` when a hardware RF attenuator is present.
     pub kiwi_has_rf_attn: bool,
     /// Latest Kiwi hardware RF attenuator setting (dB).
     pub kiwi_rf_attn_db: f32,
+    /// Last hardware RF gain sent to the source (Kiwi `manGain`, etc.).
+    pub hw_rf_gain: Option<u8>,
 }
 
 impl Default for EngineStats {
@@ -146,8 +150,10 @@ impl Default for EngineStats {
             audio_rms: 0.0,
             agc_gain: 1.0,
             agc_envelope: 0.0,
+            iq_rf_level: 0.0,
             kiwi_has_rf_attn: false,
             kiwi_rf_attn_db: 0.0,
+            hw_rf_gain: None,
         }
     }
 }
@@ -456,6 +462,7 @@ struct Engine {
     level_audio_rms: f32,
     level_agc_gain: f32,
     level_agc_envelope: f32,
+    level_iq_rf: f32,
     level_audio_scope: Vec<f32>,
 
     /// Set by Disconnect/Cancel so an in-flight `connect()` can abort promptly.
@@ -524,6 +531,7 @@ impl Engine {
             level_audio_rms: 0.0,
             level_agc_gain: 1.0,
             level_agc_envelope: 0.0,
+            level_iq_rf: 0.0,
             level_audio_scope: Vec::new(),
             connect_cancel,
         }
@@ -1162,6 +1170,7 @@ impl Engine {
         };
         self.level_agc_gain = agc_gain;
         self.level_agc_envelope = self.demod.agc_envelope();
+        self.level_iq_rf = self.demod.iq_rf_level();
         self.level_audio_peak = self.audio_scope.peak;
         self.level_audio_rms = self.audio_scope.rms;
 
@@ -1429,6 +1438,7 @@ impl Engine {
             .unwrap_or((None, 0));
         let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
         let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
+        let hw_rf_gain = self.hw_rf_gain();
 
         if let Ok(mut guard) = self.shared.lock() {
             if guard.latest.len() == self.latest.len() {
@@ -1477,8 +1487,10 @@ impl Engine {
                 audio_rms: self.level_audio_rms,
                 agc_gain: self.level_agc_gain,
                 agc_envelope: self.level_agc_envelope,
+                iq_rf_level: self.level_iq_rf,
                 kiwi_has_rf_attn,
                 kiwi_rf_attn_db,
+                hw_rf_gain,
             };
             guard.audio_scope = self.level_audio_scope.clone();
         }
@@ -1536,6 +1548,7 @@ impl Engine {
             .unwrap_or((None, 0));
         let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
         let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
+        let hw_rf_gain = self.hw_rf_gain();
         if let Ok(mut guard) = self.shared.lock() {
             guard.stats = EngineStats {
                 sample_rate: self
@@ -1570,8 +1583,10 @@ impl Engine {
                 audio_rms: self.level_audio_rms,
                 agc_gain: self.level_agc_gain,
                 agc_envelope: self.level_agc_envelope,
+                iq_rf_level: self.level_iq_rf,
                 kiwi_has_rf_attn,
                 kiwi_rf_attn_db,
+                hw_rf_gain,
             };
         }
     }
@@ -1581,6 +1596,10 @@ impl Engine {
             .as_ref()
             .map(|c| (c.source.has_rf_attn(), c.source.rf_attn_db().unwrap_or(0.0)))
             .unwrap_or((false, 0.0))
+    }
+
+    fn hw_rf_gain(&self) -> Option<u8> {
+        self.conn.as_ref().and_then(|c| c.source.hw_rf_gain())
     }
 
     fn effective_rate(&mut self, _nominal: f32) -> f32 {

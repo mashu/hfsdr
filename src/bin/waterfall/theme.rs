@@ -57,6 +57,11 @@ pub fn apply(ctx: &eframe::egui::Context) {
     style.text_styles.insert(TextStyle::Body, FontId::new(13.0, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Small, FontId::new(11.0, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
+    style.visuals.widgets.noninteractive.bg_fill = tooltip_fill();
+    style.visuals.window_stroke = Stroke::new(
+        1.0,
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 120),
+    );
     ctx.set_global_style(style);
 }
 
@@ -120,7 +125,8 @@ pub fn section_frame() -> eframe::egui::Frame {
 /// Full-width section card within the current panel.
 pub fn section_card(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
     section_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
+        let w = ui.available_width();
+        ui.set_max_width(w);
         add_contents(ui);
     });
 }
@@ -131,6 +137,57 @@ pub fn section_heading(ui: &mut Ui, title: &str) {
 
 pub fn section_hint(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).small().color(MUTED));
+}
+
+fn tooltip_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(22, 27, 38, 242)
+}
+
+pub fn rich_tooltip_frame() -> Frame {
+    Frame::new()
+        .fill(tooltip_fill())
+        .stroke(Stroke::new(
+            1.0,
+            Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 140),
+        ))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(eframe::egui::Margin::symmetric(10, 8))
+        .shadow(eframe::egui::epaint::Shadow {
+            offset: [0, 4],
+            blur: 14,
+            spread: 0,
+            color: Color32::from_black_alpha(70),
+        })
+}
+
+pub fn rich_tooltip_body(ui: &mut Ui, title: Option<&str>, lines: &[(&str, Color32)]) {
+    rich_tooltip_frame().show(ui, |ui| {
+        ui.set_max_width(300.0);
+        if let Some(t) = title {
+            ui.label(RichText::new(t).strong().color(ACCENT));
+            ui.add_space(3.0);
+        }
+        for (text, color) in lines {
+            ui.label(RichText::new(*text).small().color(*color));
+            ui.add_space(1.0);
+        }
+    });
+}
+
+pub fn attach_rich_tooltip(resp: &Response, title: Option<&str>, lines: &[(&str, Color32)]) {
+    resp.clone()
+        .on_hover_cursor(eframe::egui::CursorIcon::Help)
+        .on_hover_ui(|ui| rich_tooltip_body(ui, title, lines));
+}
+
+pub fn section_heading_with_tip(ui: &mut Ui, title: &str, tip: &[(&str, Color32)]) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let title_resp = ui.label(RichText::new(title).strong().color(ACCENT));
+        let hint_resp = ui.label(RichText::new("(?)").small().color(MUTED));
+        attach_rich_tooltip(&title_resp, Some(title), tip);
+        attach_rich_tooltip(&hint_resp, Some(title), tip);
+    });
 }
 
 pub fn stat_row(ui: &mut Ui, label: &str, value: impl Display) {
@@ -231,6 +288,7 @@ pub fn stage_toggle(
     title: &str,
     subtitle: Option<&str>,
     shortcut: Option<&str>,
+    tip: Option<&[(&str, Color32)]>,
 ) -> bool {
     let id = ui.id().with(title);
     let row_h = if subtitle.is_some() { 46.0 } else { 38.0 };
@@ -344,6 +402,10 @@ pub fn stage_toggle(
         );
     }
 
+    if let Some(lines) = tip {
+        attach_rich_tooltip(&resp, Some(title), lines);
+    }
+
     changed
 }
 
@@ -379,14 +441,18 @@ pub fn collapsible_section(
     ui: &mut Ui,
     id: &str,
     title: &str,
+    tip: Option<&[(&str, Color32)]>,
     default_open: bool,
     add_contents: impl FnOnce(&mut Ui),
 ) {
     section_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        eframe::egui::CollapsingHeader::new(RichText::new(title).strong().color(ACCENT))
+        let cr = eframe::egui::CollapsingHeader::new(RichText::new(title).strong().color(ACCENT))
             .id_salt(id)
             .default_open(default_open)
             .show(ui, add_contents);
+        if let Some(lines) = tip {
+            attach_rich_tooltip(&cr.header_response, Some(title), lines);
+        }
     });
 }

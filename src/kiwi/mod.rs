@@ -6,7 +6,7 @@ pub mod protocol;
 mod reader;
 
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
-use protocol::{kiwi_iq_half_hz, KIWI_IQ_RATE, KiwiRxSetup, mod_iq_command};
+use protocol::{kiwi_iq_half_hz, KIWI_IQ_RATE, KiwiRxSetup, KIWI_MAN_GAIN_DEFAULT, mod_iq_command};
 use reader::{READ_TIMEOUT, reader_loop};
 use rtrb::RingBuffer;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -74,7 +74,7 @@ impl KiwiSource {
             freq_offset_khz: 0.0,
             ar_out_hz: 44_100,
             agc_on: true,
-            man_gain: 50,
+            man_gain: KIWI_MAN_GAIN_DEFAULT,
             gen_attn: 0,
             rf_attn_db: 0.0,
             compression: false,
@@ -104,7 +104,7 @@ impl KiwiSource {
         self
     }
 
-    /// Manual RF gain 0..=100 (used when AGC is off; still sent with AGC on).
+    /// RF gain 0..=100 (`manGain`); manual IQ gain when Kiwi RF AGC is off (firmware ignores it when AGC on).
     pub fn with_man_gain(mut self, gain: u8) -> Self {
         self.man_gain = gain.clamp(0, 100);
         self
@@ -340,6 +340,10 @@ impl IqSource for KiwiSource {
 
     fn rssi_dbm(&self) -> Option<f32> {
         Some(self.meter_dbm())
+    }
+
+    fn hw_rf_gain(&self) -> Option<u8> {
+        Some(self.man_gain)
     }
 
     fn supports_passband(&self) -> bool {

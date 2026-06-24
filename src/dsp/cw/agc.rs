@@ -39,23 +39,21 @@ impl CwAgc {
         self.slow_env = 0.0;
     }
 
-    /// Return the gain to apply for a sample whose magnitude is `level`.
-    pub fn gain_for(
+    fn update_envelope(
         &mut self,
         level: f32,
         sample_rate: f32,
-        target: f32,
         attack_ms: f32,
         decay_ms: f32,
         mode: AgcMode,
-    ) -> f32 {
+    ) {
         if sample_rate <= 0.0 {
-            return 1.0;
+            return;
         }
         let attack = (-1.0 / (sample_rate * (attack_ms.max(0.1) / 1000.0))).exp();
         let decay = (-1.0 / (sample_rate * (decay_ms.max(1.0) / 1000.0))).exp();
 
-        let desired = match mode {
+        match mode {
             AgcMode::DualLoop => {
                 let slow_attack =
                     (-1.0 / (sample_rate * (attack_ms.max(0.1) * 10.0 / 1000.0))).exp();
@@ -73,7 +71,6 @@ impl CwAgc {
                 }
                 let control = self.fast_env.max(self.slow_env * 0.55);
                 self.envelope = control;
-                target / control.max(1e-7)
             }
             _ => {
                 if level > self.envelope {
@@ -81,9 +78,38 @@ impl CwAgc {
                 } else {
                     self.envelope = decay * self.envelope + (1.0 - decay) * level;
                 }
-                target / self.envelope.max(1e-7)
             }
-        };
+        }
+    }
+
+    /// Track IQ envelope for metering without changing AGC gain.
+    pub fn track_envelope(
+        &mut self,
+        level: f32,
+        sample_rate: f32,
+        attack_ms: f32,
+        decay_ms: f32,
+        mode: AgcMode,
+    ) {
+        self.update_envelope(level, sample_rate, attack_ms, decay_ms, mode);
+    }
+
+    /// Return the gain to apply for a sample whose magnitude is `level`.
+    pub fn gain_for(
+        &mut self,
+        level: f32,
+        sample_rate: f32,
+        target: f32,
+        attack_ms: f32,
+        decay_ms: f32,
+        mode: AgcMode,
+    ) -> f32 {
+        if sample_rate <= 0.0 {
+            return 1.0;
+        }
+        self.update_envelope(level, sample_rate, attack_ms, decay_ms, mode);
+
+        let desired = target / self.envelope.max(1e-7);
 
         self.gain = match mode {
             AgcMode::Envelope => 0.9 * self.gain + 0.1 * desired,
@@ -168,6 +194,16 @@ mod tests {
     fn zero_sample_rate_returns_unity() {
         let mut agc = CwAgc::new();
         assert_eq!(agc.gain_for(1.0, 0.0, 0.25, 3.0, 120.0, AgcMode::Envelope), 1.0);
+    }
+
+    #[test]
+    fn track_envelope_without_changing_gain() {
+        let mut agc = CwAgc::new();
+        for _ in 0..500 {
+            agc.track_envelope(0.4, 12_000.0, 3.0, 120.0, AgcMode::Envelope);
+        }
+        assert!(agc.envelope() > 0.1);
+        assert_eq!(agc.gain(), 1.0);
     }
 
     #[test]

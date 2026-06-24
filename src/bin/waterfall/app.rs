@@ -20,8 +20,12 @@ use hfsdr::{
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, WindowKind,
     MAX_NOTCHES,
 };
+use hfsdr::kiwi::protocol::{man_gain_db_below_max, man_gain_from_db_below_max};
 
-use crate::af_scope::{self, AfScopeParams, classify_level};
+use crate::af_scope::{
+    self, AfScopeParams, DualAgcParams, classify_level, rf_level_dbm, show_dual_agc_loop,
+    show_status_rf_meter,
+};
 use crate::audio::AudioOutput;
 use crate::colormap::db_to_colour;
 use crate::controls::{
@@ -54,9 +58,9 @@ use crate::spot_filter::{
     build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
 };
 use crate::theme::{
-    apply, band_lock_toggle, clickable_badge, collapsible_section, panel_toggle, section_card,
-    section_heading, section_hint, stat_row, stage_toggle, status_panel_frame, toggle, ACCENT,
-    MUTED, OK, WARN,
+    apply, attach_rich_tooltip, band_lock_toggle, clickable_badge, collapsible_section,
+    panel_toggle, section_card, section_frame, section_heading, section_heading_with_tip, section_hint,
+    stat_row, stage_toggle, status_panel_frame, toggle, ACCENT, MUTED, OK, WARN,
 };
 use crate::widgets::{
     update_trace, PanadapterPlot, SpotLabel, TraceViewKey, SCOPE_HEIGHT,
@@ -319,6 +323,10 @@ pub struct WaterfallApp {
     filter_wide: bool,
     show_console: bool,
     show_shortcuts: bool,
+    /// AF tuning scope in CW demod panel (toggle with G or status bar).
+    show_af_scope: bool,
+    /// S-meter + dual AGC bars (status bar Meter toggle).
+    show_smeter: bool,
     frame_visible_spots: Vec<Spot>,
     resolver: ContinentResolver,
     annotated: HashSet<String>,
@@ -384,7 +392,7 @@ impl WaterfallApp {
             lock_ham_bands: true,
             agc_rf_on: true,
             last_agc_rf_on: true,
-            last_kiwi_man_gain: 50,
+            last_kiwi_man_gain: hfsdr::kiwi::protocol::KIWI_MAN_GAIN_DEFAULT,
             last_kiwi_rf_attn_db: 0.0,
             last_kiwi_has_rf_attn: false,
             last_snr_db: 0.0,
@@ -453,6 +461,8 @@ impl WaterfallApp {
             filter_wide: false,
             show_console: false,
             show_shortcuts: false,
+            show_af_scope: true,
+            show_smeter: true,
             frame_visible_spots: Vec::new(),
             resolver: ContinentResolver::new(),
             annotated: HashSet::new(),
@@ -650,8 +660,11 @@ impl WaterfallApp {
         self.show_band_overview = s.show_band_overview;
         self.pan_step_hz = s.pan_step_hz.clamp(10.0, 50_000.0);
         self.pan_step_fast_hz = s.pan_step_fast_hz.clamp(50.0, 500_000.0);
-        if !self.display_auto_track {
+        if self.display_auto_track {
             self.display_levels_initialized = false;
+        } else {
+            // Respect saved Ref/Range — do not re-estimate on every connect (that hides RF gain).
+            self.display_levels_initialized = true;
         }
         self.smooth_alpha = s.smooth_alpha;
         self.waterfall_avg = normalize_waterfall_avg(s.waterfall_avg);
@@ -682,6 +695,8 @@ impl WaterfallApp {
         self.show_history = s.show_history;
         self.show_left = s.show_left;
         self.show_right = s.show_right;
+        self.show_af_scope = s.show_af_scope;
+        self.show_smeter = s.show_smeter;
 
         self.recent_hosts = s.recent_hosts.clone();
         self.form_kiwi = s.kiwi.clone();
@@ -795,6 +810,8 @@ impl WaterfallApp {
             show_history: self.show_history,
             show_left: self.show_left,
             show_right: self.show_right,
+            show_af_scope: self.show_af_scope,
+            show_smeter: self.show_smeter,
             recent_hosts: self.recent_hosts.clone(),
             last_center_mhz: self.center_khz / 1000.0,
             kiwi: self.form_kiwi.clone(),
@@ -830,7 +847,13 @@ impl WaterfallApp {
         self.textures_dirty = true;
         self.last_viewport_key = None;
         self.last_storage_key = None;
+        self.pending_row_appends = 0;
         self.pending_viewport_row_appends = 0;
+        self.waterfall_storage_pixels.clear();
+        self.waterfall_viewport_pixels.clear();
+        self.storage_tex_width = 0;
+        self.viewport_tex_width = 0;
+        self.waterfall_viewport_texture = None;
     }
 
     /// Push UI settings to the engine and pull its published rows/status/spots.
@@ -964,6 +987,7 @@ impl WaterfallApp {
                             self.plot_max_zoom_out(),
                         );
                     } else {
+                        self.invalidate_waterfall_history();
                         self.center_khz += delta / 1000.0;
                     }
                 }
@@ -1072,6 +1096,12 @@ impl WaterfallApp {
         if self.annotated.len() > 512 {
             self.annotated.clear();
         }
+    }
+
+    /// Fixed Ref/Range so RF front-end gain shows as waterfall brightness (not auto-normalized away).
+    fn lock_display_levels_for_rf_tuning(&mut self) {
+        self.display_auto_track = false;
+        self.display_levels_initialized = true;
     }
 
     fn update_display_levels(&mut self) {
@@ -1425,7 +1455,7 @@ impl WaterfallApp {
     fn scp_section(&mut self, ui: &mut egui::Ui) {
         let scp = &self.stats.scp;
         let downloading = self.scp_download_rx.is_some();
-        collapsible_section(ui, "scp", "MASTER.SCP", false, |ui| {
+        collapsible_section(ui, "scp", "MASTER.SCP", None, false, |ui| {
             if scp.loaded {
                 let ver = scp.version.as_deref().unwrap_or("unknown version");
                 stat_row(ui, "Database", format!("{} calls ({ver})", scp.calls));
@@ -1527,21 +1557,43 @@ impl WaterfallApp {
         self.clear_rit();
     }
 
+    fn kiwi_rf_live(&self) -> bool {
+        self.form_kind == SourceKind::Kiwi && matches!(self.conn_state, ConnState::Streaming)
+    }
+
+    fn sync_kiwi_rf_now(&mut self) {
+        if !self.kiwi_rf_live() {
+            return;
+        }
+        let mut rf_changed = false;
+        if self.agc_rf_on != self.last_agc_rf_on {
+            self.engine.send(EngineCommand::SetRfAgc(self.agc_rf_on));
+            self.last_agc_rf_on = self.agc_rf_on;
+            self.form_kiwi.rf_agc_on = self.agc_rf_on;
+            rf_changed = true;
+        }
+        if self.form_kiwi.man_gain != self.last_kiwi_man_gain {
+            self.engine
+                .send(EngineCommand::SetKiwiManGain(self.form_kiwi.man_gain));
+            self.last_kiwi_man_gain = self.form_kiwi.man_gain;
+            rf_changed = true;
+        }
+        if rf_changed {
+            self.lock_display_levels_for_rf_tuning();
+        }
+    }
+
+    fn rf_meter_dbm(&self) -> f32 {
+        rf_level_dbm(self.stats.rssi_dbm, self.stats.iq_rf_level)
+    }
+
     fn apply_radio_settings(&mut self) {
         if (self.center_khz - self.last_center_khz).abs() > f64::EPSILON {
             self.invalidate_waterfall_history();
             self.engine.send(EngineCommand::Tune(self.center_khz * 1000.0));
             self.last_center_khz = self.center_khz;
         }
-        if self.is_kiwi && self.agc_rf_on != self.last_agc_rf_on {
-            self.engine.send(EngineCommand::SetRfAgc(self.agc_rf_on));
-            self.last_agc_rf_on = self.agc_rf_on;
-        }
-        if self.is_kiwi && self.form_kiwi.man_gain != self.last_kiwi_man_gain {
-            self.engine
-                .send(EngineCommand::SetKiwiManGain(self.form_kiwi.man_gain));
-            self.last_kiwi_man_gain = self.form_kiwi.man_gain;
-        }
+        self.sync_kiwi_rf_now();
         self.apply_kiwi_rf_attn_settings();
         self.apply_airspy_live_settings();
         self.apply_rtlsdr_live_settings();
@@ -1550,7 +1602,7 @@ impl WaterfallApp {
     }
 
     fn apply_kiwi_rf_attn_settings(&mut self) {
-        if !self.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
+        if !self.kiwi_rf_live() {
             return;
         }
         if self.stats.kiwi_has_rf_attn && !self.last_kiwi_has_rf_attn {
@@ -1566,6 +1618,7 @@ impl WaterfallApp {
         if (db - self.last_kiwi_rf_attn_db).abs() > 0.05 {
             self.engine.send(EngineCommand::SetKiwiRfAttn(db));
             self.last_kiwi_rf_attn_db = db;
+            self.lock_display_levels_for_rf_tuning();
         }
     }
 
@@ -1587,6 +1640,7 @@ impl WaterfallApp {
                 self.engine
                     .send(EngineCommand::SetQmxRfGain(self.form_qmx.rf_gain_db));
                 self.last_qmx_rf.rf_gain_db = self.form_qmx.rf_gain_db;
+                self.lock_display_levels_for_rf_tuning();
             }
         }
     }
@@ -1609,11 +1663,13 @@ impl WaterfallApp {
                 self.engine
                     .send(EngineCommand::SetRtlSdrRtlAgc(self.form_rtlsdr.rtl_agc));
                 self.last_rtlsdr_rf.rtl_agc = self.form_rtlsdr.rtl_agc;
+                self.lock_display_levels_for_rf_tuning();
             }
             if self.form_rtlsdr.manual_gain != self.last_rtlsdr_rf.manual_gain {
                 self.engine
                     .send(EngineCommand::SetRtlSdrManualGain(self.form_rtlsdr.manual_gain));
                 self.last_rtlsdr_rf.manual_gain = self.form_rtlsdr.manual_gain;
+                self.lock_display_levels_for_rf_tuning();
             }
             if self.form_rtlsdr.manual_gain
                 && self.form_rtlsdr.tuner_gain_db10 != self.last_rtlsdr_rf.tuner_gain_db10
@@ -1622,6 +1678,7 @@ impl WaterfallApp {
                     self.form_rtlsdr.tuner_gain_db10,
                 ));
                 self.last_rtlsdr_rf.tuner_gain_db10 = self.form_rtlsdr.tuner_gain_db10;
+                self.lock_display_levels_for_rf_tuning();
             }
             if self.form_rtlsdr.bias_tee != self.last_rtlsdr_rf.bias_tee {
                 self.engine
@@ -1654,6 +1711,7 @@ impl WaterfallApp {
             self.engine
                 .send(EngineCommand::SetRfAgc(self.form_airspy.hf_agc));
             self.last_airspy_rf.hf_agc = self.form_airspy.hf_agc;
+            self.lock_display_levels_for_rf_tuning();
         }
         if self.form_airspy.hf_agc_threshold_high != self.last_airspy_rf.hf_agc_threshold_high {
             self.engine.send(EngineCommand::SetAirspyAgcThreshold(
@@ -1665,11 +1723,13 @@ impl WaterfallApp {
             self.engine
                 .send(EngineCommand::SetAirspyAtt(self.form_airspy.hf_att));
             self.last_airspy_rf.hf_att = self.form_airspy.hf_att;
+            self.lock_display_levels_for_rf_tuning();
         }
         if self.form_airspy.hf_lna != self.last_airspy_rf.hf_lna {
             self.engine
                 .send(EngineCommand::SetAirspyLna(self.form_airspy.hf_lna));
             self.last_airspy_rf.hf_lna = self.form_airspy.hf_lna;
+            self.lock_display_levels_for_rf_tuning();
         }
         let frontend = self.form_airspy.frontend_flags();
         if frontend != self.last_airspy_rf.frontend_flags() {
@@ -1693,6 +1753,10 @@ impl WaterfallApp {
         self.form_host = req.host.clone();
         self.form_port = req.port;
         self.form_kiwi = req.kiwi.clone();
+        if req.kind == SourceKind::Kiwi {
+            self.agc_rf_on = req.kiwi.rf_agc_on;
+            self.last_agc_rf_on = req.kiwi.rf_agc_on;
+        }
         if req.sample_rate != 0 {
             self.form_sample_rate = req.sample_rate;
         }
@@ -1738,13 +1802,15 @@ impl WaterfallApp {
             SourceKind::Qmx => 0,
             _ => 0,
         };
+        let mut kiwi = self.form_kiwi.clone();
+        kiwi.rf_agc_on = self.agc_rf_on;
         let req = ConnectRequest {
             kind: self.form_kind,
             host: self.form_host.trim().to_string(),
             port: self.form_port,
             center_hz: self.center_khz * 1000.0,
             sample_rate,
-            kiwi: self.form_kiwi.clone(),
+            kiwi,
             airspy: self.form_airspy.clone(),
             rtlsdr: self.form_rtlsdr.clone(),
             qmx: self.form_qmx.clone(),
@@ -1755,6 +1821,7 @@ impl WaterfallApp {
         self.last_kiwi_man_gain = self.form_kiwi.man_gain;
         self.last_kiwi_rf_attn_db = self.form_kiwi.rf_attn_db;
         self.last_kiwi_has_rf_attn = false;
+        self.last_agc_rf_on = !self.agc_rf_on;
         self.last_center_khz = self.center_khz;
         self.remember_host(&req);
         self.apply_default_view_zoom();
@@ -1857,6 +1924,17 @@ impl WaterfallApp {
         }
     }
 
+    fn on_af_scope_panel_changed(&mut self) {
+        if self.show_af_scope {
+            self.show_right = true;
+        }
+    }
+
+    fn toggle_af_scope(&mut self) {
+        self.show_af_scope = !self.show_af_scope;
+        self.on_af_scope_panel_changed();
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
             return;
@@ -1883,6 +1961,7 @@ impl WaterfallApp {
             f11,
             overview,
             help,
+            af_scope,
             notch1,
             notch2,
             notch3,
@@ -1910,6 +1989,7 @@ impl WaterfallApp {
                 i.key_pressed(Key::F11),
                 i.key_pressed(Key::M),
                 i.key_pressed(Key::Questionmark),
+                i.key_pressed(Key::G),
                 i.key_pressed(Key::Num1),
                 i.key_pressed(Key::Num2),
                 i.key_pressed(Key::Num3),
@@ -1980,6 +2060,9 @@ impl WaterfallApp {
         if help {
             self.show_shortcuts = !self.show_shortcuts;
         }
+        if af_scope {
+            self.toggle_af_scope();
+        }
         if notch1 {
             self.toggle_manual_notch(0);
         }
@@ -2020,10 +2103,8 @@ impl WaterfallApp {
         if let Some(row) = self.rows.get(row_index) {
             return Some(row.as_slice());
         }
-        // After a history reset, paint every row from the live FFT until history refills.
-        if self.rows.is_empty() && !self.latest.is_empty() {
-            return Some(self.latest.as_slice());
-        }
+        // Only the newest row may fall back to the live FFT; older slots stay empty until
+        // history refills so a tune reset cannot paint the whole waterfall as one column.
         (row_index == 0 && !self.latest.is_empty()).then(|| self.latest.as_slice())
     }
 
@@ -2131,7 +2212,7 @@ impl WaterfallApp {
     }
 
     fn sync_waterfall_storage(&mut self, ctx: &egui::Context) {
-        if self.rows.is_empty() && self.latest.is_empty() {
+        if self.rows.is_empty() {
             return;
         }
         let storage = self.waterfall_storage_view();
@@ -2202,13 +2283,12 @@ impl WaterfallApp {
         }
 
         self.textures_dirty = false;
-        self.force_texture_full = false;
         self.pending_row_appends = 0;
         let _ = ctx; // storage is CPU-side; viewport upload happens in sync_waterfall_viewport
     }
 
     fn sync_waterfall_viewport(&mut self, ctx: &egui::Context, plot_width: usize) {
-        if self.rows.is_empty() && self.latest.is_empty() {
+        if self.rows.is_empty() {
             return;
         }
         let view = self.spectrum_view();
@@ -2280,6 +2360,7 @@ impl WaterfallApp {
         self.upload_waterfall_viewport(ctx, dst_w, h);
         self.last_viewport_key = Some(key);
         self.pending_viewport_row_appends = 0;
+        self.force_texture_full = false;
     }
 
     fn history_panel(&mut self, ui: &mut egui::Ui) {
@@ -2640,32 +2721,7 @@ impl WaterfallApp {
                     .color(MUTED),
             );
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("?")
-                    .on_hover_text("Keyboard shortcuts")
-                    .clicked()
-                {
-                    self.show_shortcuts = !self.show_shortcuts;
-                }
-                if ui
-                    .button("F11")
-                    .on_hover_text("Toggle fullscreen (F11)")
-                    .clicked()
-                {
-                    let on = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
-                }
-                ui.separator();
-                panel_toggle(ui, &mut self.show_console, "Log", "Application log (`)");
-                panel_toggle(ui, &mut self.show_history, "Spots", "Decoded callsign history");
-                panel_toggle(ui, &mut self.show_right, "DSP", "CW demod, skimmer, audio, display");
-                panel_toggle(ui, &mut self.show_left, "Bands", "Band presets and VFO");
-            });
-        });
-
-        ui.horizontal_wrapped(|ui| {
+            ui.separator();
             ui.label(
                 egui::RichText::new(format!("SNR {:.0} dB", self.last_snr_db))
                     .small()
@@ -2684,7 +2740,6 @@ impl WaterfallApp {
                 ("Cursor —".to_string(), false)
             };
             crate::status_widgets::cursor_freq_slot(ui, &cursor_label, cursor_active);
-            ui.separator();
             let engine_resp = crate::status_widgets::engine_pipeline_chip(
                 ui,
                 self.show_pipeline_drawer,
@@ -2750,16 +2805,54 @@ impl WaterfallApp {
             if self.stats.dropped > 0 {
                 ui.colored_label(WARN, format!("drops {}", self.stats.dropped));
             }
-            if let Some(rssi) = self.stats.rssi_dbm {
-                ui.label(
-                    egui::RichText::new(format!("{rssi:.0} dBm"))
-                        .small()
-                        .color(MUTED),
+            if streaming && !(self.show_left && self.show_smeter) {
+                show_status_rf_meter(
+                    ui,
+                    self.rf_meter_dbm(),
+                    self.stats.rssi_dbm,
                 );
             }
             if self.connection_unstable() {
                 ui.colored_label(WARN, "connection unstable");
             }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("?")
+                    .on_hover_text("Keyboard shortcuts")
+                    .clicked()
+                {
+                    self.show_shortcuts = !self.show_shortcuts;
+                }
+                if ui
+                    .button("F11")
+                    .on_hover_text("Toggle fullscreen (F11)")
+                    .clicked()
+                {
+                    let on = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+                }
+                ui.separator();
+                panel_toggle(ui, &mut self.show_console, "Log", "Application log (`)");
+                panel_toggle(ui, &mut self.show_history, "Spots", "Decoded callsign history");
+                if panel_toggle(
+                    ui,
+                    &mut self.show_af_scope,
+                    "Scope",
+                    "AF scope for RF gain tuning (G)",
+                ) {
+                    self.on_af_scope_panel_changed();
+                }
+                panel_toggle(
+                    ui,
+                    &mut self.show_smeter,
+                    "Meter",
+                    "S-meter and IF/AF AGC levels",
+                );
+                panel_toggle(ui, &mut self.show_right, "DSP", "CW demod, skimmer, audio, display");
+                panel_toggle(ui, &mut self.show_left, "RX", "VFO, RF gains, IQ chain");
+            });
         });
 
         if let Some(err) = &self.last_error {
@@ -2797,6 +2890,7 @@ impl WaterfallApp {
                     ("[ / ]", "Narrow / widen filter"),
                     ("1 – 4", "Toggle IQ notches"),
                     ("N / B / R / A / P", "Auto-notch / blanker / NR / AGC / APF"),
+                    ("G", "Toggle AF tuning scope (RF gain aid)"),
                     ("F / M", "Full IQ span / band overview"),
                     ("Space / - / +", "Mute / volume down / up"),
                     ("`", "Toggle log panel"),
@@ -2824,7 +2918,14 @@ impl WaterfallApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if self.show_smeter {
+                    self.smeter_card(ui);
+                }
+                if !self.show_left {
+                    return;
+                }
                 self.frequency_card(ui);
+                self.rf_front_end_card(ui);
                 self.receive_chain_card(ui);
             });
     }
@@ -2833,28 +2934,22 @@ impl WaterfallApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                self.af_tuning_card(ui);
                 self.cw_demod_card(ui);
+                self.display_section(ui);
                 self.spot_display_section(ui);
-                collapsible_section(ui, "skimmer-settings", "Skimmer settings", false, |ui| {
+                collapsible_section(ui, "skimmer-settings", "Skimmer settings", None, false, |ui| {
                     self.skimmer_settings_body(ui);
                 });
-                collapsible_section(ui, "audio", "Audio", false, |ui| {
+                collapsible_section(ui, "audio", "Audio", None, false, |ui| {
                     self.audio_card_body(ui);
                 });
-                self.display_section(ui);
                 self.performance_section(ui);
-
-                ui.add_space(4.0);
-                section_hint(
-                    ui,
-                    "Operator: Z zero-beat · , . RIT · \\ clear RIT · L pitch lock · F full span · M overview · ? shortcuts\n\
-                     Audio: Space speakers · - + volume · QRM: 1–4 IQ notches · P APF · N auto-notch · B blanker · R NR · A AGC · [ ] filter width · F11 fullscreen",
-                );
             });
     }
 
     fn spot_display_section(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "spots", "Spots", true, |ui| {
+        collapsible_section(ui, "spots", "Spots", None, true, |ui| {
             self.spot_display_body(ui);
         });
     }
@@ -3455,7 +3550,24 @@ impl WaterfallApp {
     }
 
     fn display_section(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "display", "Display", false, |ui| {
+        collapsible_section(
+            ui,
+            "display",
+            "Display",
+            Some(&[
+                ("Navigation", ACCENT),
+                (
+                    "←/→ pans when zoomed, otherwise tunes RX. Hold to accelerate (2× then fast); Shift = fine, Ctrl = fast.",
+                    MUTED,
+                ),
+                ("Minimap", ACCENT),
+                (
+                    "Top-right inset: CW band context + IQ data + viewport box. Click to pan (M).",
+                    MUTED,
+                ),
+            ]),
+            false,
+            |ui| {
             let max_zoom = self.plot_max_zoom_out();
             scroll_slider_f32(ui, &mut self.plot_view.zoom, 0.04..=max_zoom, "View zoom");
             self.plot_view.clamp_pan(self.plot_full_span_hz(), max_zoom);
@@ -3492,19 +3604,11 @@ impl WaterfallApp {
                 500.0,
             );
             self.pan_step_fast_hz = self.pan_step_fast_hz.max(self.pan_step_hz);
-            section_hint(
-                ui,
-                "←/→ pans the view when zoomed, otherwise tunes RX. Hold to accelerate (2× then fast); Shift = fine, Ctrl = fast.",
-            );
             if self.is_kiwi {
                 toggle(
                     ui,
                     &mut self.show_band_overview,
                     "Band overview minimap (M)",
-                );
-                section_hint(
-                    ui,
-                    "Top-right inset: CW band context + IQ data + viewport box. Click to pan.",
                 );
             }
             let floor_db = self.ref_db - self.range_db;
@@ -3529,7 +3633,10 @@ impl WaterfallApp {
                     &mut self.display_auto_track,
                     "Track continuously",
                 )
-                .on_hover_text("Keep adjusting Ref/Range as the band changes");
+                .on_hover_text(
+                    "Keep adjusting Ref/Range as the band changes — RF gain will not change \
+                     waterfall brightness while this is on",
+                );
             });
             if scroll_slider_f32(ui, &mut self.ref_db, -120.0..=20.0, "Ref dB").changed() {
                 self.display_levels_initialized = true;
@@ -3570,7 +3677,7 @@ impl WaterfallApp {
     }
 
     fn performance_section(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "perf", "Performance", false, |ui| {
+        collapsible_section(ui, "perf", "Performance", None, false, |ui| {
             ui.checkbox(&mut self.fft_auto, "Auto FFT size (wideband)");
             ui.checkbox(
                 &mut self.full_drain_spectrum,
@@ -3682,6 +3789,61 @@ impl WaterfallApp {
         });
     }
 
+    fn smeter_card(&mut self, ui: &mut egui::Ui) {
+        let live = matches!(self.conn_state, ConnState::Streaming);
+        section_frame()
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+            let w = ui.available_width();
+            ui.set_max_width(w);
+            section_heading_with_tip(
+                ui,
+                "S-meter",
+                &[
+                    ("RF level", ACCENT),
+                    (
+                        "Pre-software-AGC IQ + Kiwi hardware SND — independent of the IF IQ AGC loop.",
+                        MUTED,
+                    ),
+                    ("IF IQ AGC", ACCENT),
+                    (
+                        "Software loop that holds AF steady — independent of the S-meter needle.",
+                        MUTED,
+                    ),
+                    ("AF peak", OK),
+                    ("Post-AGC audio level; aim near half scale when tuning RF gain.", MUTED),
+                ],
+            );
+            show_dual_agc_loop(
+                ui,
+                &DualAgcParams {
+                    rf_dbm: if live {
+                        self.rf_meter_dbm()
+                    } else {
+                        -127.0
+                    },
+                    hw_rssi_dbm: if live {
+                        self.stats.rssi_dbm
+                    } else {
+                        None
+                    },
+                    agc_gain: if live {
+                        self.stats.agc_gain
+                    } else {
+                        1.0
+                    },
+                    agc_enabled: live && self.cw.agc.enabled,
+                    audio_peak: if live {
+                        self.stats.audio_peak
+                    } else {
+                        0.0
+                    },
+                    streaming: live,
+                },
+            );
+        });
+    }
+
     fn frequency_card(&mut self, ui: &mut egui::Ui) {
         section_card(ui, |ui| {
             section_heading(ui, "Operator");
@@ -3728,6 +3890,87 @@ impl WaterfallApp {
         });
     }
 
+    fn rf_front_end_card(&mut self, ui: &mut egui::Ui) {
+        let live = matches!(self.conn_state, ConnState::Streaming);
+        section_card(ui, |ui| {
+            section_heading_with_tip(
+                ui,
+                "RF front-end",
+                &[
+                    ("RF gain", ACCENT),
+                    (
+                        "Raise until AF scope sits near half scale; lower if IQ AGC is pinned or AF clips.",
+                        MUTED,
+                    ),
+                    ("Kiwi RF AGC", OK),
+                    ("Turn off for manual RF gain — while on, Kiwi ignores the gain slider.", MUTED),
+                ],
+            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(self.connection_alias())
+                        .small()
+                        .color(MUTED),
+                );
+                if !live {
+                    ui.label(
+                        egui::RichText::new("offline — live on connect")
+                            .small()
+                            .color(MUTED),
+                    );
+                }
+            });
+            self.hardware_rf_controls(ui, live);
+        });
+    }
+
+    fn af_tuning_card(&mut self, ui: &mut egui::Ui) {
+        if !self.show_af_scope {
+            return;
+        }
+        section_card(ui, |ui| {
+            section_heading_with_tip(
+                ui,
+                "AF tuning",
+                &[
+                    ("Goal", ACCENT),
+                    ("Tune RF gain so the AF trace sits near ±half scale.", MUTED),
+                    ("Status badge", OK),
+                    (
+                        "LOW / OK / HOT reflects RF level, IQ AGC headroom, and AF peak.",
+                        MUTED,
+                    ),
+                ],
+            );
+            let streaming = matches!(self.conn_state, ConnState::Streaming);
+            let hint = classify_level(
+                self.stats.audio_peak,
+                self.cw.agc.enabled,
+                self.stats.agc_gain,
+                self.stats.agc_envelope,
+                self.cw.agc.target,
+                streaming,
+            );
+            af_scope::show_af_tuning_panel(
+                ui,
+                &AfScopeParams {
+                    samples: &self.audio_scope,
+                    peak: self.stats.audio_peak,
+                    rms: self.stats.audio_rms,
+                    agc_gain: self.stats.agc_gain,
+                    agc_envelope: self.stats.agc_envelope,
+                    agc_enabled: self.cw.agc.enabled,
+                    agc_target: self.cw.agc.target,
+                    iq_headroom: self.stats.iq_buffer_fill,
+                    rssi_dbm: self.stats.rssi_dbm,
+                    iq_rf_level: self.stats.iq_rf_level,
+                    streaming,
+                    hint,
+                },
+            );
+        });
+    }
+
     fn cw_carrier_tools(&mut self, ui: &mut egui::Ui) {
         let bfo = self.cw.bfo_hz.round();
         ui.horizontal(|ui| {
@@ -3750,7 +3993,22 @@ impl WaterfallApp {
 
     fn cw_demod_card(&mut self, ui: &mut egui::Ui) {
         section_card(ui, |ui| {
-            section_heading(ui, "CW demod");
+            section_heading_with_tip(
+                ui,
+                "CW demod",
+                &[
+                    ("Channel filter", ACCENT),
+                    (
+                        "Complex IQ filter before demod — rejects adjacent signals while the carrier is still recoverable.",
+                        MUTED,
+                    ),
+                    ("Plot", ACCENT),
+                    (
+                        "Ctrl+scroll: BW · drag cyan band = RIT · cyan edges = width · purple notches draggable.",
+                        MUTED,
+                    ),
+                ],
+            );
             ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("BFO").small().color(MUTED));
                 for (label, hz) in BFO_PRESETS {
@@ -3809,10 +4067,6 @@ impl WaterfallApp {
                     self.cw.channel_filter = ChannelFilterKind::Iir2Pole;
                 }
             });
-            section_hint(
-                ui,
-                "Complex IQ filter before demod (not post-audio). Rejects adjacent signals while the carrier is still recoverable.",
-            );
             if self.cw.channel_filter == ChannelFilterKind::LinearFir {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Shape").small().color(MUTED));
@@ -3848,17 +4102,19 @@ impl WaterfallApp {
                 if self.cw.window == WindowKind::Kaiser {
                     scroll_slider_f32(ui, &mut self.cw.kaiser_beta, 2.0..=14.0, "Kaiser β");
                 }
-                toggle(
-                    ui,
-                    &mut self.cw.passband_flatten,
-                    "Flatten passband (inv-sinc)",
+                let flatten_resp =
+                    ui.checkbox(&mut self.cw.passband_flatten, "Flatten passband (inv-sinc)");
+                attach_rich_tooltip(
+                    &flatten_resp,
+                    Some("Flatten passband"),
+                    &[
+                        ("Inv-sinc lift", ACCENT),
+                        (
+                            "Lifts upstream boxcar/CIC droop (N≈7). Off by default — enable if the tone sounds dull at band edges.",
+                            MUTED,
+                        ),
+                    ],
                 );
-                if self.cw.passband_flatten {
-                    section_hint(
-                        ui,
-                        "Lifts upstream boxcar/CIC droop (N≈7). Off by default — enable if the tone sounds dull at band edges.",
-                    );
-                }
             }
             let audio_rate = hfsdr::audio_sample_rate(self.sample_rate, self.cw.decimation);
             let delay_note = if self.cw.channel_filter == ChannelFilterKind::LinearFir {
@@ -3868,19 +4124,30 @@ impl WaterfallApp {
                 "IIR 2-pole — minimal delay, non-linear phase (may ring)".to_string()
             };
             ui.label(egui::RichText::new(delay_note).small().color(MUTED));
-            section_hint(ui, "③ Channel filter — complex IQ, before the BFO detector.");
             self.agc_controls(ui);
-            section_hint(ui, "Ctrl+scroll on plot: BW · drag cyan band = RIT · cyan edges = width · purple notches draggable");
         });
     }
 
     fn receive_chain_card(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "pipeline", "Receive chain", true, |ui| {
-            section_hint(
-                ui,
-                "Stages run top-to-bottom in the DSP. Prefer IQ notches + channel filter before any post-demod polish.",
-            );
-
+        collapsible_section(
+            ui,
+            "pipeline",
+            "Receive chain",
+            Some(&[
+                ("Order", ACCENT),
+                (
+                    "Stages run top-to-bottom. Prefer IQ notches + channel filter before post-demod polish.",
+                    MUTED,
+                ),
+                ("① IQ", OK),
+                ("Noise blanker → manual notches (keys 1–4, ±80 Hz).", MUTED),
+                ("②–④", OK),
+                ("Channel filter + AGC + BFO in CW demod panel (right).", MUTED),
+                ("⑤ Audio", ACCENT),
+                ("APF, auto-notch, NR — optional post-demod stages.", MUTED),
+            ]),
+            true,
+            |ui| {
             ui.label(egui::RichText::new("① IQ — before demod").small().color(MUTED));
             stage_toggle(
                 ui,
@@ -3888,21 +4155,23 @@ impl WaterfallApp {
                 "Noise blanker",
                 Some("Wideband IQ impulse blanker"),
                 Some("B"),
+                Some(&[
+                    ("Raw IQ", ACCENT),
+                    (
+                        "Blank lightning/ignition impulses — must run before the narrow channel filter.",
+                        WARN,
+                    ),
+                ]),
             );
             if self.cw.noise_blanker.enabled {
                 scroll_slider_f32(ui, &mut self.cw.noise_blanker.threshold, 2.0..=12.0, "NB threshold");
                 let mut width = self.cw.noise_blanker.width as f32;
                 scroll_slider_f32(ui, &mut width, 1.0..=30.0, "NB recovery");
                 self.cw.noise_blanker.width = width.round() as usize;
-                section_hint(ui, "Blank lightning/ignition on raw IQ — must be before the narrow filter.");
             }
 
             ui.separator();
             self.manual_notches_body(ui);
-            section_hint(
-                ui,
-                "② IQ notches above · ③ channel filter + ④ AGC + BFO in CW demod panel (right).",
-            );
 
             ui.separator();
             ui.label(egui::RichText::new("⑤ Audio — after BFO demod (optional)").small().color(MUTED));
@@ -3912,6 +4181,7 @@ impl WaterfallApp {
                 "Audio peak filter",
                 Some("Resonant boost at BFO pitch"),
                 Some("P"),
+                None,
             );
             if self.cw.apf.enabled {
                 scroll_slider_f32(ui, &mut self.cw.apf.width_hz, 40.0..=300.0, "APF width");
@@ -3924,15 +4194,21 @@ impl WaterfallApp {
                 "Auto-notch",
                 Some("Audio LMS with BFO guard"),
                 Some("N"),
+                Some(&[
+                    ("Post-demod", ACCENT),
+                    (
+                        "Can see your BFO tone and freeze while you copy.",
+                        MUTED,
+                    ),
+                    (
+                        "Purple IQ notches above are better for hets — they run before demod.",
+                        OK,
+                    ),
+                ]),
             );
             if self.cw.auto_notch.enabled {
                 scroll_slider_f32(ui, &mut self.cw.auto_notch.guard_hz, 60.0..=300.0, "Guard ±Hz");
                 scroll_slider_f32(ui, &mut self.cw.auto_notch.rate, 0.002..=0.1, "Adapt rate");
-                section_hint(
-                    ui,
-                    "Post-demod because it can see your BFO tone and freeze while you copy. \
-                     Hets are better removed with purple IQ notches above — those run before demod.",
-                );
             }
 
             stage_toggle(
@@ -3941,25 +4217,41 @@ impl WaterfallApp {
                 "Noise reduction",
                 Some("Light audio LMS polish"),
                 Some("R"),
+                Some(&[
+                    ("Optional polish", ACCENT),
+                    (
+                        "The IQ channel filter is the real noise remover — NR does not belong before demod.",
+                        MUTED,
+                    ),
+                ]),
             );
             if self.cw.noise_reduction.enabled {
                 scroll_slider_f32(ui, &mut self.cw.noise_reduction.level, 0.0..=0.5, "NR level");
-                section_hint(
-                    ui,
-                    "Optional polish only — the IQ channel filter is the real noise remover. \
-                     NR does not belong before demod; narrowing the channel filter is the IQ equivalent.",
-                );
             }
         });
     }
 
     fn manual_notches_body(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Manual notches — complex IQ").small().color(MUTED));
-        section_hint(
-            ui,
-            "Pre-demod: removes hets while the carrier is still recoverable. Drag purple markers on the spectrum.",
-        );
-        section_hint(ui, "Keys 1–4 toggle notches · new ones land on listen ±80 Hz.");
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let label = ui.label(
+                egui::RichText::new("Manual notches — complex IQ")
+                    .small()
+                    .color(MUTED),
+            );
+            let hint = ui.label(egui::RichText::new("(?)").small().color(MUTED));
+            let tip = &[
+                ("Pre-demod", ACCENT),
+                (
+                    "Removes hets while the carrier is still recoverable. Drag purple markers on the spectrum.",
+                    MUTED,
+                ),
+                ("Keys 1–4", OK),
+                ("Toggle notches · new ones land on listen ±80 Hz.", MUTED),
+            ];
+            attach_rich_tooltip(&label, Some("Manual notches"), tip);
+            attach_rich_tooltip(&hint, Some("Manual notches"), tip);
+        });
         for idx in 0..MAX_NOTCHES {
             let was_enabled = self.cw.notches[idx].enabled;
             let key = match idx {
@@ -3974,6 +4266,7 @@ impl WaterfallApp {
                 &format!("Manual notch #{}", idx + 1),
                 Some("Complex IQ — drag on spectrum"),
                 Some(key),
+                None,
             );
             if self.cw.notches[idx].enabled && !was_enabled {
                 self.arm_manual_notch(idx, None);
@@ -4003,6 +4296,7 @@ impl WaterfallApp {
             "AGC",
             Some("IQ envelope gain riding"),
             Some("A"),
+            None,
         );
         if self.cw.agc.enabled {
             ui.horizontal(|ui| {
@@ -4041,107 +4335,129 @@ impl WaterfallApp {
         } else {
             scroll_slider_f32(ui, &mut self.cw.agc.manual_gain, 0.1..=16.0, "Manual gain");
         }
-
-        let streaming = matches!(self.conn_state, ConnState::Streaming);
-        let hint = classify_level(
-            self.stats.audio_peak,
-            self.cw.agc.enabled,
-            self.stats.agc_gain,
-            streaming,
-        );
-        af_scope::show_af_tuning_panel(
-            ui,
-            &AfScopeParams {
-                samples: &self.audio_scope,
-                peak: self.stats.audio_peak,
-                rms: self.stats.audio_rms,
-                agc_gain: self.stats.agc_gain,
-                agc_envelope: self.stats.agc_envelope,
-                agc_enabled: self.cw.agc.enabled,
-                agc_target: self.cw.agc.target,
-                iq_headroom: self.stats.iq_buffer_fill,
-                hint,
-            },
-        );
-
-        ui.separator();
-        ui.label(
-            egui::RichText::new("RF front-end (hardware)")
-                .small()
-                .color(MUTED),
-        );
-        self.hardware_rf_controls(ui);
     }
 
-    fn hardware_rf_controls(&mut self, ui: &mut egui::Ui) {
-        let streaming = matches!(self.conn_state, ConnState::Streaming);
-        if !streaming {
-            section_hint(
-                ui,
-                "Connect and start streaming to adjust hardware RF controls for the active source.",
-            );
-            return;
-        }
+    fn hardware_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
         match self.form_kind {
-            SourceKind::Kiwi if self.is_kiwi => self.kiwi_rf_controls(ui),
+            SourceKind::Kiwi => self.kiwi_rf_controls(ui, live),
             #[cfg(feature = "airspy")]
-            SourceKind::Airspy => self.airspy_rf_controls(ui),
+            SourceKind::Airspy => self.airspy_rf_controls(ui, live),
             #[cfg(feature = "rtlsdr")]
-            SourceKind::RtlSdr => self.rtlsdr_rf_controls(ui),
+            SourceKind::RtlSdr => self.rtlsdr_rf_controls(ui, live),
             #[cfg(feature = "qmx")]
-            SourceKind::Qmx => self.qmx_rf_controls(ui),
-            _ => section_hint(ui, "No hardware RF controls for this source."),
+            SourceKind::Qmx => self.qmx_rf_controls(ui, live),
         }
     }
 
-    fn kiwi_rf_controls(&mut self, ui: &mut egui::Ui) {
-        section_hint(
-            ui,
-            "Kiwi RF AGC and manGain tune the remote front end. KiwiSDR 2 adds a hardware \
-             attenuator (rf_attn) when the server reports has_attn=1.",
-        );
-        stage_toggle(
+    fn kiwi_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+        if stage_toggle(
             ui,
             &mut self.agc_rf_on,
             "Kiwi RF AGC",
             Some("Hardware RF AGC on the Kiwi (CAT agc=)"),
             None,
-        );
-        ui.add_enabled_ui(!self.agc_rf_on, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Kiwi manGain").small().color(MUTED));
-                ui.add(
-                    egui::Slider::new(&mut self.form_kiwi.man_gain, 0..=100)
-                        .suffix(" /100"),
-                );
-            });
-        });
-        if self.agc_rf_on {
-            section_hint(
-                ui,
-                "Turn RF AGC off to set manGain manually — tune with the AF scope above.",
-            );
+            Some(&[
+                ("Hardware loop", ACCENT),
+                (
+                    "When on, Kiwi runs its own SND AGC — the RF gain slider has no effect on IQ.",
+                    MUTED,
+                ),
+                ("Dual AGC", OK),
+                (
+                    "Turn off for manual RF gain (Yaesu-style). Software IQ AGC is separate.",
+                    MUTED,
+                ),
+            ]),
+        ) {
+            self.form_kiwi.rf_agc_on = self.agc_rf_on;
+            self.sync_kiwi_rf_now();
         }
-        if self.stats.kiwi_has_rf_attn {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("RF gain").small().color(MUTED));
+            let mut gain_db = man_gain_db_below_max(self.form_kiwi.man_gain);
+            let resp = ui.add(
+                egui::Slider::new(&mut gain_db, -100..=0)
+                    .suffix(" dB")
+                    .clamp_to_range(true),
+            );
+            if resp.changed() {
+                self.form_kiwi.man_gain = man_gain_from_db_below_max(gain_db);
+                self.sync_kiwi_rf_now();
+            }
+            if !self.agc_rf_on {
+                ui.label(
+                    egui::RichText::new("max")
+                        .small()
+                        .color(if gain_db == 0 { OK } else { MUTED }),
+                );
+            }
+            if live {
+                if let Some(hw) = self.stats.hw_rf_gain {
+                    if hw == self.form_kiwi.man_gain {
+                        ui.label(
+                            egui::RichText::new("sent")
+                                .small()
+                                .color(OK),
+                        );
+                    }
+                }
+            }
+            attach_rich_tooltip(
+                &resp,
+                Some("RF gain"),
+                &[
+                    ("Scale", ACCENT),
+                    (
+                        "0 dB = full gain (Kiwi manGain 100). Each step is ~1 dB; −50 dB is the old Kiwi default.",
+                        MUTED,
+                    ),
+                    ("Kiwi RF AGC off", OK),
+                    (
+                        "Manual gain applies only with Kiwi RF AGC off — unlike a Yaesu, Kiwi IQ ignores manGain while AGC is on.",
+                        MUTED,
+                    ),
+                    ("Yaesu analogy", MUTED),
+                    (
+                        "Start at 0 dB (max) and reduce gain if the band is hot — same idea as RF GAIN fully clockwise.",
+                        MUTED,
+                    ),
+                ],
+            );
+        });
+        if !live || self.stats.kiwi_has_rf_attn {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
-                ui.add(
-                    egui::Slider::new(&mut self.form_kiwi.rf_attn_db, 0.0..=31.5)
-                        .suffix(" dB")
-                        .fixed_decimals(1),
-                );
+                let attn_live = live && self.stats.kiwi_has_rf_attn;
+                ui.add_enabled_ui(attn_live || !live, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.form_kiwi.rf_attn_db, 0.0..=31.5)
+                            .suffix(" dB")
+                            .fixed_decimals(1),
+                    );
+                });
+                if live && !self.stats.kiwi_has_rf_attn {
+                    ui.label(
+                        egui::RichText::new("(not on this Kiwi)")
+                            .small()
+                            .color(MUTED),
+                    );
+                } else if live {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "hw {:.1} dB",
+                            self.stats.kiwi_rf_attn_db
+                        ))
+                        .small()
+                        .color(MUTED),
+                    );
+                }
             });
-            section_hint(
-                ui,
-                "Hardware RF attenuator (KiwiSDR 2). genattn in the CAT handshake is for the \
-                 internal test generator only.",
-            );
         }
     }
 
     #[cfg(feature = "qmx")]
-    fn qmx_rf_controls(&mut self, ui: &mut egui::Ui) {
-        section_hint(ui, "QMX RF gain via CAT (RG). Tune with the AF scope above.");
+    fn qmx_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+        let _ = live;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("RF gain").small().color(MUTED));
             ui.add(
@@ -4150,19 +4466,24 @@ impl WaterfallApp {
                     .logarithmic(false),
             );
         });
+        if !live {
+            ui.label(
+                egui::RichText::new("RF gain applies when connected")
+                    .small()
+                    .color(MUTED),
+            );
+        }
     }
 
     #[cfg(feature = "rtlsdr")]
-    fn rtlsdr_rf_controls(&mut self, ui: &mut egui::Ui) {
-        section_hint(
-            ui,
-            "RTL2832 AGC or fixed tuner gain. Tune manual gain with the AF scope above.",
-        );
+    fn rtlsdr_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+        let _ = live;
         stage_toggle(
             ui,
             &mut self.form_rtlsdr.rtl_agc,
             "RTL2832 AGC",
             Some("Internal digital AGC in the RTL2832"),
+            None,
             None,
         );
         stage_toggle(
@@ -4170,6 +4491,7 @@ impl WaterfallApp {
             &mut self.form_rtlsdr.manual_gain,
             "Manual tuner gain",
             Some("Fixed RF gain from the tuner IC"),
+            None,
             None,
         );
         if self.form_rtlsdr.manual_gain {
@@ -4197,20 +4519,19 @@ impl WaterfallApp {
             "Bias tee",
             Some("GPIO bias for active antennas / upconverters"),
             None,
+            None,
         );
     }
 
     #[cfg(feature = "airspy")]
-    fn airspy_rf_controls(&mut self, ui: &mut egui::Ui) {
-        section_hint(
-            ui,
-            "Airspy HF+ LNA, HF AGC, and attenuator. Tune with the AF scope above.",
-        );
+    fn airspy_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+        let _ = live;
         stage_toggle(
             ui,
             &mut self.form_airspy.hf_lna,
             "Preamp (+6 dB LNA)",
             Some("Enable for passive loop/wire antennas; off for max dynamic range"),
+            None,
             None,
         );
         stage_toggle(
@@ -4219,6 +4540,13 @@ impl WaterfallApp {
             "HF AGC",
             Some("Hardware AGC on the Airspy front end"),
             None,
+            Some(&[
+                ("HF AGC on", ACCENT),
+                (
+                    "Controls front-end gain — turn AGC off to use the 0–48 dB attenuator.",
+                    MUTED,
+                ),
+            ]),
         );
         if self.form_airspy.hf_agc {
             ui.horizontal(|ui| {
@@ -4243,17 +4571,12 @@ impl WaterfallApp {
                     .suffix(" ×6 dB"),
             );
         });
-        if self.form_airspy.hf_agc {
-            section_hint(
-                ui,
-                "HF AGC controls front-end gain — turn AGC off to use the 0–48 dB attenuator.",
-            );
-        }
         stage_toggle(
             ui,
             &mut self.form_airspy.bias_tee,
             "Bias tee",
             Some("DC on antenna port for active preamps/upconverters"),
+            None,
             None,
         );
         ui.collapsing("Frontend options (Discovery / Ranger)", |ui| {
@@ -4264,11 +4587,6 @@ impl WaterfallApp {
             ui.toggle_value(
                 &mut self.form_airspy.frontend_optimize_pll_boundary,
                 "Optimize PLL integer boundary",
-            );
-            section_hint(
-                ui,
-                "HF filter banks and band-tracking preselectors follow tuned frequency \
-                 automatically on Discovery HF+.",
             );
         });
     }
@@ -4282,29 +4600,41 @@ impl WaterfallApp {
         section_heading(ui, "Decoder & channel DSP");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Algorithm").small().color(MUTED));
-                if ui
-                    .selectable_label(
-                        self.skimmer.decoder == SkimmerDecoderKind::Bigram,
-                        "Bigram beam",
-                    )
-                    .clicked()
-                {
+                let bigram = ui.selectable_label(
+                    self.skimmer.decoder == SkimmerDecoderKind::Bigram,
+                    "Bigram beam",
+                );
+                attach_rich_tooltip(
+                    &bigram,
+                    Some("Decoder"),
+                    &[
+                        ("Bigram beam", ACCENT),
+                        ("Best copy on pileups.", OK),
+                        ("Adaptive", ACCENT),
+                        ("Lighter CPU.", MUTED),
+                    ],
+                );
+                if bigram.clicked() {
                     self.skimmer.decoder = SkimmerDecoderKind::Bigram;
                 }
-                if ui
-                    .selectable_label(
-                        self.skimmer.decoder == SkimmerDecoderKind::Adaptive,
-                        "Adaptive",
-                    )
-                    .clicked()
-                {
+                let adaptive = ui.selectable_label(
+                    self.skimmer.decoder == SkimmerDecoderKind::Adaptive,
+                    "Adaptive",
+                );
+                attach_rich_tooltip(
+                    &adaptive,
+                    Some("Decoder"),
+                    &[
+                        ("Bigram beam", ACCENT),
+                        ("Best copy on pileups.", OK),
+                        ("Adaptive", ACCENT),
+                        ("Lighter CPU.", MUTED),
+                    ],
+                );
+                if adaptive.clicked() {
                     self.skimmer.decoder = SkimmerDecoderKind::Adaptive;
                 }
             });
-            section_hint(
-                ui,
-                "Bigram: best copy on pileups · Adaptive: lighter CPU",
-            );
             scroll_slider_f32(ui, &mut self.skimmer.min_snr_db, 6.0..=30.0, "Peak min SNR");
             scroll_slider_f32(ui, &mut self.skimmer.min_decode_snr_db, 6.0..=40.0, "Decode min SNR");
             scroll_slider_f32(ui, &mut self.skimmer.decode_gate_ms, 20.0..=500.0, "Key gate ms");
@@ -4512,12 +4842,15 @@ impl WaterfallApp {
                 "Speakers",
                 Some("Spectrum/waterfall keep running when off"),
                 Some("Space"),
+                Some(&[
+                    ("Mute", ACCENT),
+                    (
+                        "Muting speakers or volume 0 keeps spectrum, waterfall, and skimmer running.",
+                        MUTED,
+                    ),
+                ]),
             );
             scroll_slider_f32(ui, &mut self.volume, 0.0..=4.0, "Volume (- / +)");
-            section_hint(
-                ui,
-                "Muting speakers or setting volume to 0 keeps spectrum, waterfall, and skimmer running.",
-            );
             if let Some(name) = &self.stats.audio_device {
                 stat_row(ui, "Active", name.clone());
                 stat_row(ui, "Rate", format!("{} Hz", self.stats.audio_rate));
@@ -4912,10 +5245,15 @@ impl eframe::App for WaterfallApp {
             .frame(status_panel_frame())
             .show_inside(ui, |ui| self.status_banner(ui));
 
-        if self.show_left {
+        if self.show_left || self.show_smeter {
             egui::Panel::left("left")
                 .resizable(true)
-                .default_size(300.0)
+                .size_range(200.0..=340.0)
+                .default_size(if self.show_smeter && !self.show_left {
+                    260.0
+                } else {
+                    300.0
+                })
                 .show_inside(ui, |ui| self.left_panel(ui));
         }
 
