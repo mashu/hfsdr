@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, RtlSdrSettings};
+use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings};
 
 const APP_DIR: &str = "hfsdr";
 const FILE: &str = "settings.json";
@@ -137,6 +137,7 @@ pub struct AppSettings {
     pub airspy_sample_rate: u32,
     pub rtlsdr: RtlSdrSettings,
     pub rtlsdr_sample_rate: u32,
+    pub qmx: QmxSettings,
     /// Bumped when persisted layout or defaults change; used for one-time migrations.
     #[serde(default = "legacy_settings_format")]
     pub settings_format: u32,
@@ -229,6 +230,7 @@ impl Default for AppSettings {
             airspy_sample_rate: 384_000,
             rtlsdr: RtlSdrSettings::default(),
             rtlsdr_sample_rate: 2_048_000,
+            qmx: QmxSettings::default(),
             settings_format: 1,
             iq_capture_dir: String::new(),
             iq_playback_path: String::new(),

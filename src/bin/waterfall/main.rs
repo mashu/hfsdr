@@ -2,6 +2,8 @@
 //!
 //! Usage:
 //!   waterfall airspy [sample_rate_hz] [center_hz] [process_hz]
+//!   waterfall rtlsdr [sample_rate_hz] [center_hz] [process_hz]
+//!   waterfall qmx [center_hz] [process_hz] [serial_port]  (requires `qmx` feature)
 //!   waterfall kiwi <host> [port] [center_hz]
 
 mod app;

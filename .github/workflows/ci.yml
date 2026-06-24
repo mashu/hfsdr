@@ -60,7 +60,7 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x86_64
-            features: gui,rtlsdr
+            features: gui
             install: |
               sudo apt-get update
               sudo apt-get install -y \
@@ -76,13 +76,13 @@ jobs:
             label: macos-universal
             features: gui
             install: |
-              brew install airspyhf pkg-config
+              brew install airspyhf librtlsdr pkg-config
               echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
               echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
             label: windows-x86_64-kiwi
-            features: gui
-            install: echo "Kiwi-only GUI build (no Airspy FFI on Windows CI)"
+            features: gui-core
+            install: echo "Kiwi+QMX GUI build (no native SDR libs on Windows CI)"
     steps:
       - uses: actions/checkout@v4
 

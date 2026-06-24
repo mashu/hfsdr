@@ -12,6 +12,8 @@ use hfsdr::{Complex32, Consumer, IqSource, kiwi_iq_half_hz, KiwiSource, KIWI_IQ_
 use hfsdr::{AirspyHf, airspyhf::iq_ring_capacity};
 #[cfg(feature = "rtlsdr")]
 use hfsdr::{rtlsdr::{self, iq_ring_capacity as rtlsdr_ring_capacity}, RtlSdr};
+#[cfg(feature = "qmx")]
+use hfsdr::{qmx::{self, iq_ring_capacity as qmx_ring_capacity}, QmxSource};
 use serde::{Deserialize, Serialize};
 
 /// Kiwi IQ stream options sent at connect (see kiwiclient `-L`/`-H`/`-o`/`-r`).
@@ -212,6 +214,55 @@ pub fn default_rtlsdr_sample_rate() -> u32 {
     rtlsdr::DEFAULT_SAMPLE_RATE
 }
 
+/// QMX / QMX+ CAT and USB-audio IQ options.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QmxSettings {
+    /// Virtual COM port path (empty = first available port).
+    pub serial_port: String,
+    /// USB sound card input name (empty = auto-detect QMX/QRP device).
+    pub audio_device: String,
+    /// Superhet IF offset applied when tuning (Hz subtracted from VFO `FA` command).
+    pub if_offset_hz: i32,
+    /// RF gain in dB (CAT `RG` command, band-dependent maximum).
+    pub rf_gain_db: u8,
+    /// Disable CAT TX timeout so the radio stays in RX during SDR use.
+    pub disable_cat_timeout: bool,
+    /// Force CW operating mode at connect (recommended for CW skimming).
+    pub force_cw_mode: bool,
+    /// Client-side IQ decimation target in Hz; `0` = native 48 kHz.
+    pub iq_process_hz: u32,
+}
+
+impl Default for QmxSettings {
+    fn default() -> Self {
+        Self {
+            serial_port: String::new(),
+            audio_device: String::new(),
+            if_offset_hz: 12_000,
+            rf_gain_db: 50,
+            disable_cat_timeout: true,
+            force_cw_mode: true,
+            iq_process_hz: 0,
+        }
+    }
+}
+
+#[cfg(feature = "qmx")]
+impl QmxSettings {
+    pub fn ingress_decimation(&self, device_rate: u32) -> (usize, f32) {
+        if self.iq_process_hz == 0 || self.iq_process_hz >= device_rate {
+            return (1, device_rate as f32);
+        }
+        if device_rate.is_multiple_of(self.iq_process_hz) {
+            let factor = (device_rate / self.iq_process_hz) as usize;
+            (factor.max(1), self.iq_process_hz as f32)
+        } else {
+            (1, device_rate as f32)
+        }
+    }
+}
+
 /// Which front end to bring up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
@@ -219,6 +270,8 @@ pub enum SourceKind {
     Airspy,
     #[cfg(feature = "rtlsdr")]
     RtlSdr,
+    #[cfg(feature = "qmx")]
+    Qmx,
     Kiwi,
 }
 
@@ -229,6 +282,8 @@ impl fmt::Display for SourceKind {
             SourceKind::Airspy => write!(f, "Airspy HF+"),
             #[cfg(feature = "rtlsdr")]
             SourceKind::RtlSdr => write!(f, "RTL-SDR"),
+            #[cfg(feature = "qmx")]
+            SourceKind::Qmx => write!(f, "QMX"),
             SourceKind::Kiwi => write!(f, "KiwiSDR"),
         }
     }
@@ -254,6 +309,9 @@ pub struct ConnectRequest {
     /// RTL-SDR gain, ppm, direct sampling, and optional IQ decimation (ignored for Kiwi / Airspy).
     #[serde(default)]
     pub rtlsdr: RtlSdrSettings,
+    /// QMX CAT port, audio device, IF offset, and optional IQ decimation.
+    #[serde(default)]
+    pub qmx: QmxSettings,
 }
 
 impl Default for ConnectRequest {
@@ -267,6 +325,7 @@ impl Default for ConnectRequest {
             kiwi: KiwiSettings::default(),
             airspy: AirspySettings::default(),
             rtlsdr: RtlSdrSettings::default(),
+            qmx: QmxSettings::default(),
         }
     }
 }
@@ -283,6 +342,8 @@ impl ConnectRequest {
                 self.rtlsdr.device_index,
                 self.center_hz / 1e6
             ),
+            #[cfg(feature = "qmx")]
+            SourceKind::Qmx => format!("QMX @ {:.3} MHz", self.center_hz / 1e6),
             SourceKind::Kiwi => format!("{}:{}", self.host, self.port),
         }
     }
@@ -312,6 +373,8 @@ pub fn connect(req: &ConnectRequest) -> Result<Connection, String> {
         SourceKind::Airspy => connect_airspy(req),
         #[cfg(feature = "rtlsdr")]
         SourceKind::RtlSdr => connect_rtlsdr(req),
+        #[cfg(feature = "qmx")]
+        SourceKind::Qmx => connect_qmx(req),
     }
 }
 
@@ -415,6 +478,35 @@ fn connect_rtlsdr(req: &ConnectRequest) -> Result<Connection, String> {
     })
 }
 
+#[cfg(feature = "qmx")]
+fn connect_qmx(req: &ConnectRequest) -> Result<Connection, String> {
+    let q = &req.qmx;
+    let mut src = QmxSource::open(
+        &q.serial_port,
+        &q.audio_device,
+        q.if_offset_hz,
+        q.rf_gain_db,
+        q.disable_cat_timeout,
+        q.force_cw_mode,
+    )
+    .map_err(|e| e.to_string())?;
+    src.tune(req.center_hz).map_err(|e| e.to_string())?;
+    let sr = qmx::SAMPLE_RATE;
+    let (ingress_decim, eff_sr) = q.ingress_decimation(sr);
+    let ring_cap = qmx_ring_capacity();
+    let iq = src.start().map_err(|e| e.to_string())?;
+    Ok(Connection {
+        source: Box::new(src),
+        iq,
+        iq_ring_capacity: ring_cap,
+        device_sample_rate: sr as f32,
+        sample_rate: eff_sr,
+        center_hz: req.center_hz,
+        is_kiwi: false,
+        iq_ingress_decim: ingress_decim,
+    })
+}
+
 /// Parse CLI args into a connect request for auto-connect on launch.
 ///
 /// `waterfall kiwi <host> [port] [center_hz]` or
@@ -436,6 +528,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 kiwi: KiwiSettings::default(),
                 airspy: AirspySettings::default(),
                 rtlsdr: RtlSdrSettings::default(),
+                qmx: QmxSettings::default(),
             })
         }
         #[cfg(feature = "airspy")]
@@ -454,6 +547,7 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 kiwi: KiwiSettings::default(),
                 airspy,
                 rtlsdr: RtlSdrSettings::default(),
+                qmx: QmxSettings::default(),
             })
         }
         #[cfg(feature = "rtlsdr")]
@@ -472,6 +566,27 @@ pub fn request_from_args() -> Option<ConnectRequest> {
                 kiwi: KiwiSettings::default(),
                 airspy: AirspySettings::default(),
                 rtlsdr,
+                qmx: QmxSettings::default(),
+            })
+        }
+        #[cfg(feature = "qmx")]
+        Some("qmx") => {
+            let center_hz = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
+            let process_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let serial = args.get(4).cloned().unwrap_or_default();
+            let mut qmx = QmxSettings::default();
+            qmx.iq_process_hz = process_hz;
+            qmx.serial_port = serial;
+            Some(ConnectRequest {
+                kind: SourceKind::Qmx,
+                host: String::new(),
+                port: 8073,
+                center_hz,
+                sample_rate: 0,
+                kiwi: KiwiSettings::default(),
+                airspy: AirspySettings::default(),
+                rtlsdr: RtlSdrSettings::default(),
+                qmx,
             })
         }
         _ => None,
@@ -490,6 +605,8 @@ impl<'de> Deserialize<'de> for SourceKind {
             "Airspy" => SourceKind::Airspy,
             #[cfg(feature = "rtlsdr")]
             "RtlSdr" => SourceKind::RtlSdr,
+            #[cfg(feature = "qmx")]
+            "Qmx" => SourceKind::Qmx,
             _ => SourceKind::Kiwi,
         })
     }
@@ -505,6 +622,8 @@ impl Serialize for SourceKind {
             SourceKind::Airspy => "Airspy",
             #[cfg(feature = "rtlsdr")]
             SourceKind::RtlSdr => "RtlSdr",
+            #[cfg(feature = "qmx")]
+            SourceKind::Qmx => "Qmx",
             SourceKind::Kiwi => "Kiwi",
         };
         serializer.serialize_str(name)

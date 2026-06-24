@@ -20,6 +20,8 @@
 pub mod airspyhf;
 #[cfg(feature = "rtlsdr")]
 pub mod rtlsdr;
+#[cfg(feature = "qmx")]
+pub mod qmx;
 pub mod cty;
 pub mod dsp;
 pub mod history;
@@ -33,6 +35,8 @@ pub mod source;
 pub use airspyhf::AirspyHf;
 #[cfg(feature = "rtlsdr")]
 pub use rtlsdr::RtlSdr;
+#[cfg(feature = "qmx")]
+pub use qmx::QmxSource;
 pub use cty::{Continent, ContinentResolver};
 pub use history::{Annotation, RowFold, SlowWaterfall};
 pub use iq_record::{default_capture_dir, read_meta, timestamped_capture_path, timestamped_capture_path_in, IqCaptureMeta, IqPlayback, IqRecorder};

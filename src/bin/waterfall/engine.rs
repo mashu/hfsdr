@@ -215,6 +215,8 @@ pub enum EngineCommand {
     SetRtlSdrBiasTee(bool),
     #[cfg(feature = "rtlsdr")]
     SetRtlSdrPpm(i32),
+    #[cfg(feature = "qmx")]
+    SetQmxRfGain(u8),
     SetAudioDevice(Option<String>),
     ClearSkimmerSpots,
     ReloadScp,
@@ -601,6 +603,12 @@ impl Engine {
             EngineCommand::SetRtlSdrPpm(ppm) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_freq_correction(ppm);
+                }
+            }
+            #[cfg(feature = "qmx")]
+            EngineCommand::SetQmxRfGain(db) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_rf_gain_db(db);
                 }
             }
             EngineCommand::SetAudioDevice(name) => {

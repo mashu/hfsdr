@@ -1,8 +1,8 @@
 [package]
 name = "hfsdr"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
-description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR)"
+description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR, QMX)"
 license = "MIT"
 authors = ["Mateusz Kaduk (SO5KM)"]
 
@@ -20,6 +20,7 @@ rustfft = { version = "6", features = ["avx", "sse"] }
 rayon = "1.10"
 tungstenite = "0.29"
 cpal = { version = "0.15", optional = true }
+serialport = { version = "4", default-features = false, optional = true }
 eframe = { version = "0.34", optional = true, default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui_extras = { version = "0.34", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -34,14 +35,18 @@ default = ["airspy"]
 # Links libairspyhf (system package). Disable on platforms without the library
 # (e.g. Windows CI builds use `--no-default-features --features gui` for Kiwi-only).
 airspy = []
-# Links librtlsdr (system package). Enable with `--features rtlsdr`.
+# Links librtlsdr (system package). Included in `gui`; use `gui-core` without it.
 rtlsdr = []
-gui = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd"]
+# QRP Labs QMX/QMX+ via USB CAT + audio IQ (pure Rust).
+qmx = ["dep:serialport", "dep:cpal"]
+# GUI without librtlsdr (Windows CI / Kiwi+QMX only).
+gui-core = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd", "qmx"]
+gui = ["gui-core", "rtlsdr"]
 
 [[bin]]
 name = "hfsdr"
 path = "src/bin/waterfall/main.rs"
-required-features = ["gui"]
+required-features = ["gui-core"]
 
 [[bin]]
 name = "airspy-probe"

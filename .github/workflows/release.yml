@@ -28,6 +28,7 @@ jobs:
               sudo apt-get update
               sudo apt-get install -y \
                 libairspyhf-dev \
+                librtlsdr-dev \
                 libasound2-dev \
                 libxkbcommon-dev \
                 libwayland-dev \
@@ -40,15 +41,15 @@ jobs:
             features: gui
             airspy: true
             install: |
-              brew install airspyhf pkg-config
+              brew install airspyhf librtlsdr pkg-config
               echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
               echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
             artifact_name: hfsdr-windows-x86_64-kiwi
             archive: zip
-            features: gui
+            features: gui-core
             airspy: false
-            install: echo "Kiwi-only build"
+            install: echo "Kiwi+QMX build"
     steps:
       - uses: actions/checkout@v4
 

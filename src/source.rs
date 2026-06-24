@@ -137,6 +137,11 @@ pub trait IqSource {
         Ok(())
     }
 
+    /// RF gain in dB (QMX / QMX+).
+    fn set_rf_gain_db(&mut self, _db: u8) -> Result<()> {
+        Ok(())
+    }
+
     /// Front end finished handshake and is delivering IQ (KiwiSDR).
     fn link_ready(&self) -> bool {
         true

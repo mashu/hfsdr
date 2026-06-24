@@ -48,7 +48,7 @@ use crate::kiwi_directory::{GeoLocation, KiwiReceiver};
 use crate::log;
 use crate::pipeline_flow::{PipelineFlow, PipelineSnapshot};
 use crate::settings::{AppSettings, NotchData};
-use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, RtlSdrSettings, SourceKind};
+use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind};
 use crate::spot_filter::{
     build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
 };
@@ -206,6 +206,13 @@ const AIRSPY_PROCESS_RATE_PRESETS: &[(&str, u32)] = &[
     ("192 kHz", 192_000),
 ];
 
+#[cfg(feature = "qmx")]
+const QMX_PROCESS_RATE_PRESETS: &[(&str, u32)] = &[
+    ("24 kHz (recommended)", 24_000),
+    ("Native (48 kHz)", 0),
+    ("12 kHz", 12_000),
+];
+
 pub struct WaterfallApp {
     engine: EngineHandle,
     conn_state: ConnState,
@@ -223,6 +230,8 @@ pub struct WaterfallApp {
     last_airspy_rf: AirspySettings,
     form_rtlsdr: RtlSdrSettings,
     last_rtlsdr_rf: RtlSdrSettings,
+    form_qmx: QmxSettings,
+    last_qmx_rf: QmxSettings,
 
     sample_rate: f32,
     center_khz: f64,
@@ -354,6 +363,8 @@ impl WaterfallApp {
             last_airspy_rf: AirspySettings::default(),
             form_rtlsdr: RtlSdrSettings::default(),
             last_rtlsdr_rf: RtlSdrSettings::default(),
+            form_qmx: QmxSettings::default(),
+            last_qmx_rf: QmxSettings::default(),
             sample_rate: 12_000.0,
             center_khz: DEFAULT_CENTER_HZ / 1000.0,
             last_center_khz: DEFAULT_CENTER_HZ / 1000.0,
@@ -475,6 +486,7 @@ impl WaterfallApp {
             }
             app.form_airspy = req.airspy.clone();
             app.form_rtlsdr = req.rtlsdr.clone();
+            app.form_qmx = req.qmx.clone();
             app.center_khz = req.center_hz / 1000.0;
             app.clamp_center_to_ham_bands();
             app.last_center_khz = app.center_khz;
@@ -657,6 +669,7 @@ impl WaterfallApp {
         self.form_kiwi = s.kiwi.clone();
         self.form_airspy = s.airspy.clone();
         self.form_rtlsdr = s.rtlsdr.clone();
+        self.form_qmx = s.qmx.clone();
         if s.airspy_sample_rate != 0 {
             self.form_sample_rate = s.airspy_sample_rate;
         } else if s.rtlsdr_sample_rate != 0 {
@@ -764,6 +777,7 @@ impl WaterfallApp {
             airspy_sample_rate: self.form_sample_rate,
             rtlsdr: self.form_rtlsdr.clone(),
             rtlsdr_sample_rate: self.form_sample_rate,
+            qmx: self.form_qmx.clone(),
             settings_format: 1,
             iq_capture_dir: self.iq.capture_dir.display().to_string(),
             iq_playback_path: self.iq.playback_path.clone(),
@@ -1425,7 +1439,30 @@ impl WaterfallApp {
         }
         self.apply_airspy_live_settings();
         self.apply_rtlsdr_live_settings();
+        self.apply_qmx_live_settings();
         self.apply_audio_device();
+    }
+
+    fn apply_qmx_live_settings(&mut self) {
+        #[cfg(not(feature = "qmx"))]
+        {
+            let _ = self;
+            return;
+        }
+        #[cfg(feature = "qmx")]
+        {
+            if self.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
+                return;
+            }
+            if self.form_kind != SourceKind::Qmx {
+                return;
+            }
+            if self.form_qmx.rf_gain_db != self.last_qmx_rf.rf_gain_db {
+                self.engine
+                    .send(EngineCommand::SetQmxRfGain(self.form_qmx.rf_gain_db));
+                self.last_qmx_rf.rf_gain_db = self.form_qmx.rf_gain_db;
+            }
+        }
     }
 
     fn apply_rtlsdr_live_settings(&mut self) {
@@ -1547,6 +1584,7 @@ impl WaterfallApp {
         }
         self.form_airspy = req.airspy.clone();
         self.form_rtlsdr = req.rtlsdr.clone();
+        self.form_qmx = req.qmx.clone();
     }
 
     fn can_connect_request(req: &ConnectRequest) -> bool {
@@ -1582,6 +1620,8 @@ impl WaterfallApp {
             SourceKind::Airspy => self.form_sample_rate,
             #[cfg(feature = "rtlsdr")]
             SourceKind::RtlSdr => self.form_sample_rate,
+            #[cfg(feature = "qmx")]
+            SourceKind::Qmx => 0,
             _ => 0,
         };
         let req = ConnectRequest {
@@ -1593,9 +1633,11 @@ impl WaterfallApp {
             kiwi: self.form_kiwi.clone(),
             airspy: self.form_airspy.clone(),
             rtlsdr: self.form_rtlsdr.clone(),
+            qmx: self.form_qmx.clone(),
         };
         self.last_airspy_rf = self.form_airspy.clone();
         self.last_rtlsdr_rf = self.form_rtlsdr.clone();
+        self.last_qmx_rf = self.form_qmx.clone();
         self.last_center_khz = self.center_khz;
         self.remember_host(&req);
         self.apply_default_view_zoom();
@@ -2197,6 +2239,14 @@ impl WaterfallApp {
             SourceKind::Airspy => "Airspy HF+".to_string(),
             #[cfg(feature = "rtlsdr")]
             SourceKind::RtlSdr => format!("RTL-SDR #{}", self.form_rtlsdr.device_index),
+            #[cfg(feature = "qmx")]
+            SourceKind::Qmx => {
+                if self.form_qmx.serial_port.is_empty() {
+                    "QMX".to_string()
+                } else {
+                    format!("QMX ({})", self.form_qmx.serial_port)
+                }
+            }
             SourceKind::Kiwi => {
                 let host = self.form_host.trim();
                 if host.is_empty() {
@@ -2312,6 +2362,8 @@ impl WaterfallApp {
             SourceKind::Kiwi => self.form_kiwi.ingress_decimation(device_rate).0,
             #[cfg(feature = "rtlsdr")]
             SourceKind::RtlSdr => self.form_rtlsdr.ingress_decimation(device_rate).0,
+            #[cfg(feature = "qmx")]
+            SourceKind::Qmx => self.form_qmx.ingress_decimation(device_rate).0,
         }
     }
 
@@ -2903,6 +2955,121 @@ impl WaterfallApp {
                     "2.048 MHz suits HF with an upconverter. Use direct sampling for 0–28.8 MHz IF \
                      (Q branch often quieter). Lower “Process IQ” to ≤96 kHz for skimmer (reconnect). \
                      Gain / bias / PPM apply live when connected.",
+                );
+            });
+        }
+
+        #[cfg(feature = "qmx")]
+        if self.form_kind == SourceKind::Qmx {
+            let serial_ports = hfsdr::qmx::list_serial_ports();
+            let audio_inputs = hfsdr::qmx::list_input_devices();
+            popup_section(ui, "QMX / QMX+", None, |ui| {
+                egui::Grid::new("connect_qmx_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .min_col_width(100.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("CAT port").small().color(MUTED));
+                        egui::ComboBox::from_id_salt("qmx_serial")
+                            .selected_text(if self.form_qmx.serial_port.is_empty() {
+                                "(first available)".to_string()
+                            } else {
+                                self.form_qmx.serial_port.clone()
+                            })
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(self.form_qmx.serial_port.is_empty(), "(first available)")
+                                    .clicked()
+                                {
+                                    self.form_qmx.serial_port.clear();
+                                }
+                                for port in &serial_ports {
+                                    if ui
+                                        .selectable_label(
+                                            self.form_qmx.serial_port == *port,
+                                            port,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.form_qmx.serial_port = port.clone();
+                                    }
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("IQ audio in").small().color(MUTED));
+                        egui::ComboBox::from_id_salt("qmx_audio")
+                            .selected_text(if self.form_qmx.audio_device.is_empty() {
+                                "(auto-detect QMX)".to_string()
+                            } else {
+                                self.form_qmx.audio_device.clone()
+                            })
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(self.form_qmx.audio_device.is_empty(), "(auto-detect QMX)")
+                                    .clicked()
+                                {
+                                    self.form_qmx.audio_device.clear();
+                                }
+                                for dev in &audio_inputs {
+                                    if ui
+                                        .selectable_label(
+                                            self.form_qmx.audio_device == *dev,
+                                            dev,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.form_qmx.audio_device = dev.clone();
+                                    }
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Process IQ").small().color(MUTED));
+                        preset_combo_u32(
+                            ui,
+                            "qmx_proc",
+                            &mut self.form_qmx.iq_process_hz,
+                            QMX_PROCESS_RATE_PRESETS,
+                            "Hz ",
+                            0..=48_000,
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("IF offset").small().color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.form_qmx.if_offset_hz)
+                                .range(0..=50_000)
+                                .suffix(" Hz"),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("RF gain").small().color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.form_qmx.rf_gain_db)
+                                .range(0..=99)
+                                .suffix(" dB"),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("CAT timeout").small().color(MUTED));
+                        ui.toggle_value(
+                            &mut self.form_qmx.disable_cat_timeout,
+                            "Disable (stay in RX)",
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("CW mode").small().color(MUTED));
+                        ui.toggle_value(&mut self.form_qmx.force_cw_mode, "Set at connect");
+                        ui.end_row();
+                    });
+                section_hint(
+                    ui,
+                    "IQ is 48 kHz stereo USB audio (I=left, Q=right). CAT enables IQ mode (Q9) \
+                     and tunes VFO A (FA). The 12 kHz IF offset is applied automatically. \
+                     RF gain applies live when connected; port/audio choices need reconnect.",
                 );
             });
         }
@@ -3587,6 +3754,33 @@ impl WaterfallApp {
         if self.is_rtlsdr_streaming() {
             self.rtlsdr_rf_controls(ui);
         }
+        #[cfg(feature = "qmx")]
+        if self.is_qmx_streaming() {
+            self.qmx_rf_controls(ui);
+        }
+    }
+
+    #[cfg(feature = "qmx")]
+    fn is_qmx_streaming(&self) -> bool {
+        self.form_kind == SourceKind::Qmx && matches!(self.conn_state, ConnState::Streaming)
+    }
+
+    #[cfg(feature = "qmx")]
+    fn qmx_rf_controls(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(
+            egui::RichText::new("QMX RF — CAT gain")
+                .small()
+                .color(MUTED),
+        );
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("RF gain").small().color(MUTED));
+            ui.add(
+                egui::DragValue::new(&mut self.form_qmx.rf_gain_db)
+                    .range(0..=99)
+                    .suffix(" dB"),
+            );
+        });
     }
 
     #[cfg(feature = "rtlsdr")]
@@ -4224,45 +4418,48 @@ fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
     .clamped()
 }
 
-fn source_kind_labels() -> Vec<&'static str> {
-    [
-        Some("KiwiSDR"),
+fn all_source_kinds() -> Vec<SourceKind> {
+    let mut kinds = vec![SourceKind::Kiwi];
+    #[cfg(feature = "airspy")]
+    kinds.push(SourceKind::Airspy);
+    #[cfg(feature = "rtlsdr")]
+    kinds.push(SourceKind::RtlSdr);
+    #[cfg(feature = "qmx")]
+    kinds.push(SourceKind::Qmx);
+    kinds
+}
+
+fn source_kind_label(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Kiwi => "KiwiSDR",
         #[cfg(feature = "airspy")]
-        Some("Airspy"),
+        SourceKind::Airspy => "Airspy",
         #[cfg(feature = "rtlsdr")]
-        Some("RTL-SDR"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+        SourceKind::RtlSdr => "RTL-SDR",
+        #[cfg(feature = "qmx")]
+        SourceKind::Qmx => "QMX",
+    }
+}
+
+fn source_kind_labels() -> Vec<&'static str> {
+    all_source_kinds()
+        .into_iter()
+        .map(source_kind_label)
+        .collect()
 }
 
 fn source_kind_index(kind: SourceKind) -> usize {
-    match kind {
-        SourceKind::Kiwi => 0,
-        #[cfg(feature = "airspy")]
-        SourceKind::Airspy => 1,
-        #[cfg(all(feature = "rtlsdr", not(feature = "airspy")))]
-        SourceKind::RtlSdr => 1,
-        #[cfg(all(feature = "airspy", feature = "rtlsdr"))]
-        SourceKind::RtlSdr => 2,
-    }
+    all_source_kinds()
+        .iter()
+        .position(|&k| k == kind)
+        .unwrap_or(0)
 }
 
 fn source_kind_from_index(i: usize) -> SourceKind {
-    match i {
-        0 => SourceKind::Kiwi,
-        #[cfg(all(feature = "airspy", feature = "rtlsdr"))]
-        1 => SourceKind::Airspy,
-        #[cfg(all(feature = "airspy", feature = "rtlsdr"))]
-        _ => SourceKind::RtlSdr,
-        #[cfg(all(feature = "airspy", not(feature = "rtlsdr")))]
-        _ => SourceKind::Airspy,
-        #[cfg(all(feature = "rtlsdr", not(feature = "airspy")))]
-        _ => SourceKind::RtlSdr,
-        #[cfg(not(any(feature = "airspy", feature = "rtlsdr")))]
-        _ => SourceKind::Kiwi,
-    }
+    all_source_kinds()
+        .get(i)
+        .copied()
+        .unwrap_or(SourceKind::Kiwi)
 }
 
 fn is_local_source(kind: SourceKind) -> bool {
@@ -4272,6 +4469,8 @@ fn is_local_source(kind: SourceKind) -> bool {
         SourceKind::Airspy => true,
         #[cfg(feature = "rtlsdr")]
         SourceKind::RtlSdr => true,
+        #[cfg(feature = "qmx")]
+        SourceKind::Qmx => true,
     }
 }
 
@@ -4293,6 +4492,7 @@ impl eframe::App for WaterfallApp {
             }
             self.form_airspy = req.airspy.clone();
             self.form_rtlsdr = req.rtlsdr.clone();
+            self.form_qmx = req.qmx.clone();
             self.center_khz = req.center_hz / 1000.0;
             self.clamp_center_to_ham_bands();
             req.center_hz = self.center_khz * 1000.0;
