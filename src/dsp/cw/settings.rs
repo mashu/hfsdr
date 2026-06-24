@@ -6,6 +6,7 @@
 //! the DSP structs themselves.
 
 use super::fir::WindowKind;
+use super::super::freq_offset::ChannelOffsetHz;
 
 /// Fixed number of independent manual notches (pileups have several hets).
 pub const MAX_NOTCHES: usize = 4;
@@ -14,7 +15,8 @@ pub const MAX_NOTCHES: usize = 4;
 #[derive(Clone, Copy, Debug)]
 pub struct NotchSpec {
     pub enabled: bool,
-    pub offset_hz: f32,
+    /// Panadapter / waterfall position (channel coordinates).
+    pub offset_hz: ChannelOffsetHz,
     pub width_hz: f32,
 }
 
@@ -22,7 +24,7 @@ impl Default for NotchSpec {
     fn default() -> Self {
         Self {
             enabled: false,
-            offset_hz: 0.0,
+            offset_hz: ChannelOffsetHz::ZERO,
             width_hz: 50.0,
         }
     }
@@ -123,8 +125,8 @@ impl Default for AgcSettings {
 /// Complete listen-chain configuration for one CW slice (VFO).
 #[derive(Clone, Debug)]
 pub struct CwChannelSettings {
-    /// RF offset from hardware tune to the signal (Hz); RIT folds in here.
-    pub listen_offset_hz: f32,
+    /// RF offset from hardware tune to the signal (channel coordinates); RIT folds in here.
+    pub listen_offset_hz: ChannelOffsetHz,
     pub bfo_hz: f32,
     pub passband_hz: f32,
     pub window: WindowKind,
@@ -145,7 +147,7 @@ pub struct CwChannelSettings {
 impl Default for CwChannelSettings {
     fn default() -> Self {
         Self {
-            listen_offset_hz: 0.0,
+            listen_offset_hz: ChannelOffsetHz::ZERO,
             bfo_hz: 650.0,
             passband_hz: 200.0,
             window: WindowKind::Gaussian,

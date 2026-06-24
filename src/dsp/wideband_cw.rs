@@ -1,5 +1,6 @@
 //! Wideband CW listen path: preprocess ingress + baseband [`CwChannel`].
 
+use super::freq_offset::{ChannelOffsetHz, ListenOrigin};
 use crate::source::Complex32;
 
 use super::cw::{effective_decimation, CwChannel, CwChannelSettings};
@@ -44,9 +45,9 @@ impl WidebandCwIngress {
         &mut self,
         input: &[Complex32],
         iq_rate: f32,
-        listen_offset_hz: f32,
+        listen_offset_hz: ChannelOffsetHz,
     ) -> &[Complex32] {
-        self.ingress.process(input, listen_offset_hz, iq_rate)
+        self.ingress.process(input, listen_offset_hz.hz(), iq_rate)
     }
 }
 
@@ -65,26 +66,22 @@ pub fn demod_wideband(
     }
     ingress.sync(iq_rate, settings.decimation);
     let audio_rate = ingress.audio_rate();
-    let bb = ingress.to_baseband(input, iq_rate, settings.listen_offset_hz);
+    let listen = settings.listen_offset_hz;
+    let bb = ingress.to_baseband(input, iq_rate, listen);
     if bb.is_empty() {
         return;
     }
-    let listen = settings.listen_offset_hz;
     let mut base = settings.clone();
-    base.listen_offset_hz = 0.0;
+    base.listen_offset_hz = ChannelOffsetHz::ZERO;
     base.decimation = 1;
-    // Ingress already mixed listen to DC; notch offsets stay channel-absolute in settings.
-    for n in &mut base.notches {
-        if n.enabled {
-            n.offset_hz -= listen;
-        }
-    }
-    channel.process(bb, audio_rate, &base, out);
+    let origin = ListenOrigin::after_upstream_mix(listen);
+    channel.process(bb, audio_rate, &base, origin, out);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ChannelOffsetHz;
     use std::f32::consts::TAU;
 
     fn tone_iq(sample_rate: f32, offset_hz: f32, n: usize) -> Vec<Complex32> {
@@ -103,10 +100,10 @@ mod tests {
     #[test]
     fn wideband_notch_uses_absolute_plot_offset_with_rit() {
         let iq_rate = 384_000.0;
-        let listen = 150.0;
-        let interferer = 420.0;
+        let listen = ChannelOffsetHz::new(150.0);
+        let interferer = ChannelOffsetHz::new(420.0);
         let n = 16_384;
-        let iq = tone_iq(iq_rate, interferer, n);
+        let iq = tone_iq(iq_rate, interferer.hz(), n);
         let mut ingress = WidebandCwIngress::new(iq_rate, 0);
         let mut channel = CwChannel::new(12_000.0);
         let mut settings = CwChannelSettings {
@@ -153,7 +150,7 @@ mod tests {
         let mut ingress = WidebandCwIngress::new(iq_rate, 0);
         let mut channel = CwChannel::new(12_000.0);
         let mut settings = CwChannelSettings {
-            listen_offset_hz: 200.0,
+            listen_offset_hz: ChannelOffsetHz::new(200.0),
             bfo_hz: 650.0,
             passband_hz: 500.0,
             ..CwChannelSettings::default()

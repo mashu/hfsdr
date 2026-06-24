@@ -19,20 +19,7 @@ errors land there instead of spamming the terminal.
 
 ## Main areas of the window
 
-```text
-┌─ status: link, SNR, drops, toggles ─────────────────────────┐
-│ left panel          │  spectrum (live trace)                 │
-│ · connection        │  waterfall (time ↓, frequency →)       │
-│ · recent hosts      │  cyan edges = your listen passband     │
-│ · spots table       │                                        │
-│                     │                                        │
-│ right panel         │                                        │
-│ · CW demod / filters│                                        │
-│ · skimmer settings  │                                        │
-│ · audio / display   │                                        │
-└─────────────────────┴────────────────────────────────────────┘
- optional bottom: history · log console (hidden by default)
-```
+<div data-diagram="gui-layout"></div>
 
 | Area | Purpose |
 |------|---------|

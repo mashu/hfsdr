@@ -1,0 +1,54 @@
+/* hfsdr palette — matches src/bin/waterfall/theme.rs */
+:root {
+  --hf-surface: #0e1118;
+  --hf-panel: #161b26;
+  --hf-raised: #1c212c;
+  --hf-grid: #323c4e;
+  --hf-muted: #8c96aa;
+  --hf-text: #e2e8f4;
+  --hf-accent: #38bdf8;
+  --hf-accent-dim: #1e648c;
+  --hf-ok: #6ee7b7;
+  --hf-warn: #fbbf24;
+  --hf-error: #f87171;
+  --hf-panel-raised: var(--hf-raised);
+  --hf-text-secondary: var(--hf-muted);
+  --hf-on-accent: #0e1118;
+  --hf-widget: #262d3d;
+  --hf-border: var(--hf-grid);
+}
+
+/* mdBook navy theme — paired fg/bg for contrast */
+html.navy {
+  --bg: var(--hf-surface);
+  --fg: var(--hf-text);
+  --sidebar-bg: var(--hf-panel);
+  --sidebar-fg: var(--hf-muted);
+  --sidebar-non-existant: #5c6678;
+  --sidebar-active: var(--hf-accent);
+  --scrollbar: var(--hf-grid);
+  --icons: var(--hf-muted);
+  --icons-hover: var(--hf-text);
+  --links: var(--hf-accent);
+  --inline-code-color: var(--hf-ok);
+  --theme-popup-bg: var(--hf-raised);
+  --theme-popup-border: var(--hf-grid);
+  --theme-hover: color-mix(in srgb, var(--hf-accent) 12%, var(--hf-panel));
+  --quote-bg: var(--hf-raised);
+  --quote-border: var(--hf-accent-dim);
+  --table-border-color: var(--hf-grid);
+  --table-header-bg: var(--hf-raised);
+  --table-alternate-bg: color-mix(in srgb, var(--hf-raised) 80%, var(--hf-surface));
+  --searchbar-border-color: var(--hf-grid);
+  --searchbar-bg: var(--hf-panel);
+  --searchbar-fg: var(--hf-text);
+  --searchresults-border-color: var(--hf-grid);
+  --searchresults-header-bg: var(--hf-raised);
+  --searchresults-alias-color: var(--hf-muted);
+  --searchresults-mark-bg: color-mix(in srgb, var(--hf-warn) 35%, transparent);
+}
+
+html.navy :not(pre) > code {
+  color: var(--hf-ok);
+  background: color-mix(in srgb, var(--hf-ok) 10%, var(--hf-raised));
+}

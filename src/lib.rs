@@ -47,6 +47,7 @@ pub use dsp::{
     extract_passband_view, extract_view_window, panadapter_output_bins, iq_to_audio, spectrum_plan, spectrum_view_mapping,
     waterfall_storage_mapping, waterfall_storage_span_hz, waterfall_texture_u_range,
     view_t_to_offset_hz, offset_hz_to_view_t, offset_hz_to_storage_u, stretch_row_to_width,
+    BasebandOffsetHz, ChannelOffsetHz, ListenOrigin,
     AgcSettings, ApfSettings, AutoNotchSettings, CwChannel, CwChannelSettings, FirDecimator,
     IngressWorker, IqAudioDemod,
     NoiseBlankerSettings, NoiseReductionSettings, NotchSpec, SpectrumAnalyzer, SpectrumFrontEnd,

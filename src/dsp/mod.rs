@@ -10,6 +10,7 @@ mod audio;
 mod biquad;
 mod cw;
 mod fft_plan;
+mod freq_offset;
 mod spectrum;
 mod spectrum_front;
 mod spectrum_plan;
@@ -34,6 +35,7 @@ pub use spectrum_plan::{
     TARGET_BIN_HZ, ZOOM_DECIM_THRESHOLD,
 };
 pub use preprocess::{FirDecimator, IngressWorker, IqRotator, IqShiftDecim};
+pub use freq_offset::{BasebandOffsetHz, ChannelOffsetHz, ListenOrigin};
 pub use wideband_cw::{demod_wideband, WidebandCwIngress, WIDEBAND_IQ_THRESHOLD as AUDIO_WIDEBAND_THRESHOLD};
 pub use view::{
     compose_panadapter_row, downsample_row_peak, extract_passband_view, extract_view_window,

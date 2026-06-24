@@ -16,7 +16,7 @@ use egui_extras::{Column, TableBuilder};
 use hfsdr::{
     decimation_factor, compose_panadapter_row, panadapter_output_bins, stretch_row_to_width,
     strongest_offset_hz, Continent,
-    ContinentResolver, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
+    ContinentResolver, ChannelOffsetHz, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, WindowKind,
     MAX_NOTCHES,
 };
@@ -619,7 +619,7 @@ impl WaterfallApp {
         self.cw.agc.manual_gain = s.agc_manual_gain;
         for (slot, data) in self.cw.notches.iter_mut().zip(s.notches.iter()) {
             slot.enabled = data.enabled;
-            slot.offset_hz = data.offset_hz;
+            slot.offset_hz = ChannelOffsetHz::new(data.offset_hz);
             slot.width_hz = data.width_hz;
         }
 
@@ -719,7 +719,7 @@ impl WaterfallApp {
                 .iter()
                 .map(|n| NotchData {
                     enabled: n.enabled,
-                    offset_hz: n.offset_hz,
+                    offset_hz: n.offset_hz.hz(),
                     width_hz: n.width_hz,
                 })
                 .collect(),
@@ -813,7 +813,7 @@ impl WaterfallApp {
 
     /// Push UI settings to the engine and pull its published rows/status/spots.
     fn pump_engine(&mut self) {
-        self.cw.listen_offset_hz = self.listen_offset_hz() as f32;
+        self.cw.listen_offset_hz = ChannelOffsetHz::new(self.listen_offset_hz() as f32);
         self.plot_view
             .clamp_pan(self.plot_full_span_hz(), self.plot_max_zoom_out());
         self.engine.set_params(EngineParams {
@@ -1004,7 +1004,7 @@ impl WaterfallApp {
                 }
                 PlotAction::SetNotchOffset { slot, offset_hz } => {
                     if let Some(n) = self.cw.notches.get_mut(slot) {
-                        n.offset_hz = offset_hz;
+                        n.offset_hz = ChannelOffsetHz::new(offset_hz);
                     }
                 }
                 PlotAction::SetNotchWidth { slot, width_hz } => {
@@ -1235,14 +1235,14 @@ impl WaterfallApp {
             .iter()
             .enumerate()
             .filter(|(i, n)| *i != slot && n.enabled)
-            .map(|(_, n)| n.offset_hz)
+            .map(|(_, n)| n.offset_hz.hz())
             .collect();
         let offset = offset_hz.unwrap_or_else(|| suggest_notch_offset_hz(listen, &other));
         let Some(notch) = self.cw.notches.get_mut(slot) else {
             return;
         };
         notch.enabled = true;
-        notch.offset_hz = offset;
+        notch.offset_hz = ChannelOffsetHz::new(offset);
         if notch.width_hz < NOTCH_WIDTH_MIN_HZ {
             notch.width_hz = 50.0;
         }
@@ -1256,7 +1256,7 @@ impl WaterfallApp {
             .filter(|(_, n)| n.enabled)
             .map(|(slot, n)| crate::interaction::NotchMarker {
                 slot,
-                offset_hz: n.offset_hz,
+                offset_hz: n.offset_hz.hz(),
                 width_hz: n.width_hz,
             })
             .collect()
@@ -3796,13 +3796,15 @@ impl WaterfallApp {
             }
             if self.cw.notches[idx].enabled {
                 let notch = &mut self.cw.notches[idx];
+                let mut offset_hz = notch.offset_hz.hz();
                 scroll_slider_f32_step(
                     ui,
-                    &mut notch.offset_hz,
+                    &mut offset_hz,
                     -5_000.0..=5_000.0,
                     "Offset",
                     1.0,
                 );
+                notch.offset_hz = ChannelOffsetHz::new(offset_hz);
                 scroll_slider_f32_step(ui, &mut notch.width_hz, 10.0..=200.0, "Width", 1.0);
             }
         }

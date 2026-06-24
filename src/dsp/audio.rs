@@ -7,6 +7,7 @@
 use crate::source::Complex32;
 
 use super::cw::{CwChannel, CwChannelSettings};
+use super::freq_offset::ListenOrigin;
 use super::wideband_cw::{demod_wideband, WidebandCwIngress, WIDEBAND_IQ_THRESHOLD};
 
 /// Stateful CW demodulator backed by [`CwChannel`].
@@ -75,7 +76,8 @@ impl IqAudioDemod {
             self.channel = CwChannel::new(sample_rate);
             self.last_audio_rate = sample_rate;
         }
-        self.channel.process(samples, sample_rate, settings, out);
+        let origin = ListenOrigin::from_settings(settings.listen_offset_hz);
+        self.channel.process(samples, sample_rate, settings, origin, out);
     }
 }
 
@@ -175,7 +177,7 @@ mod tests {
         let iq = tone_iq(iq_rate, 300.0, 8192);
         let mut demod = IqAudioDemod::new();
         let mut settings = CwChannelSettings {
-            listen_offset_hz: 300.0,
+            listen_offset_hz: crate::ChannelOffsetHz::new(300.0),
             bfo_hz: 650.0,
             passband_hz: 500.0,
             ..CwChannelSettings::default()

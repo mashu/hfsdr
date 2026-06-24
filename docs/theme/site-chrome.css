@@ -1,0 +1,80 @@
+@import url("palette.css");
+
+/* mdBook inherits colors via html.navy variables in palette.css — no body overrides */
+
+.menu-title {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--links) !important;
+}
+
+/* Hero pages: screen-reader keeps h1, visual title is in .hf-hero */
+main:has(.hf-hero) > h1:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.content main {
+  max-width: 52rem;
+  line-height: 1.65;
+  color: var(--fg);
+}
+
+.content h1,
+.content h2 {
+  color: var(--fg);
+}
+
+.content h3,
+.content h4 {
+  color: var(--links);
+}
+
+.content p,
+.content li,
+.content td {
+  color: var(--fg);
+}
+
+.content table th {
+  color: var(--links);
+  background: var(--table-header-bg);
+}
+
+.content table td {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+/* Inline code only — do not recolor syntax-highlighted blocks */
+.content :not(pre) > code {
+  color: var(--inline-code-color);
+}
+
+.content pre.hljs,
+.content pre.hljs code {
+  color: var(--fg);
+}
+
+.content pre {
+  background: var(--quote-bg) !important;
+  border: 1px solid var(--table-border-color);
+  border-radius: 8px;
+}
+
+.content blockquote {
+  color: var(--fg);
+  background: var(--quote-bg);
+  border-left: 3px solid var(--quote-border);
+}
+
+.theme-toggle {
+  display: none;
+}

@@ -7,13 +7,7 @@ hfsdr treats that as a bug by design.
 
 ## Two threads you care about
 
-```text
-  Main thread (egui)              Engine thread
-  ─────────────────               ───────────────
-  draw widgets                    read IQ ring
-  handle clicks                   run FFT + CW + skimmer
-  try_poll() ◄── snapshot ───     write shared state (brief lock)
-```
+<div data-diagram="thread-map"></div>
 
 The main thread **never** waits on a mutex held while processing 100k samples.
 

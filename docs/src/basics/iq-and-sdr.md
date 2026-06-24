@@ -15,12 +15,7 @@ At the antenna, energy at many frequencies is mixed down to **baseband** inside
 the SDR. The result is two time-varying voltages, **I** (in-phase) and **Q**
 (quadrature):
 
-```text
-  RF band at center frequency Fc
-           │
-           ▼  (mixer + ADC)
-  stream of (I, Q) pairs  ──►  software
-```
+<div data-diagram="iq-chain"></div>
 
 Each pair is one **complex sample**. The **sample rate** says how many pairs
 arrive per second — e.g. 12 000/s for Kiwi, up to 768 000/s for Airspy at full
@@ -41,13 +36,7 @@ center (on 7.0305 MHz). After mixing, their carrier is a **steady tone at
 +500 Hz offset** — a slow spiral in the IQ plane. When they key down, the
 amplitude jumps; when they key up, it falls.
 
-```text
-  frequency axis (relative to dial)
-  ─────────────────────────────────────────►
-        │                    │
-     noise floor          +500 Hz CW carrier
-                              (pulses when keyed)
-```
+<div data-diagram="iq-phasor"></div>
 
 The panadapter FFT turns a block of IQ into **how much energy sits at each
 offset**. The listen chain **shifts** one offset to DC, **filters** everything
@@ -61,6 +50,8 @@ else away, then **demodulates** to audio.
 |--------|----------------------|-------------|
 | KiwiSDR | ~12 kHz | Whole passband fits one FFT; zoom is mostly visual |
 | Airspy HF+ | Up to ~600+ kHz usable | Full-span FFT is expensive; zoom triggers real decimation |
+
+<div data-diagram="spectrum-slice"></div>
 
 Higher sample rate does **not** automatically mean better CW copy — it means
 **more spectrum visible at once**. Copy quality comes from the **listen-chain**

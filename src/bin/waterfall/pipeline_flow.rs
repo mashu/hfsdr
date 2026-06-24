@@ -228,7 +228,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         node(
             NodeId::Nco,
             "NCO shift",
-            format!("RIT {:.0} Hz", snap.cw.listen_offset_hz),
+            format!("RIT {:.0} Hz", snap.cw.listen_offset_hz.hz()),
             true,
             NodeKind::Process,
         ),

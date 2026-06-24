@@ -43,6 +43,7 @@ enum NotchHit {
 #[derive(Clone, Copy, Debug)]
 pub struct NotchMarker {
     pub slot: usize,
+    /// Channel offset (Hz from tune center); same frame as [`hfsdr::ChannelOffsetHz`].
     pub offset_hz: f32,
     pub width_hz: f32,
 }
@@ -436,7 +437,7 @@ pub fn notch_width_from_edge(center_hz: f32, edge_offset_hz: f64) -> f32 {
         .clamp(NOTCH_WIDTH_MIN_HZ, NOTCH_WIDTH_MAX_HZ)
 }
 
-/// Suggested RF offset when the user arms a manual notch (listen point + stagger).
+/// Suggested channel offset when the user arms a manual notch (listen point + stagger).
 pub fn suggest_notch_offset_hz(listen_offset_hz: f32, other_offsets: &[f32]) -> f32 {
     if other_offsets.is_empty() {
         return listen_offset_hz + NOTCH_STAGGER_HZ;

@@ -11,10 +11,12 @@ build-dir = "book"
 create-missing = true
 
 [output.html]
-default-theme = "rust"
+default-theme = "navy"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/mashu/hfsdr"
 edit-url-template = "https://github.com/mashu/hfsdr/edit/main/docs/{path}"
+additional-css = ["theme/site-chrome.css", "theme/docs-ui.css"]
+additional-js = ["theme/diagrams.js", "theme/docs-ui.js"]
 
 [output.html.playground]
 editable = false

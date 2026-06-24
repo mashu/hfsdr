@@ -29,16 +29,7 @@ spectrum display but often still feeds **one** audio path.
 
 hfsdr splits the work into **parallel paths** from the same IQ stream:
 
-```text
-         one IQ stream from the radio
-                    │
-     ┌──────────────┼──────────────┐
-     │              │              │
-     ▼              ▼              ▼
-  Listen         Panadapter      Skimmer
-  (one signal,   (see everyone)  (copy many)
-   best filters)
-```
+<div data-diagram="parallel-paths"></div>
 
 That split is the central design idea: **looking** at the band must not degrade
 **listening**, and **copying** twenty CQs must not stall the waterfall.
