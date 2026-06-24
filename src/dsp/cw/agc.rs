@@ -12,6 +12,8 @@ use super::settings::AgcMode;
 pub struct CwAgc {
     gain: f32,
     envelope: f32,
+    fast_env: f32,
+    slow_env: f32,
 }
 
 impl Default for CwAgc {
@@ -25,12 +27,16 @@ impl CwAgc {
         Self {
             gain: 1.0,
             envelope: 0.0,
+            fast_env: 0.0,
+            slow_env: 0.0,
         }
     }
 
     pub fn reset_state(&mut self) {
         self.gain = 1.0;
         self.envelope = 0.0;
+        self.fast_env = 0.0;
+        self.slow_env = 0.0;
     }
 
     /// Return the gain to apply for a sample whose magnitude is `level`.
@@ -48,13 +54,37 @@ impl CwAgc {
         }
         let attack = (-1.0 / (sample_rate * (attack_ms.max(0.1) / 1000.0))).exp();
         let decay = (-1.0 / (sample_rate * (decay_ms.max(1.0) / 1000.0))).exp();
-        if level > self.envelope {
-            self.envelope = attack * self.envelope + (1.0 - attack) * level;
-        } else {
-            self.envelope = decay * self.envelope + (1.0 - decay) * level;
-        }
 
-        let desired = target / self.envelope.max(1e-7);
+        let desired = match mode {
+            AgcMode::DualLoop => {
+                let slow_attack =
+                    (-1.0 / (sample_rate * (attack_ms.max(0.1) * 10.0 / 1000.0))).exp();
+                let slow_decay =
+                    (-1.0 / (sample_rate * (decay_ms.max(1.0) * 8.0 / 1000.0))).exp();
+                if level > self.fast_env {
+                    self.fast_env = attack * self.fast_env + (1.0 - attack) * level;
+                } else {
+                    self.fast_env = decay * self.fast_env + (1.0 - decay) * level;
+                }
+                if level > self.slow_env {
+                    self.slow_env = slow_attack * self.slow_env + (1.0 - slow_attack) * level;
+                } else {
+                    self.slow_env = slow_decay * self.slow_env + (1.0 - slow_decay) * level;
+                }
+                let control = self.fast_env.max(self.slow_env * 0.55);
+                self.envelope = control;
+                target / control.max(1e-7)
+            }
+            _ => {
+                if level > self.envelope {
+                    self.envelope = attack * self.envelope + (1.0 - attack) * level;
+                } else {
+                    self.envelope = decay * self.envelope + (1.0 - decay) * level;
+                }
+                target / self.envelope.max(1e-7)
+            }
+        };
+
         self.gain = match mode {
             AgcMode::Envelope => 0.9 * self.gain + 0.1 * desired,
             AgcMode::Hang => {
@@ -65,6 +95,7 @@ impl CwAgc {
                     hang * self.gain + (1.0 - hang) * desired
                 }
             }
+            AgcMode::DualLoop => 0.88 * self.gain + 0.12 * desired,
         };
         self.gain = self.gain.clamp(0.02, 64.0);
         self.gain
@@ -93,6 +124,44 @@ mod tests {
         assert!(g0 > 0.0);
         assert!(g1 > 0.0);
         assert!(g1 <= 64.0);
+    }
+
+    #[test]
+    fn dual_loop_responds_to_level() {
+        let mut agc = CwAgc::new();
+        for _ in 0..4_000 {
+            let _ = agc.gain_for(0.4, 12_000.0, 0.25, 3.0, 120.0, AgcMode::DualLoop);
+        }
+        let g = agc.gain();
+        assert!(g > 0.02);
+        assert!(g <= 64.0);
+    }
+
+    #[test]
+    fn hang_recovers_slower_than_envelope_after_peak() {
+        let rate = 12_000.0;
+        let target = 0.25;
+        let attack = 3.0;
+        let decay = 120.0;
+        let mut env_agc = CwAgc::new();
+        let mut hang_agc = CwAgc::new();
+
+        for _ in 0..2_000 {
+            let _ = env_agc.gain_for(0.8, rate, target, attack, decay, AgcMode::Envelope);
+            let _ = hang_agc.gain_for(0.8, rate, target, attack, decay, AgcMode::Hang);
+        }
+
+        for _ in 0..6_000 {
+            let _ = env_agc.gain_for(0.02, rate, target, attack, decay, AgcMode::Envelope);
+            let _ = hang_agc.gain_for(0.02, rate, target, attack, decay, AgcMode::Hang);
+        }
+
+        assert!(
+            env_agc.gain() > hang_agc.gain() * 1.05,
+            "envelope should raise gain faster in silence (more noise pump): env={} hang={}",
+            env_agc.gain(),
+            hang_agc.gain()
+        );
     }
 
     #[test]

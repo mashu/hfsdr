@@ -30,6 +30,13 @@ pub struct KiwiSettings {
     pub freq_offset_khz: f64,
     /// `SET AR OK out=` audio resampler output rate.
     pub ar_out_hz: u32,
+    /// Manual RF gain 0..=100 (`manGain` CAT param); primary when RF AGC is off.
+    #[serde(default = "default_kiwi_man_gain")]
+    pub man_gain: u8,
+}
+
+fn default_kiwi_man_gain() -> u8 {
+    50
 }
 
 impl Default for KiwiSettings {
@@ -40,6 +47,7 @@ impl Default for KiwiSettings {
             iq_resample_hz: 0,
             freq_offset_khz: 0.0,
             ar_out_hz: 44_100,
+            man_gain: default_kiwi_man_gain(),
         }
     }
 }
@@ -396,7 +404,8 @@ fn connect_kiwi(
     let mut src = KiwiSource::new(req.host.clone(), req.port)
         .with_passband(-half, half)
         .with_freq_offset_khz(req.kiwi.freq_offset_khz)
-        .with_ar_out_hz(req.kiwi.ar_out_hz);
+        .with_ar_out_hz(req.kiwi.ar_out_hz)
+        .with_man_gain(req.kiwi.man_gain);
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());

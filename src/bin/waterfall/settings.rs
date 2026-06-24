@@ -19,6 +19,10 @@ fn default_pan_step_fast_hz() -> f32 {
     5000.0
 }
 
+fn default_kiwi_man_gain() -> u8 {
+    50
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotchData {
     pub enabled: bool,
@@ -44,6 +48,8 @@ pub struct AppSettings {
     pub passband_hz: f32,
     #[serde(default)]
     pub channel_filter: u8,
+    #[serde(default)]
+    pub decim_filter: u8,
     pub window: u8,
     pub kaiser_beta: f32,
     pub passband_flatten: bool,
@@ -73,6 +79,8 @@ pub struct AppSettings {
     pub pitch_lock: bool,
     pub lock_ham_bands: bool,
     pub agc_rf_on: bool,
+    #[serde(default = "default_kiwi_man_gain")]
+    pub kiwi_man_gain: u8,
 
     // Display + performance.
     pub ref_db: f32,
@@ -157,6 +165,7 @@ impl Default for AppSettings {
             bfo_hz: 650.0,
             passband_hz: 200.0,
             channel_filter: 0,
+            decim_filter: 0,
             window: 0,
             kaiser_beta: 6.0,
             passband_flatten: false,
@@ -183,6 +192,7 @@ impl Default for AppSettings {
             pitch_lock: false,
             lock_ham_bands: true,
             agc_rf_on: true,
+            kiwi_man_gain: default_kiwi_man_gain(),
             ref_db: -65.0,
             range_db: 17.0,
             display_auto_track: false,

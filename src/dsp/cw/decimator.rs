@@ -2,7 +2,7 @@
 
 use crate::source::Complex32;
 
-use super::fir::{design_gaussian_lowpass, design_gaussian_lowpass_compact, FirFilter};
+use super::super::cw::{AntiAliasFilter, DecimFilterKind};
 
 const TARGET_AUDIO_RATE: f32 = 12_000.0;
 
@@ -10,36 +10,43 @@ const TARGET_AUDIO_RATE: f32 = 12_000.0;
 #[derive(Clone, Debug)]
 pub struct Decimator {
     factor: usize,
-    fir: FirFilter,
+    filter: AntiAliasFilter,
     counter: usize,
+    compact: bool,
 }
 
 impl Decimator {
     pub fn for_sample_rate(input_rate: f32) -> Self {
-        Self::with_factor(input_rate, decimation_factor(input_rate))
+        Self::with_factor(input_rate, decimation_factor(input_rate), DecimFilterKind::LinearFir)
     }
 
     /// Build a decimator with an explicit integer factor (clamped to 1..=256).
-    pub fn with_factor(input_rate: f32, factor: usize) -> Self {
+    pub fn with_factor(
+        input_rate: f32,
+        factor: usize,
+        filter_kind: DecimFilterKind,
+    ) -> Self {
         let factor = factor.clamp(1, 256);
-        let cutoff = (input_rate / factor as f32 * 0.45).max(100.0);
-        let fir = design_gaussian_lowpass(input_rate, cutoff * 2.0);
         Self {
             factor,
-            fir,
+            filter: AntiAliasFilter::new(filter_kind, input_rate, factor, false),
             counter: 0,
+            compact: false,
         }
     }
 
-    /// Short FIR for wideband IQ ingress (384 kHz → 12 kHz). ~10× cheaper than full taps.
-    pub fn for_wideband_ingress(input_rate: f32, factor: usize) -> Self {
+    /// Short anti-alias for wideband IQ ingress (384 kHz → 12 kHz).
+    pub fn for_wideband_ingress(
+        input_rate: f32,
+        factor: usize,
+        filter_kind: DecimFilterKind,
+    ) -> Self {
         let factor = factor.clamp(1, 256);
-        let cutoff = (input_rate / factor as f32 * 0.45).max(100.0);
-        let fir = design_gaussian_lowpass_compact(input_rate, cutoff * 2.0);
         Self {
             factor,
-            fir,
+            filter: AntiAliasFilter::new(filter_kind, input_rate, factor, true),
             counter: 0,
+            compact: true,
         }
     }
 
@@ -51,8 +58,17 @@ impl Decimator {
         input_rate / self.factor as f32
     }
 
+    pub fn sync_filter(
+        &mut self,
+        input_rate: f32,
+        filter_kind: DecimFilterKind,
+    ) {
+        self.filter
+            .sync(filter_kind, input_rate, self.factor, self.compact);
+    }
+
     pub fn reset_state(&mut self) {
-        self.fir.reset_state();
+        self.filter.reset_state();
         self.counter = 0;
     }
 
@@ -64,7 +80,7 @@ impl Decimator {
         let filtered = if bypass_fir {
             sample
         } else {
-            self.fir.process_complex(sample)
+            self.filter.process_complex(sample)
         };
         self.counter += 1;
         if self.counter.is_multiple_of(self.factor) {

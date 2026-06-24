@@ -132,6 +132,9 @@ pub enum ChannelFilterKind {
     Iir2Pole,
 }
 
+/// Anti-alias filter for decimators / ingress (same implementations as channel).
+pub type DecimFilterKind = ChannelFilterKind;
+
 /// AGC gain law.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AgcMode {
@@ -140,6 +143,8 @@ pub enum AgcMode {
     Envelope,
     /// Fast gain reduction, slow recovery — less lift between dits (contest-style hang).
     Hang,
+    /// Fast peak + slow floor trackers — RF/IF-style dual loop for CW.
+    DualLoop,
 }
 
 /// Session-only A/B bypass flags (not persisted to settings.json).
@@ -171,6 +176,8 @@ pub struct CwChannelSettings {
     pub bfo_hz: f32,
     pub passband_hz: f32,
     pub channel_filter: ChannelFilterKind,
+    /// Anti-alias filter on IQ decimators (channel + wideband ingress).
+    pub decim_filter: DecimFilterKind,
     pub window: WindowKind,
     /// Kaiser β when `window == Kaiser` (typical 4–10).
     pub kaiser_beta: f32,
@@ -196,6 +203,7 @@ impl Default for CwChannelSettings {
             bfo_hz: 650.0,
             passband_hz: 200.0,
             channel_filter: ChannelFilterKind::LinearFir,
+            decim_filter: DecimFilterKind::LinearFir,
             window: WindowKind::Gaussian,
             kaiser_beta: 6.0,
             passband_flatten: false,

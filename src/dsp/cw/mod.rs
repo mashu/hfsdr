@@ -11,6 +11,7 @@
 //! [`crate::skimmer`].
 
 mod agc;
+mod anti_alias;
 mod apf;
 mod autonotch;
 mod channel;
@@ -25,6 +26,7 @@ mod noisereduction;
 mod notch;
 mod settings;
 
+pub use anti_alias::AntiAliasFilter;
 pub use agc::CwAgc;
 pub use apf::AudioPeakFilter;
 pub use autonotch::AutoNotch;
@@ -43,6 +45,6 @@ pub use notch::IqNotch;
 pub use iir_channel::IirChannelFilter;
 pub use settings::{
     AgcMode, AgcSettings, ApfSettings, AutoNotchSettings, ChannelFilterKind, CwChannelSettings,
-    DiagnosticBypassSettings, NoiseBlankerSettings, NoiseReductionSettings, NotchSpec,
-    MAX_NOTCHES,
+    DecimFilterKind, DiagnosticBypassSettings, NoiseBlankerSettings, NoiseReductionSettings,
+    NotchSpec, MAX_NOTCHES,
 };

@@ -3,7 +3,7 @@
 use super::freq_offset::{ChannelOffsetHz, ListenOrigin};
 use crate::source::Complex32;
 
-use super::cw::{effective_decimation, CwChannel, CwChannelSettings};
+use super::cw::{effective_decimation, CwChannel, CwChannelSettings, DecimFilterKind};
 use super::preprocess::IqShiftDecim;
 
 /// IQ rates above this use the compact ingress + baseband channel path.
@@ -18,22 +18,24 @@ pub struct WidebandCwIngress {
 }
 
 impl WidebandCwIngress {
-    pub fn new(iq_rate: f32, manual_decim: u32) -> Self {
+    pub fn new(iq_rate: f32, manual_decim: u32, decim_filter: DecimFilterKind) -> Self {
         let factor = effective_decimation(iq_rate, manual_decim);
         Self {
-            ingress: IqShiftDecim::new(iq_rate, factor, true),
+            ingress: IqShiftDecim::new(iq_rate, factor, true, decim_filter),
             audio_rate: iq_rate / factor as f32,
             decim_factor: factor,
         }
     }
 
-    pub fn sync(&mut self, iq_rate: f32, manual_decim: u32) {
+    pub fn sync(&mut self, iq_rate: f32, manual_decim: u32, decim_filter: DecimFilterKind) {
         let factor = effective_decimation(iq_rate, manual_decim);
         let audio_rate = iq_rate / factor as f32;
         if factor != self.decim_factor || (audio_rate - self.audio_rate).abs() > 1.0 {
-            self.ingress = IqShiftDecim::new(iq_rate, factor, true);
+            self.ingress = IqShiftDecim::new(iq_rate, factor, true, decim_filter);
             self.decim_factor = factor;
             self.audio_rate = audio_rate;
+        } else {
+            self.ingress.sync(iq_rate, factor, decim_filter);
         }
     }
 
@@ -71,7 +73,7 @@ pub fn demod_wideband(
     if input.is_empty() || iq_rate <= WIDEBAND_IQ_THRESHOLD {
         return;
     }
-    ingress.sync(iq_rate, settings.decimation);
+    ingress.sync(iq_rate, settings.decimation, settings.decim_filter);
     let audio_rate = ingress.audio_rate();
     let listen = settings.listen_offset_hz;
     let bb = ingress.to_baseband(input, iq_rate, listen, &settings.diagnostic);
@@ -111,7 +113,7 @@ mod tests {
         let interferer = ChannelOffsetHz::new(420.0);
         let n = 16_384;
         let iq = tone_iq(iq_rate, interferer.hz(), n);
-        let mut ingress = WidebandCwIngress::new(iq_rate, 0);
+        let mut ingress = WidebandCwIngress::new(iq_rate, 0, DecimFilterKind::LinearFir);
         let mut channel = CwChannel::new(12_000.0);
         let mut settings = CwChannelSettings {
             listen_offset_hz: listen,
@@ -154,7 +156,7 @@ mod tests {
         let iq_rate = 384_000.0;
         let n = 8192;
         let iq = tone_iq(iq_rate, 200.0, n);
-        let mut ingress = WidebandCwIngress::new(iq_rate, 0);
+        let mut ingress = WidebandCwIngress::new(iq_rate, 0, DecimFilterKind::LinearFir);
         let mut channel = CwChannel::new(12_000.0);
         let mut settings = CwChannelSettings {
             listen_offset_hz: ChannelOffsetHz::new(200.0),

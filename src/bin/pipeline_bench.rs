@@ -59,7 +59,7 @@ fn main() {
         spectrum_plan(SAMPLE_RATE as f32, 2048, true, view_span);
     let hop = spectrum_hop(fft_size, SAMPLE_RATE as f32);
     let mut spectrum_front = SpectrumFrontEnd::new(SAMPLE_RATE as f32, spec_decim, 0.0);
-    let mut spectrum_ingress = FirDecimator::with_factor(SAMPLE_RATE as f32, 1, true);
+    let mut spectrum_ingress = FirDecimator::with_factor(SAMPLE_RATE as f32, 1, true, hfsdr::DecimFilterKind::LinearFir);
     let mut analyzer = SpectrumAnalyzer::new(fft_size, hop);
     let mut latest = vec![-120.0; fft_size];
 

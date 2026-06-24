@@ -1,30 +1,31 @@
-//! Anti-alias FIR decimation for wideband IQ (f32 taps — full float headroom).
+//! Anti-alias decimation for wideband IQ (f32 taps — full float headroom).
 
 use crate::source::Complex32;
 
-use super::super::cw::{design_gaussian_lowpass, design_gaussian_lowpass_compact, FirFilter};
+use super::super::cw::{AntiAliasFilter, DecimFilterKind};
 
-/// Integer decimation with a Gaussian FIR lowpass (compact taps on wideband rates).
+/// Integer decimation with selectable anti-alias (Gaussian FIR or 2-pole IIR).
 #[derive(Clone, Debug)]
 pub struct FirDecimator {
     factor: usize,
-    fir: FirFilter,
+    filter: AntiAliasFilter,
     counter: usize,
+    wideband: bool,
 }
 
 impl FirDecimator {
-    pub fn with_factor(iq_rate_hz: f32, factor: usize, wideband: bool) -> Self {
+    pub fn with_factor(
+        iq_rate_hz: f32,
+        factor: usize,
+        wideband: bool,
+        filter_kind: DecimFilterKind,
+    ) -> Self {
         let factor = factor.clamp(1, 256);
-        let cutoff = (iq_rate_hz / factor as f32 * 0.45).max(100.0);
-        let fir = if wideband {
-            design_gaussian_lowpass_compact(iq_rate_hz, cutoff * 2.0)
-        } else {
-            design_gaussian_lowpass(iq_rate_hz, cutoff * 2.0)
-        };
         Self {
             factor,
-            fir,
+            filter: AntiAliasFilter::new(filter_kind, iq_rate_hz, factor, wideband),
             counter: 0,
+            wideband,
         }
     }
 
@@ -36,8 +37,17 @@ impl FirDecimator {
         input_rate_hz / self.factor as f32
     }
 
+    pub fn sync_filter(
+        &mut self,
+        iq_rate_hz: f32,
+        filter_kind: DecimFilterKind,
+    ) {
+        self.filter
+            .sync(filter_kind, iq_rate_hz, self.factor, self.wideband);
+    }
+
     pub fn reset_state(&mut self) {
-        self.fir.reset_state();
+        self.filter.reset_state();
         self.counter = 0;
     }
 
@@ -48,7 +58,7 @@ impl FirDecimator {
         let filtered = if bypass_fir {
             sample
         } else {
-            self.fir.process_complex(sample)
+            self.filter.process_complex(sample)
         };
         self.counter += 1;
         if self.counter.is_multiple_of(self.factor) {
@@ -82,11 +92,12 @@ impl FirDecimator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::super::cw::DecimFilterKind;
     use std::time::{Duration, Instant};
 
     #[test]
     fn decimate_block_completes_quickly() {
-        let mut decim = FirDecimator::with_factor(48_000.0, 2, true);
+        let mut decim = FirDecimator::with_factor(48_000.0, 2, true, DecimFilterKind::LinearFir);
         let raw: Vec<Complex32> = (0..128)
             .map(|i| Complex32::new((i as f32 * 0.1).cos(), 0.0))
             .collect();
@@ -100,14 +111,14 @@ mod tests {
 
     #[test]
     fn unity_factor_passthrough() {
-        let mut d = FirDecimator::with_factor(48_000.0, 1, false);
+        let mut d = FirDecimator::with_factor(48_000.0, 1, false, DecimFilterKind::LinearFir);
         let s = Complex32::new(1.0, -1.0);
         assert_eq!(d.push(s, false), Some(s));
     }
 
     #[test]
     fn decimate_block_reduces_length() {
-        let mut d = FirDecimator::with_factor(48_000.0, 4, true);
+        let mut d = FirDecimator::with_factor(48_000.0, 4, true, DecimFilterKind::LinearFir);
         let input: Vec<Complex32> = (0..64)
             .map(|i| Complex32::new(i as f32, 0.0))
             .collect();
@@ -119,14 +130,14 @@ mod tests {
 
     #[test]
     fn output_rate_scales_with_factor() {
-        let d = FirDecimator::with_factor(48_000.0, 8, false);
+        let d = FirDecimator::with_factor(48_000.0, 8, false, DecimFilterKind::LinearFir);
         assert_eq!(d.output_rate(48_000.0), 6_000.0);
         assert_eq!(d.factor(), 8);
     }
 
     #[test]
     fn reset_state_clears_counter() {
-        let mut d = FirDecimator::with_factor(48_000.0, 4, false);
+        let mut d = FirDecimator::with_factor(48_000.0, 4, false, DecimFilterKind::LinearFir);
         let _ = d.push(Complex32::new(1.0, 0.0), false);
         d.reset_state();
         let mut out = Vec::new();

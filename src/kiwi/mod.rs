@@ -31,6 +31,7 @@ pub struct KiwiSource {
     freq_offset_khz: f64,
     ar_out_hz: u32,
     agc_on: bool,
+    man_gain: u8,
     compression: bool,
     streaming: bool,
     stop: Arc<AtomicBool>,
@@ -69,6 +70,7 @@ impl KiwiSource {
             freq_offset_khz: 0.0,
             ar_out_hz: 44_100,
             agc_on: true,
+            man_gain: 50,
             compression: false,
             streaming: false,
             stop: Arc::new(AtomicBool::new(false)),
@@ -91,6 +93,12 @@ impl KiwiSource {
     /// Enable or disable Kiwi AGC (default on).
     pub fn with_agc(mut self, on: bool) -> Self {
         self.agc_on = on;
+        self
+    }
+
+    /// Manual RF gain 0..=100 (used when AGC is off; still sent with AGC on).
+    pub fn with_man_gain(mut self, gain: u8) -> Self {
+        self.man_gain = gain.clamp(0, 100);
         self
     }
 
@@ -130,6 +138,7 @@ impl KiwiSource {
             high_cut: self.high_cut,
             freq_hz: self.kiwi_freq_khz() * 1000.0,
             agc_on: self.agc_on,
+            man_gain: self.man_gain,
             compression: self.compression,
             ar_out_hz: self.ar_out_hz,
         }
@@ -195,10 +204,8 @@ impl KiwiSource {
             "SET auth t=kiwi p=",
             "SET ident_user=hfsdr",
             &self.mod_cmd(),
-            &format!(
-                "SET agc={} hang=0 thresh=-100 slope=6 decay=1000 manGain=50",
-                self.agc_on as u8
-            ),
+            &format!("SET AR OK in={} out={}", KIWI_IQ_RATE, self.ar_out_hz),
+            &protocol::agc_command(self.agc_on, self.man_gain),
             "SET squelch=0 max=0",
             "SET keepalive",
         ] {
@@ -325,10 +332,16 @@ impl IqSource for KiwiSource {
     fn set_agc(&mut self, on: bool) -> Result<()> {
         self.agc_on = on;
         if let Some(tx) = &self.cmd_tx {
-            let cmd = format!(
-                "SET agc={} hang=0 thresh=-100 slope=6 decay=1000 manGain=50",
-                on as u8
-            );
+            let cmd = protocol::agc_command(on, self.man_gain);
+            let _ = tx.send(cmd);
+        }
+        Ok(())
+    }
+
+    fn set_man_gain(&mut self, gain: u8) -> Result<()> {
+        self.man_gain = gain.clamp(0, 100);
+        if let Some(tx) = &self.cmd_tx {
+            let cmd = protocol::agc_command(self.agc_on, self.man_gain);
             let _ = tx.send(cmd);
         }
         Ok(())
@@ -384,6 +397,7 @@ mod tests {
         assert!(src.supports_passband());
         src.set_passband(-4_000, 4_000).unwrap();
         src.set_agc(true).unwrap();
+        src.set_man_gain(60).unwrap();
         assert!(src.rssi_dbm().is_some());
         assert!(!src.link_ready());
         assert!(!src.link_alive());

@@ -6,12 +6,14 @@ use std::thread::{self, JoinHandle};
 
 use crate::source::Complex32;
 
+use super::super::cw::DecimFilterKind;
 use super::fir_decim::FirDecimator;
 
 struct WorkerCmd {
     raw: Arc<Vec<Complex32>>,
     device_rate: f32,
     factor: usize,
+    filter_kind: DecimFilterKind,
 }
 
 struct WorkerDone {
@@ -41,12 +43,19 @@ impl IngressWorker {
     }
 
     /// Start decimation on `raw` (shared with the caller for parallel demod).
-    pub fn start(&self, raw: Arc<Vec<Complex32>>, device_rate: f32, factor: usize) -> bool {
+    pub fn start(
+        &self,
+        raw: Arc<Vec<Complex32>>,
+        device_rate: f32,
+        factor: usize,
+        filter_kind: DecimFilterKind,
+    ) -> bool {
         self.cmd_tx
             .try_send(WorkerCmd {
                 raw,
                 device_rate,
                 factor,
+                filter_kind,
             })
             .is_ok()
     }
@@ -75,15 +84,25 @@ impl Drop for IngressWorker {
 }
 
 fn worker_loop(cmd_rx: Receiver<WorkerCmd>, done_tx: SyncSender<WorkerDone>) {
-    let mut decim = FirDecimator::with_factor(384_000.0, 1, true);
+    let mut decim = FirDecimator::with_factor(384_000.0, 1, true, DecimFilterKind::LinearFir);
     let mut last_rate = 0.0f32;
     let mut last_factor = 0usize;
+    let mut last_filter = DecimFilterKind::LinearFir;
 
     while let Ok(cmd) = cmd_rx.recv() {
-        if cmd.factor != last_factor || (cmd.device_rate - last_rate).abs() > 1.0 {
-            decim = FirDecimator::with_factor(cmd.device_rate, cmd.factor, true);
+        if cmd.factor != last_factor
+            || (cmd.device_rate - last_rate).abs() > 1.0
+            || cmd.filter_kind != last_filter
+        {
+            decim = FirDecimator::with_factor(
+                cmd.device_rate,
+                cmd.factor,
+                true,
+                cmd.filter_kind,
+            );
             last_rate = cmd.device_rate;
             last_factor = cmd.factor;
+            last_filter = cmd.filter_kind;
         }
         let mut decimated = Vec::new();
         decim.decimate_block(cmd.raw.as_slice(), &mut decimated, false);

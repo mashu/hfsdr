@@ -97,6 +97,12 @@ pub trait IqSource {
         Ok(())
     }
 
+    /// Kiwi manual RF gain 0..=100 (`manGain` CAT).
+    fn set_man_gain(&mut self, gain: u8) -> Result<()> {
+        let _ = gain;
+        Ok(())
+    }
+
     /// HF attenuator step 0..=8 (Airspy HF+, 6 dB per step).
     fn set_hf_att(&mut self, _step: u8) -> Result<()> {
         Ok(())

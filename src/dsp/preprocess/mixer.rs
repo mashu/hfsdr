@@ -182,7 +182,8 @@ mod tests {
     #[test]
     fn mix_and_decimate_reduces_rate() {
         let mut rot = IqRotator::default();
-        let mut decim = FirDecimator::with_factor(48_000.0, 4, true);
+        use super::super::super::cw::DecimFilterKind;
+        let mut decim = FirDecimator::with_factor(48_000.0, 4, true, DecimFilterKind::LinearFir);
         let block = tone_block(200, 48_000.0, 1_000.0);
         let mut out = Vec::new();
         rot.mix_and_decimate(&block, 1_000.0, 48_000.0, &mut decim, &mut out, false);

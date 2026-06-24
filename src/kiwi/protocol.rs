@@ -50,12 +50,22 @@ pub fn has_sample_rate(text: &str) -> bool {
     kiwi_msg_params(text).contains("sample_rate=")
 }
 
+/// Build the Kiwi `SET agc=… manGain=…` command.
+pub fn agc_command(agc_on: bool, man_gain: u8) -> String {
+    format!(
+        "SET agc={} hang=0 thresh=-100 slope=6 decay=1000 manGain={}",
+        agc_on as u8,
+        man_gain.clamp(0, 100)
+    )
+}
+
 /// Commands sent after the server reports `sample_rate=…` (kiwiclient handshake).
 pub struct KiwiRxSetup {
     pub low_cut: i32,
     pub high_cut: i32,
     pub freq_hz: f64,
     pub agc_on: bool,
+    pub man_gain: u8,
     pub compression: bool,
     pub ar_out_hz: u32,
 }
@@ -68,10 +78,7 @@ impl KiwiRxSetup {
             "SET genattn=0".to_string(),
             "SET gen=0 mix=-1".to_string(),
             mod_iq_command(self.low_cut, self.high_cut, self.freq_hz),
-            format!(
-                "SET agc={} hang=0 thresh=-100 slope=6 decay=1000 manGain=50",
-                self.agc_on as u8
-            ),
+            agc_command(self.agc_on, self.man_gain),
             format!("SET compression={}", self.compression as u8),
             "SET keepalive".to_string(),
         ]
@@ -209,12 +216,14 @@ mod parse_tests {
             high_cut: 500,
             freq_hz: 7_030_000.0,
             agc_on: true,
+            man_gain: 50,
             compression: false,
             ar_out_hz: 44_100,
         };
         let cmds = setup.setup_commands();
         assert!(cmds.iter().any(|c| c.contains("mod=iq")));
         assert!(cmds.iter().any(|c| c == "SET compression=0"));
+        assert!(cmds.iter().any(|c| c.contains("manGain=50")));
         assert!(cmds.iter().any(|c| c.starts_with("SET squelch")));
     }
 

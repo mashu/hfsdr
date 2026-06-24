@@ -3,6 +3,7 @@
 use crate::source::Complex32;
 
 use super::preprocess::IqShiftDecim;
+use super::cw::DecimFilterKind;
 
 /// Shift the view center to DC and decimate before FFT when heavily zoomed.
 #[derive(Clone, Debug)]
@@ -17,7 +18,7 @@ impl SpectrumFrontEnd {
     pub fn new(iq_rate: f32, decim: usize, shift_hz: f32) -> Self {
         let decim = decim.max(1);
         Self {
-            ingress: IqShiftDecim::new(iq_rate, decim, iq_rate > 96_000.0),
+            ingress: IqShiftDecim::new(iq_rate, decim, iq_rate > 96_000.0, DecimFilterKind::LinearFir),
             iq_rate,
             shift_hz,
             decim,
@@ -30,7 +31,7 @@ impl SpectrumFrontEnd {
             || self.decim != decim
             || (self.shift_hz - shift_hz).abs() > 0.5
         {
-            self.ingress = IqShiftDecim::new(iq_rate, decim, iq_rate > 96_000.0);
+            self.ingress = IqShiftDecim::new(iq_rate, decim, iq_rate > 96_000.0, DecimFilterKind::LinearFir);
             self.iq_rate = iq_rate;
             self.shift_hz = shift_hz;
             self.decim = decim;

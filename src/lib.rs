@@ -49,7 +49,7 @@ pub use dsp::{
     view_t_to_offset_hz, offset_hz_to_view_t, offset_hz_to_storage_u, stretch_row_to_width,
     BasebandOffsetHz, ChannelOffsetHz, ListenOrigin,
     AgcMode, AgcSettings, ApfSettings, AutoNotchSettings, ChannelFilterKind, CwChannel,
-    CwChannelSettings, FirDecimator,
+    CwChannelSettings, DecimFilterKind, FirDecimator,
     IngressWorker, IqAudioDemod,
     NoiseBlankerSettings, NoiseReductionSettings, NotchSpec, SpectrumAnalyzer, SpectrumFrontEnd,
     SpectrumViewMapping, WindowKind, MAX_FFT_SIZE, MAX_NOTCHES, TARGET_BIN_HZ,

@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hfsdr::{Complex32, CwChannelSettings, FirDecimator, IngressWorker, IqAudioDemod, IqPlayback, IqRecorder, SpectrumAnalyzer, SpectrumFrontEnd, Spot, spectrum_hop, spectrum_plan};
+use hfsdr::{Complex32, CwChannelSettings, DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, IqPlayback, IqRecorder, SpectrumAnalyzer, SpectrumFrontEnd, Spot, spectrum_hop, spectrum_plan};
 
 use rayon::join;
 
@@ -210,6 +210,7 @@ pub enum EngineCommand {
     Disconnect,
     Tune(f64),
     SetRfAgc(bool),
+    SetKiwiManGain(u8),
     #[cfg(feature = "airspy")]
     SetAirspyAtt(u8),
     #[cfg(feature = "airspy")]
@@ -408,6 +409,7 @@ struct Engine {
     spectrum_ingress: FirDecimator,
     spectrum_ingress_factor: usize,
     spectrum_ingress_rate: f32,
+    spectrum_ingress_filter: DecimFilterKind,
     ingress_worker: Option<IngressWorker>,
     audio_scratch: Vec<f32>,
     audio_scope: AudioScopeRing,
@@ -475,9 +477,10 @@ impl Engine {
             spectrum_scratch: Vec::new(),
             drain: Vec::with_capacity(MAX_DRAIN_WIDEBAND),
             drain_decim: Vec::with_capacity(MAX_DRAIN_WIDEBAND),
-            spectrum_ingress: FirDecimator::with_factor(384_000.0, 1, true),
+            spectrum_ingress: FirDecimator::with_factor(384_000.0, 1, true, DecimFilterKind::LinearFir),
             spectrum_ingress_factor: 1,
             spectrum_ingress_rate: 384_000.0,
+            spectrum_ingress_filter: DecimFilterKind::LinearFir,
             ingress_worker: Some(IngressWorker::spawn()),
             audio_scratch: Vec::new(),
             audio_scope: AudioScopeRing::new(),
@@ -635,6 +638,11 @@ impl Engine {
             EngineCommand::SetRfAgc(on) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_agc(on);
+                }
+            }
+            EngineCommand::SetKiwiManGain(gain) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_man_gain(gain);
                 }
             }
             #[cfg(feature = "airspy")]
@@ -1009,21 +1017,35 @@ impl Engine {
         let batch = Arc::new(std::mem::take(&mut self.drain));
         self.drain = Vec::with_capacity(self.max_drain());
 
-        if ingress_decim > 1
-            && (ingress_decim != self.spectrum_ingress_factor
-                || (device_rate - self.spectrum_ingress_rate).abs() > 1.0)
-        {
-            self.spectrum_ingress =
-                FirDecimator::with_factor(device_rate, ingress_decim, true);
-            self.spectrum_ingress_factor = ingress_decim;
-            self.spectrum_ingress_rate = device_rate;
+        if ingress_decim > 1 {
+            let rebuild_ingress = ingress_decim != self.spectrum_ingress_factor
+                || (device_rate - self.spectrum_ingress_rate).abs() > 1.0
+                || cw.decim_filter != self.spectrum_ingress_filter;
+            if rebuild_ingress {
+                self.spectrum_ingress = FirDecimator::with_factor(
+                    device_rate,
+                    ingress_decim,
+                    true,
+                    cw.decim_filter,
+                );
+                self.spectrum_ingress_factor = ingress_decim;
+                self.spectrum_ingress_rate = device_rate;
+                self.spectrum_ingress_filter = cw.decim_filter;
+            } else {
+                self.spectrum_ingress.sync_filter(device_rate, cw.decim_filter);
+            }
         }
 
         let use_ingress_worker = wideband
             && ingress_decim > 1
             && self.spectrum_decim <= 1
             && self.ingress_worker.as_ref().is_some_and(|w| {
-                w.start(Arc::clone(&batch), device_rate, ingress_decim)
+                w.start(
+                    Arc::clone(&batch),
+                    device_rate,
+                    ingress_decim,
+                    cw.decim_filter,
+                )
             });
 
         if use_ingress_worker {

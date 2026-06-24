@@ -342,7 +342,7 @@ fn main() {
     let mut audio_scratch = Vec::new();
     let mut demod = IqAudioDemod::new();
     let cw = CwChannelSettings::default();
-    let mut spectrum_ingress = FirDecimator::with_factor(device_rate, ingress_decim, true);
+    let mut spectrum_ingress = FirDecimator::with_factor(device_rate, ingress_decim, true, hfsdr::DecimFilterKind::LinearFir);
     let mut spectrum_front = SpectrumFrontEnd::new(spectrum_rate, spec_decim, 0.0);
     let mut analyzer = SpectrumAnalyzer::new(fft_size, hop);
     let mut latest = vec![-120.0; fft_size];

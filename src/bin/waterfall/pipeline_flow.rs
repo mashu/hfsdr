@@ -317,12 +317,22 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         ),
         node_toggle(
             NodeId::Decimator,
-            "Decimator",
             format!(
-                "→ {:.1} kS/s",
+                "Decimator {}",
+                match snap.cw.decim_filter {
+                    ChannelFilterKind::LinearFir => "FIR",
+                    ChannelFilterKind::Iir2Pole => "IIR",
+                }
+            ),
+            format!(
+                "→ {:.1} kS/s · {}",
                 snap.device_rate_hz
                     / decim_factor(snap.cw.decimation, snap.device_rate_hz) as f32
-                    / 1000.0
+                    / 1000.0,
+                match snap.cw.decim_filter {
+                    ChannelFilterKind::LinearFir => "FIR",
+                    ChannelFilterKind::Iir2Pole => "IIR",
+                }
             ),
             !snap.cw.diagnostic.decim_fir,
             NodeKind::Process,
@@ -364,6 +374,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
                     match snap.cw.agc_mode {
                         AgcMode::Envelope => "envelope",
                         AgcMode::Hang => "hang",
+                        AgcMode::DualLoop => "dual-loop",
                     }
                 )
             } else {
@@ -458,8 +469,22 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
     if ingress_on {
         nodes.push(node_toggle(
             NodeId::IngressDecim,
-            "Ingress FIR",
-            format!("÷{} → {:.0} kS/s", snap.ingress_decim, snap.stats.sample_rate / 1000.0),
+            format!(
+                "Ingress {}",
+                match snap.cw.decim_filter {
+                    ChannelFilterKind::LinearFir => "FIR",
+                    ChannelFilterKind::Iir2Pole => "IIR",
+                }
+            ),
+            format!(
+                "÷{} · {} → {:.0} kS/s",
+                snap.ingress_decim,
+                match snap.cw.decim_filter {
+                    ChannelFilterKind::LinearFir => "FIR",
+                    ChannelFilterKind::Iir2Pole => "IIR",
+                },
+                snap.stats.sample_rate / 1000.0
+            ),
             !snap.cw.diagnostic.decim_fir,
             NodeKind::Process,
             PipelineStage::DecimatorFir,

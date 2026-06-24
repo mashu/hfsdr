@@ -60,9 +60,9 @@ impl IqAudioDemod {
 
         if sample_rate > WIDEBAND_IQ_THRESHOLD {
             let ingress = self.wideband.get_or_insert_with(|| {
-                WidebandCwIngress::new(sample_rate, settings.decimation)
+                WidebandCwIngress::new(sample_rate, settings.decimation, settings.decim_filter)
             });
-            ingress.sync(sample_rate, settings.decimation);
+            ingress.sync(sample_rate, settings.decimation, settings.decim_filter);
             let audio_rate = ingress.audio_rate();
             if (audio_rate - self.last_audio_rate).abs() > 1.0 {
                 self.channel = CwChannel::new(audio_rate);

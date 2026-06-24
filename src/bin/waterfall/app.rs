@@ -247,6 +247,7 @@ pub struct WaterfallApp {
     lock_ham_bands: bool,
     agc_rf_on: bool,
     last_agc_rf_on: bool,
+    last_kiwi_man_gain: u8,
     last_snr_db: f32,
 
     rows: VecDeque<Vec<f32>>,
@@ -381,6 +382,7 @@ impl WaterfallApp {
             lock_ham_bands: true,
             agc_rf_on: true,
             last_agc_rf_on: true,
+            last_kiwi_man_gain: 50,
             last_snr_db: 0.0,
             rows: VecDeque::with_capacity(WATERFALL_ROWS),
             latest: vec![-120.0; FFT_SIZE],
@@ -604,6 +606,7 @@ impl WaterfallApp {
         self.cw.bfo_hz = s.bfo_hz;
         self.cw.passband_hz = s.passband_hz;
         self.cw.channel_filter = channel_filter_from_u8(s.channel_filter);
+        self.cw.decim_filter = channel_filter_from_u8(s.decim_filter);
         self.cw.window = window_from_u8(s.window);
         self.cw.kaiser_beta = s.kaiser_beta.clamp(2.0, 14.0);
         self.cw.passband_flatten = s.passband_flatten;
@@ -678,6 +681,8 @@ impl WaterfallApp {
 
         self.recent_hosts = s.recent_hosts.clone();
         self.form_kiwi = s.kiwi.clone();
+        self.form_kiwi.man_gain = s.kiwi_man_gain;
+        self.last_kiwi_man_gain = s.kiwi_man_gain;
         self.form_airspy = s.airspy.clone();
         self.form_rtlsdr = s.rtlsdr.clone();
         self.form_qmx = s.qmx.clone();
@@ -702,6 +707,7 @@ impl WaterfallApp {
             bfo_hz: self.cw.bfo_hz,
             passband_hz: self.cw.passband_hz,
             channel_filter: channel_filter_to_u8(self.cw.channel_filter),
+            decim_filter: channel_filter_to_u8(self.cw.decim_filter),
             window: window_to_u8(self.cw.window),
             kaiser_beta: self.cw.kaiser_beta,
             passband_flatten: self.cw.passband_flatten,
@@ -737,6 +743,7 @@ impl WaterfallApp {
             pitch_lock: self.pitch_lock,
             lock_ham_bands: self.lock_ham_bands,
             agc_rf_on: self.agc_rf_on,
+            kiwi_man_gain: self.form_kiwi.man_gain,
             ref_db: self.ref_db,
             range_db: self.range_db,
             display_auto_track: self.display_auto_track,
@@ -1521,6 +1528,11 @@ impl WaterfallApp {
         if self.is_kiwi && self.agc_rf_on != self.last_agc_rf_on {
             self.engine.send(EngineCommand::SetRfAgc(self.agc_rf_on));
             self.last_agc_rf_on = self.agc_rf_on;
+        }
+        if self.is_kiwi && self.form_kiwi.man_gain != self.last_kiwi_man_gain {
+            self.engine
+                .send(EngineCommand::SetKiwiManGain(self.form_kiwi.man_gain));
+            self.last_kiwi_man_gain = self.form_kiwi.man_gain;
         }
         self.apply_airspy_live_settings();
         self.apply_rtlsdr_live_settings();
@@ -3574,6 +3586,30 @@ impl WaterfallApp {
             .max(1);
             stat_row(ui, "Audio rate", format!("{:.1} kHz", self.sample_rate / factor as f32 / 1000.0));
 
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Decim anti-alias").small().color(MUTED));
+                if ui
+                    .selectable_label(
+                        self.cw.decim_filter == ChannelFilterKind::LinearFir,
+                        "FIR",
+                    )
+                    .on_hover_text("Gaussian FIR before integer decimation (default)")
+                    .clicked()
+                {
+                    self.cw.decim_filter = ChannelFilterKind::LinearFir;
+                }
+                if ui
+                    .selectable_label(
+                        self.cw.decim_filter == ChannelFilterKind::Iir2Pole,
+                        "IIR 2-pole",
+                    )
+                    .on_hover_text("Biquad lowpass — ingress + channel decimator")
+                    .clicked()
+                {
+                    self.cw.decim_filter = ChannelFilterKind::Iir2Pole;
+                }
+            });
+
             let mut fps = self.target_fps as f32;
             if scroll_slider_f32(ui, &mut fps, 10.0..=60.0, "Target FPS").changed() {
                 self.target_fps = fps.round() as u32;
@@ -3936,17 +3972,30 @@ impl WaterfallApp {
                 ui.label(egui::RichText::new("Mode").small().color(MUTED));
                 if ui
                     .selectable_label(self.cw.agc_mode == AgcMode::Envelope, "Envelope")
-                    .on_hover_text("Symmetric attack/decay on gain")
+                    .on_hover_text("Symmetric attack/decay — general-purpose; gain follows IQ level evenly")
                     .clicked()
                 {
                     self.cw.agc_mode = AgcMode::Envelope;
                 }
                 if ui
                     .selectable_label(self.cw.agc_mode == AgcMode::Hang, "Hang")
-                    .on_hover_text("Fast gain reduction, slow recovery — less noise lift between dits")
+                    .on_hover_text(
+                        "Fast gain reduction, slow recovery — less noise lift between dits; \
+                         most audible vs Envelope on weak CW with band noise",
+                    )
                     .clicked()
                 {
                     self.cw.agc_mode = AgcMode::Hang;
+                }
+                if ui
+                    .selectable_label(self.cw.agc_mode == AgcMode::DualLoop, "Dual-loop")
+                    .on_hover_text(
+                        "Fast peak + slow floor trackers — resists pumping from strong neighbours; \
+                         try when Envelope breathes on QRM",
+                    )
+                    .clicked()
+                {
+                    self.cw.agc_mode = AgcMode::DualLoop;
                 }
             });
             scroll_slider_f32(ui, &mut self.cw.agc.attack_ms, 1.0..=20.0, "Attack ms");
@@ -3994,8 +4043,19 @@ impl WaterfallApp {
                 ui,
                 &mut self.agc_rf_on,
                 "Kiwi RF AGC",
-                Some("Hardware RF gain on the Kiwi"),
+                Some("Hardware RF AGC on the Kiwi (CAT agc=)"),
                 None,
+            );
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Kiwi manGain").small().color(MUTED));
+                ui.add(
+                    egui::Slider::new(&mut self.form_kiwi.man_gain, 0..=100)
+                        .suffix(" /100"),
+                );
+            });
+            section_hint(
+                ui,
+                "Manual RF gain (manGain) — primary when RF AGC is off; tune with the AF scope above.",
             );
         }
         #[cfg(feature = "airspy")]
@@ -4625,12 +4685,14 @@ fn agc_mode_to_u8(m: AgcMode) -> u8 {
     match m {
         AgcMode::Envelope => 0,
         AgcMode::Hang => 1,
+        AgcMode::DualLoop => 2,
     }
 }
 
 fn agc_mode_from_u8(v: u8) -> AgcMode {
     match v {
         1 => AgcMode::Hang,
+        2 => AgcMode::DualLoop,
         _ => AgcMode::Envelope,
     }
 }

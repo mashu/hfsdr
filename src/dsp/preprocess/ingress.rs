@@ -2,10 +2,11 @@
 
 use crate::source::Complex32;
 
+use super::super::cw::DecimFilterKind;
 use super::fir_decim::FirDecimator;
 use super::mixer::IqRotator;
 
-/// Combined mix-down + FIR decimation (preserves f32 IQ dynamic range end-to-end).
+/// Combined mix-down + anti-alias decimation (preserves f32 IQ dynamic range end-to-end).
 #[derive(Clone, Debug)]
 pub struct IqShiftDecim {
     mixer: IqRotator,
@@ -14,28 +15,41 @@ pub struct IqShiftDecim {
     iq_rate_hz: f32,
     decim_factor: usize,
     wideband: bool,
+    filter_kind: DecimFilterKind,
 }
 
 impl IqShiftDecim {
-    pub fn new(iq_rate_hz: f32, decim_factor: usize, wideband: bool) -> Self {
+    pub fn new(
+        iq_rate_hz: f32,
+        decim_factor: usize,
+        wideband: bool,
+        filter_kind: DecimFilterKind,
+    ) -> Self {
         let factor = decim_factor.max(1);
         Self {
             mixer: IqRotator::default(),
-            decim: FirDecimator::with_factor(iq_rate_hz, factor, wideband),
+            decim: FirDecimator::with_factor(iq_rate_hz, factor, wideband, filter_kind),
             output: Vec::new(),
             iq_rate_hz,
             decim_factor: factor,
             wideband,
+            filter_kind,
         }
     }
 
-    pub fn sync(&mut self, iq_rate_hz: f32, decim_factor: usize) {
+    pub fn sync(&mut self, iq_rate_hz: f32, decim_factor: usize, filter_kind: DecimFilterKind) {
         let factor = decim_factor.max(1);
-        if factor != self.decim_factor || (iq_rate_hz - self.iq_rate_hz).abs() > 1.0 {
-            self.decim = FirDecimator::with_factor(iq_rate_hz, factor, self.wideband);
+        if factor != self.decim_factor
+            || (iq_rate_hz - self.iq_rate_hz).abs() > 1.0
+            || filter_kind != self.filter_kind
+        {
+            self.decim = FirDecimator::with_factor(iq_rate_hz, factor, self.wideband, filter_kind);
             self.mixer.reset();
             self.decim_factor = factor;
             self.iq_rate_hz = iq_rate_hz;
+            self.filter_kind = filter_kind;
+        } else {
+            self.decim.sync_filter(iq_rate_hz, filter_kind);
         }
     }
 
@@ -56,7 +70,7 @@ impl IqShiftDecim {
         iq_rate_hz: f32,
         bypass_decim_fir: bool,
     ) -> &[Complex32] {
-        self.sync(iq_rate_hz, self.decim_factor);
+        self.sync(iq_rate_hz, self.decim_factor, self.filter_kind);
         self.output.clear();
         if input.is_empty() || iq_rate_hz <= 0.0 {
             return &self.output;
@@ -77,11 +91,12 @@ impl IqShiftDecim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::super::cw::DecimFilterKind;
     use std::f32::consts::TAU;
 
     #[test]
     fn process_decimates_mixed_block() {
-        let mut ingress = IqShiftDecim::new(48_000.0, 4, true);
+        let mut ingress = IqShiftDecim::new(48_000.0, 4, true, DecimFilterKind::LinearFir);
         let input: Vec<Complex32> = (0..400)
             .map(|i| {
                 let p = TAU * 500.0 * i as f32 / 48_000.0;
@@ -95,15 +110,15 @@ mod tests {
 
     #[test]
     fn empty_input_returns_empty_slice() {
-        let mut ingress = IqShiftDecim::new(12_000.0, 2, false);
+        let mut ingress = IqShiftDecim::new(12_000.0, 2, false, DecimFilterKind::LinearFir);
         let out = ingress.process(&[], 0.0, 12_000.0, false);
         assert!(out.is_empty());
     }
 
     #[test]
     fn sync_updates_output_rate() {
-        let mut ingress = IqShiftDecim::new(12_000.0, 2, false);
-        ingress.sync(48_000.0, 4);
+        let mut ingress = IqShiftDecim::new(12_000.0, 2, false, DecimFilterKind::LinearFir);
+        ingress.sync(48_000.0, 4, DecimFilterKind::LinearFir);
         assert_eq!(ingress.output_rate_hz(), 12_000.0);
         ingress.reset();
     }

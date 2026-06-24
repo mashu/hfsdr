@@ -25,7 +25,7 @@ use super::nco::ComplexNco;
 use super::noiseblanker::NoiseBlanker;
 use super::noisereduction::NoiseReduction;
 use super::notch::IqNotch;
-use super::settings::{ChannelFilterKind, CwChannelSettings, MAX_NOTCHES};
+use super::settings::{ChannelFilterKind, CwChannelSettings, DecimFilterKind, MAX_NOTCHES};
 
 /// Allocation-free CW receiver channel for one tuned signal.
 #[derive(Clone, Debug)]
@@ -50,6 +50,7 @@ pub struct CwChannel {
     last_kaiser_beta: f32,
     last_passband_flatten: bool,
     last_channel_filter: ChannelFilterKind,
+    last_decim_filter: DecimFilterKind,
 }
 
 impl CwChannel {
@@ -81,6 +82,7 @@ impl CwChannel {
             last_kaiser_beta: 6.0,
             last_passband_flatten: false,
             last_channel_filter: ChannelFilterKind::LinearFir,
+            last_decim_filter: DecimFilterKind::LinearFir,
         }
     }
 
@@ -229,12 +231,14 @@ impl CwChannel {
     }
 
     fn sync_chain(&mut self, iq_rate: f32, settings: &CwChannelSettings) {
+        let factor = if settings.decimation == 0 {
+            super::decimator::decimation_factor(iq_rate)
+        } else {
+            settings.decimation as usize
+        };
         if iq_rate != self.last_iq_rate || settings.decimation != self.last_decimation {
-            self.decimator = if settings.decimation == 0 {
-                Decimator::for_sample_rate(iq_rate)
-            } else {
-                Decimator::with_factor(iq_rate, settings.decimation as usize)
-            };
+            self.decimator =
+                Decimator::with_factor(iq_rate, factor, settings.decim_filter);
             self.shift_nco.reset();
             self.detector.reset_state();
             for notch in &mut self.notches {
@@ -243,6 +247,10 @@ impl CwChannel {
             self.last_iq_rate = iq_rate;
             self.last_decimation = settings.decimation;
             self.last_bandwidth = 0.0;
+            self.last_decim_filter = settings.decim_filter;
+        } else if settings.decim_filter != self.last_decim_filter {
+            self.decimator.sync_filter(iq_rate, settings.decim_filter);
+            self.last_decim_filter = settings.decim_filter;
         }
 
         let bandwidth = settings.channel_bandwidth_hz();
@@ -413,6 +421,7 @@ mod tests {
             bfo_hz: 650.0,
             passband_hz: 250.0,
             channel_filter: ChannelFilterKind::LinearFir,
+            decim_filter: DecimFilterKind::LinearFir,
             window: WindowKind::Kaiser,
             kaiser_beta: 8.0,
             passband_flatten: true,
