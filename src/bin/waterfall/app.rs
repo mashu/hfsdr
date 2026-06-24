@@ -248,6 +248,8 @@ pub struct WaterfallApp {
     agc_rf_on: bool,
     last_agc_rf_on: bool,
     last_kiwi_man_gain: u8,
+    last_kiwi_rf_attn_db: f32,
+    last_kiwi_has_rf_attn: bool,
     last_snr_db: f32,
 
     rows: VecDeque<Vec<f32>>,
@@ -383,6 +385,8 @@ impl WaterfallApp {
             agc_rf_on: true,
             last_agc_rf_on: true,
             last_kiwi_man_gain: 50,
+            last_kiwi_rf_attn_db: 0.0,
+            last_kiwi_has_rf_attn: false,
             last_snr_db: 0.0,
             rows: VecDeque::with_capacity(WATERFALL_ROWS),
             latest: vec![-120.0; FFT_SIZE],
@@ -683,6 +687,7 @@ impl WaterfallApp {
         self.form_kiwi = s.kiwi.clone();
         self.form_kiwi.man_gain = s.kiwi_man_gain;
         self.last_kiwi_man_gain = s.kiwi_man_gain;
+        self.last_kiwi_rf_attn_db = self.form_kiwi.rf_attn_db;
         self.form_airspy = s.airspy.clone();
         self.form_rtlsdr = s.rtlsdr.clone();
         self.form_qmx = s.qmx.clone();
@@ -899,6 +904,9 @@ impl WaterfallApp {
 
         self.sample_rate = self.stats.sample_rate;
         self.is_kiwi = self.stats.is_kiwi;
+        if self.stats.kiwi_has_rf_attn && !self.last_kiwi_has_rf_attn {
+            self.apply_kiwi_rf_attn_settings();
+        }
         self.last_snr_db = self.stats.snr_db;
         self.skimmer_channels = self.stats.skimmer_channels;
         if self.fft_auto {
@@ -1534,10 +1542,31 @@ impl WaterfallApp {
                 .send(EngineCommand::SetKiwiManGain(self.form_kiwi.man_gain));
             self.last_kiwi_man_gain = self.form_kiwi.man_gain;
         }
+        self.apply_kiwi_rf_attn_settings();
         self.apply_airspy_live_settings();
         self.apply_rtlsdr_live_settings();
         self.apply_qmx_live_settings();
         self.apply_audio_device();
+    }
+
+    fn apply_kiwi_rf_attn_settings(&mut self) {
+        if !self.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
+            return;
+        }
+        if self.stats.kiwi_has_rf_attn && !self.last_kiwi_has_rf_attn {
+            self.engine
+                .send(EngineCommand::SetKiwiRfAttn(self.form_kiwi.rf_attn_db));
+            self.last_kiwi_rf_attn_db = self.form_kiwi.rf_attn_db;
+        }
+        self.last_kiwi_has_rf_attn = self.stats.kiwi_has_rf_attn;
+        if !self.stats.kiwi_has_rf_attn {
+            return;
+        }
+        let db = self.form_kiwi.rf_attn_db;
+        if (db - self.last_kiwi_rf_attn_db).abs() > 0.05 {
+            self.engine.send(EngineCommand::SetKiwiRfAttn(db));
+            self.last_kiwi_rf_attn_db = db;
+        }
     }
 
     fn apply_qmx_live_settings(&mut self) {
@@ -1659,18 +1688,6 @@ impl WaterfallApp {
         }
     }
 
-    #[cfg(feature = "airspy")]
-    fn is_airspy_streaming(&self) -> bool {
-        self.form_kind == SourceKind::Airspy
-            && matches!(self.conn_state, ConnState::Streaming)
-    }
-
-    #[cfg(feature = "rtlsdr")]
-    fn is_rtlsdr_streaming(&self) -> bool {
-        self.form_kind == SourceKind::RtlSdr
-            && matches!(self.conn_state, ConnState::Streaming)
-    }
-
     fn apply_connect_form(&mut self, req: &ConnectRequest) {
         self.form_kind = req.kind;
         self.form_host = req.host.clone();
@@ -1735,6 +1752,9 @@ impl WaterfallApp {
         self.last_airspy_rf = self.form_airspy.clone();
         self.last_rtlsdr_rf = self.form_rtlsdr.clone();
         self.last_qmx_rf = self.form_qmx.clone();
+        self.last_kiwi_man_gain = self.form_kiwi.man_gain;
+        self.last_kiwi_rf_attn_db = self.form_kiwi.rf_attn_db;
+        self.last_kiwi_has_rf_attn = false;
         self.last_center_khz = self.center_khz;
         self.remember_host(&req);
         self.apply_default_view_zoom();
@@ -3320,6 +3340,23 @@ impl WaterfallApp {
                             8_000..=192_000,
                         );
                         ui.end_row();
+
+                        ui.label(egui::RichText::new("RF attn").small().color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.form_kiwi.rf_attn_db)
+                                .range(0.0..=31.5)
+                                .speed(0.1)
+                                .suffix(" dB"),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Gen attn").small().color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.form_kiwi.gen_attn)
+                                .range(0..=255)
+                                .suffix(" (handshake)"),
+                        );
+                        ui.end_row();
                     });
             });
 
@@ -4033,19 +4070,44 @@ impl WaterfallApp {
                 .small()
                 .color(MUTED),
         );
+        self.hardware_rf_controls(ui);
+    }
+
+    fn hardware_rf_controls(&mut self, ui: &mut egui::Ui) {
+        let streaming = matches!(self.conn_state, ConnState::Streaming);
+        if !streaming {
+            section_hint(
+                ui,
+                "Connect and start streaming to adjust hardware RF controls for the active source.",
+            );
+            return;
+        }
+        match self.form_kind {
+            SourceKind::Kiwi if self.is_kiwi => self.kiwi_rf_controls(ui),
+            #[cfg(feature = "airspy")]
+            SourceKind::Airspy => self.airspy_rf_controls(ui),
+            #[cfg(feature = "rtlsdr")]
+            SourceKind::RtlSdr => self.rtlsdr_rf_controls(ui),
+            #[cfg(feature = "qmx")]
+            SourceKind::Qmx => self.qmx_rf_controls(ui),
+            _ => section_hint(ui, "No hardware RF controls for this source."),
+        }
+    }
+
+    fn kiwi_rf_controls(&mut self, ui: &mut egui::Ui) {
         section_hint(
             ui,
-            "Per device: Kiwi RF AGC on/off · Airspy LNA + HF AGC or 0–48 dB attenuator · \
-             RTL-SDR tuner gain · QMX CAT RF gain (dB). Use the AF scope above while adjusting.",
+            "Kiwi RF AGC and manGain tune the remote front end. KiwiSDR 2 adds a hardware \
+             attenuator (rf_attn) when the server reports has_attn=1.",
         );
-        if self.is_kiwi {
-            stage_toggle(
-                ui,
-                &mut self.agc_rf_on,
-                "Kiwi RF AGC",
-                Some("Hardware RF AGC on the Kiwi (CAT agc=)"),
-                None,
-            );
+        stage_toggle(
+            ui,
+            &mut self.agc_rf_on,
+            "Kiwi RF AGC",
+            Some("Hardware RF AGC on the Kiwi (CAT agc=)"),
+            None,
+        );
+        ui.add_enabled_ui(!self.agc_rf_on, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Kiwi manGain").small().color(MUTED));
                 ui.add(
@@ -4053,38 +4115,33 @@ impl WaterfallApp {
                         .suffix(" /100"),
                 );
             });
+        });
+        if self.agc_rf_on {
             section_hint(
                 ui,
-                "Manual RF gain (manGain) — primary when RF AGC is off; tune with the AF scope above.",
+                "Turn RF AGC off to set manGain manually — tune with the AF scope above.",
             );
         }
-        #[cfg(feature = "airspy")]
-        if self.is_airspy_streaming() {
-            self.airspy_rf_controls(ui);
+        if self.stats.kiwi_has_rf_attn {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
+                ui.add(
+                    egui::Slider::new(&mut self.form_kiwi.rf_attn_db, 0.0..=31.5)
+                        .suffix(" dB")
+                        .fixed_decimals(1),
+                );
+            });
+            section_hint(
+                ui,
+                "Hardware RF attenuator (KiwiSDR 2). genattn in the CAT handshake is for the \
+                 internal test generator only.",
+            );
         }
-        #[cfg(feature = "rtlsdr")]
-        if self.is_rtlsdr_streaming() {
-            self.rtlsdr_rf_controls(ui);
-        }
-        #[cfg(feature = "qmx")]
-        if self.is_qmx_streaming() {
-            self.qmx_rf_controls(ui);
-        }
-    }
-
-    #[cfg(feature = "qmx")]
-    fn is_qmx_streaming(&self) -> bool {
-        self.form_kind == SourceKind::Qmx && matches!(self.conn_state, ConnState::Streaming)
     }
 
     #[cfg(feature = "qmx")]
     fn qmx_rf_controls(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.label(
-            egui::RichText::new("QMX RF — CAT gain")
-                .small()
-                .color(MUTED),
-        );
+        section_hint(ui, "QMX RF gain via CAT (RG). Tune with the AF scope above.");
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("RF gain").small().color(MUTED));
             ui.add(
@@ -4097,11 +4154,9 @@ impl WaterfallApp {
 
     #[cfg(feature = "rtlsdr")]
     fn rtlsdr_rf_controls(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.label(
-            egui::RichText::new("RTL-SDR RF — gain & correction")
-                .small()
-                .color(MUTED),
+        section_hint(
+            ui,
+            "RTL2832 AGC or fixed tuner gain. Tune manual gain with the AF scope above.",
         );
         stage_toggle(
             ui,
@@ -4147,11 +4202,9 @@ impl WaterfallApp {
 
     #[cfg(feature = "airspy")]
     fn airspy_rf_controls(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.label(
-            egui::RichText::new("Airspy RF — hardware gain & frontend")
-                .small()
-                .color(MUTED),
+        section_hint(
+            ui,
+            "Airspy HF+ LNA, HF AGC, and attenuator. Tune with the AF scope above.",
         );
         stage_toggle(
             ui,
@@ -4181,14 +4234,20 @@ impl WaterfallApp {
                     "High",
                 );
             });
-        } else {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
-                ui.add(
-                    egui::Slider::new(&mut self.form_airspy.hf_att, 0..=8)
-                        .suffix(" ×6 dB"),
-                );
-            });
+        }
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
+            ui.add_enabled(
+                !self.form_airspy.hf_agc,
+                egui::Slider::new(&mut self.form_airspy.hf_att, 0..=8)
+                    .suffix(" ×6 dB"),
+            );
+        });
+        if self.form_airspy.hf_agc {
+            section_hint(
+                ui,
+                "HF AGC controls front-end gain — turn AGC off to use the 0–48 dB attenuator.",
+            );
         }
         stage_toggle(
             ui,

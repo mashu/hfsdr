@@ -33,6 +33,12 @@ pub struct KiwiSettings {
     /// Manual RF gain 0..=100 (`manGain` CAT param); primary when RF AGC is off.
     #[serde(default = "default_kiwi_man_gain")]
     pub man_gain: u8,
+    /// Test generator attenuation (`SET genattn=` during IQ handshake).
+    #[serde(default)]
+    pub gen_attn: u8,
+    /// Hardware RF attenuator in dB (KiwiSDR 2 when `has_attn=1`).
+    #[serde(default)]
+    pub rf_attn_db: f32,
 }
 
 fn default_kiwi_man_gain() -> u8 {
@@ -48,6 +54,8 @@ impl Default for KiwiSettings {
             freq_offset_khz: 0.0,
             ar_out_hz: 44_100,
             man_gain: default_kiwi_man_gain(),
+            gen_attn: 0,
+            rf_attn_db: 0.0,
         }
     }
 }
@@ -405,7 +413,9 @@ fn connect_kiwi(
         .with_passband(-half, half)
         .with_freq_offset_khz(req.kiwi.freq_offset_khz)
         .with_ar_out_hz(req.kiwi.ar_out_hz)
-        .with_man_gain(req.kiwi.man_gain);
+        .with_man_gain(req.kiwi.man_gain)
+        .with_gen_attn(req.kiwi.gen_attn)
+        .with_rf_attn_db(req.kiwi.rf_attn_db);
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());

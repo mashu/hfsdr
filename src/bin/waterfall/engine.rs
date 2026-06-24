@@ -109,6 +109,10 @@ pub struct EngineStats {
     pub agc_gain: f32,
     /// Smoothed IQ magnitude before AGC.
     pub agc_envelope: f32,
+    /// KiwiSDR 2 reports `has_attn=1` when a hardware RF attenuator is present.
+    pub kiwi_has_rf_attn: bool,
+    /// Latest Kiwi hardware RF attenuator setting (dB).
+    pub kiwi_rf_attn_db: f32,
 }
 
 impl Default for EngineStats {
@@ -142,6 +146,8 @@ impl Default for EngineStats {
             audio_rms: 0.0,
             agc_gain: 1.0,
             agc_envelope: 0.0,
+            kiwi_has_rf_attn: false,
+            kiwi_rf_attn_db: 0.0,
         }
     }
 }
@@ -211,6 +217,7 @@ pub enum EngineCommand {
     Tune(f64),
     SetRfAgc(bool),
     SetKiwiManGain(u8),
+    SetKiwiRfAttn(f32),
     #[cfg(feature = "airspy")]
     SetAirspyAtt(u8),
     #[cfg(feature = "airspy")]
@@ -643,6 +650,11 @@ impl Engine {
             EngineCommand::SetKiwiManGain(gain) => {
                 if let Some(conn) = &mut self.conn {
                     let _ = conn.source.set_man_gain(gain);
+                }
+            }
+            EngineCommand::SetKiwiRfAttn(db) => {
+                if let Some(conn) = &mut self.conn {
+                    let _ = conn.source.set_rf_attn_db(db);
                 }
             }
             #[cfg(feature = "airspy")]
@@ -1416,6 +1428,7 @@ impl Engine {
             .map(|a| (Some(a.device_name().to_string()), a.output_rate()))
             .unwrap_or((None, 0));
         let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
+        let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
 
         if let Ok(mut guard) = self.shared.lock() {
             if guard.latest.len() == self.latest.len() {
@@ -1464,6 +1477,8 @@ impl Engine {
                 audio_rms: self.level_audio_rms,
                 agc_gain: self.level_agc_gain,
                 agc_envelope: self.level_agc_envelope,
+                kiwi_has_rf_attn,
+                kiwi_rf_attn_db,
             };
             guard.audio_scope = self.level_audio_scope.clone();
         }
@@ -1520,6 +1535,7 @@ impl Engine {
             .map(|a| (Some(a.device_name().to_string()), a.output_rate()))
             .unwrap_or((None, 0));
         let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
+        let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
         if let Ok(mut guard) = self.shared.lock() {
             guard.stats = EngineStats {
                 sample_rate: self
@@ -1554,8 +1570,17 @@ impl Engine {
                 audio_rms: self.level_audio_rms,
                 agc_gain: self.level_agc_gain,
                 agc_envelope: self.level_agc_envelope,
+                kiwi_has_rf_attn,
+                kiwi_rf_attn_db,
             };
         }
+    }
+
+    fn kiwi_rf_stats(&self) -> (bool, f32) {
+        self.conn
+            .as_ref()
+            .map(|c| (c.source.has_rf_attn(), c.source.rf_attn_db().unwrap_or(0.0)))
+            .unwrap_or((false, 0.0))
     }
 
     fn effective_rate(&mut self, _nominal: f32) -> f32 {

@@ -59,6 +59,39 @@ pub fn agc_command(agc_on: bool, man_gain: u8) -> String {
     )
 }
 
+/// Test-signal generator attenuation (`SET genattn=`, used with `SET gen=`).
+pub fn genattn_command(attn: u8) -> String {
+    format!("SET genattn={}", attn)
+}
+
+/// Hardware RF attenuator on KiwiSDR 2 (`SET rf_attn=`, dB).
+pub fn rf_attn_command(db: f32) -> String {
+    format!("SET rf_attn={:.1}", db.clamp(0.0, KIWI_RF_ATTN_MAX_DB))
+}
+
+/// Maximum RF attenuator setting on KiwiSDR 2 (0.5 dB steps).
+pub const KIWI_RF_ATTN_MAX_DB: f32 = 31.5;
+
+fn parse_kiwi_scalar<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    kiwi_msg_params(text)
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix(key))
+}
+
+/// Parse `has_attn=1` from a Kiwi status line.
+pub fn has_rf_attn(text: &str) -> Option<bool> {
+    parse_kiwi_scalar(text, "has_attn=")
+        .and_then(|v| v.parse::<u8>().ok())
+        .map(|n| n != 0)
+}
+
+/// Parse `rf_attn=12.0` from a Kiwi status line.
+pub fn rf_attn_db(text: &str) -> Option<f32> {
+    parse_kiwi_scalar(text, "rf_attn=")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|db| db.clamp(0.0, KIWI_RF_ATTN_MAX_DB))
+}
+
 /// Commands sent after the server reports `sample_rate=…` (kiwiclient handshake).
 pub struct KiwiRxSetup {
     pub low_cut: i32,
@@ -66,6 +99,10 @@ pub struct KiwiRxSetup {
     pub freq_hz: f64,
     pub agc_on: bool,
     pub man_gain: u8,
+    /// Test generator attenuation sent during IQ handshake (`SET genattn=`).
+    pub gen_attn: u8,
+    /// Requested hardware RF attenuator (dB) when `has_attn=1`.
+    pub rf_attn_db: f32,
     pub compression: bool,
     pub ar_out_hz: u32,
 }
@@ -75,7 +112,7 @@ impl KiwiRxSetup {
         // Match kiwiclient order after `sample_rate=…`: squelch, gen, mod=iq, keepalive.
         vec![
             "SET squelch=0 max=0".to_string(),
-            "SET genattn=0".to_string(),
+            genattn_command(self.gen_attn),
             "SET gen=0 mix=-1".to_string(),
             mod_iq_command(self.low_cut, self.high_cut, self.freq_hz),
             agc_command(self.agc_on, self.man_gain),
@@ -217,6 +254,8 @@ mod parse_tests {
             freq_hz: 7_030_000.0,
             agc_on: true,
             man_gain: 50,
+            gen_attn: 0,
+            rf_attn_db: 0.0,
             compression: false,
             ar_out_hz: 44_100,
         };
@@ -224,7 +263,23 @@ mod parse_tests {
         assert!(cmds.iter().any(|c| c.contains("mod=iq")));
         assert!(cmds.iter().any(|c| c == "SET compression=0"));
         assert!(cmds.iter().any(|c| c.contains("manGain=50")));
+        assert!(cmds.iter().any(|c| c == "SET genattn=0"));
         assert!(cmds.iter().any(|c| c.starts_with("SET squelch")));
+    }
+
+    #[test]
+    fn genattn_and_rf_attn_commands() {
+        assert_eq!(genattn_command(12), "SET genattn=12");
+        assert_eq!(rf_attn_command(6.0), "SET rf_attn=6.0");
+        assert_eq!(rf_attn_command(99.0), "SET rf_attn=31.5");
+    }
+
+    #[test]
+    fn parses_has_attn_and_rf_attn_from_status() {
+        assert_eq!(has_rf_attn("MSG has_attn=1 foo=bar"), Some(true));
+        assert_eq!(has_rf_attn("has_attn=0"), Some(false));
+        assert_eq!(rf_attn_db("MSG rf_attn=12.5"), Some(12.5));
+        assert!(has_rf_attn("MSG squelch=0").is_none());
     }
 
     #[test]

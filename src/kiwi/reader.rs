@@ -1,7 +1,7 @@
 //! WebSocket reader thread for KiwiSDR: command forwarding, keepalives, SND parsing.
 
 use crate::kiwi::protocol::{
-    audio_rate, has_sample_rate, msg_body_text, parse_snd, KiwiRxSetup,
+    audio_rate, has_rf_attn, has_sample_rate, msg_body_text, parse_snd, rf_attn_db, KiwiRxSetup,
 };
 use crate::source::Complex32;
 use rtrb::Producer;
@@ -83,6 +83,9 @@ fn handle_msg_text(
     text: &str,
     rx_setup: &KiwiRxSetup,
     iq_configured: &mut bool,
+    rf_attn_applied: &mut bool,
+    has_attn_atomic: &AtomicBool,
+    rf_attn_cdb: &AtomicI32,
     link_error: &Mutex<Option<String>>,
 ) {
     let params = crate::kiwi::protocol::kiwi_msg_params(text);
@@ -103,6 +106,24 @@ fn handle_msg_text(
 
     if has_sample_rate(text) && !*iq_configured && configure_iq(ws, rx_setup) {
         *iq_configured = true;
+    }
+    if let Some(true) = has_rf_attn(text) {
+        has_attn_atomic.store(true, Ordering::Relaxed);
+    }
+    if let Some(db) = rf_attn_db(text) {
+        rf_attn_cdb.store((db * 10.0).round() as i32, Ordering::Relaxed);
+    }
+    if *iq_configured
+        && has_attn_atomic.load(Ordering::Relaxed)
+        && !*rf_attn_applied
+    {
+        if send_text(ws, &crate::kiwi::protocol::rf_attn_command(rx_setup.rf_attn_db)) {
+            *rf_attn_applied = true;
+            rf_attn_cdb.store(
+                (rx_setup.rf_attn_db * 10.0).round() as i32,
+                Ordering::Relaxed,
+            );
+        }
     }
     if let Some(rate) = audio_rate(text) {
         let _ = send_text(
@@ -132,10 +153,13 @@ pub fn reader_loop(
     rssi: Arc<AtomicI32>,
     iq_streaming: Arc<AtomicBool>,
     link_error: Arc<Mutex<Option<String>>>,
+    has_attn_atomic: Arc<AtomicBool>,
+    rf_attn_cdb: Arc<AtomicI32>,
     rx_setup: KiwiRxSetup,
 ) {
     let mut last_keepalive = Instant::now();
     let mut iq_configured = false;
+    let mut rf_attn_applied = false;
     let mut pending_cmds: Vec<String> = Vec::new();
 
     while !stop.load(Ordering::Relaxed) {
@@ -161,14 +185,32 @@ pub fn reader_loop(
                     parse_snd(&buf, &mut prod, &dropped, &rssi);
                     iq_streaming.store(true, Ordering::Relaxed);
                 } else if let Some(text) = msg_body_text(&buf) {
-                    handle_msg_text(&mut ws, text, &rx_setup, &mut iq_configured, &link_error);
+                    handle_msg_text(
+                        &mut ws,
+                        text,
+                        &rx_setup,
+                        &mut iq_configured,
+                        &mut rf_attn_applied,
+                        &has_attn_atomic,
+                        &rf_attn_cdb,
+                        &link_error,
+                    );
                     if iq_configured {
                         flush_pending(&mut ws, &mut pending_cmds);
                     }
                 }
             }
             Ok(Message::Text(text)) => {
-                handle_msg_text(&mut ws, text.as_str(), &rx_setup, &mut iq_configured, &link_error);
+                handle_msg_text(
+                    &mut ws,
+                    text.as_str(),
+                    &rx_setup,
+                    &mut iq_configured,
+                    &mut rf_attn_applied,
+                    &has_attn_atomic,
+                    &rf_attn_cdb,
+                    &link_error,
+                );
                 if iq_configured {
                     flush_pending(&mut ws, &mut pending_cmds);
                 }

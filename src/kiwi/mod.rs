@@ -32,8 +32,12 @@ pub struct KiwiSource {
     ar_out_hz: u32,
     agc_on: bool,
     man_gain: u8,
+    gen_attn: u8,
+    rf_attn_db: f32,
     compression: bool,
     streaming: bool,
+    has_rf_attn: Arc<AtomicBool>,
+    rf_attn_cdb: Arc<AtomicI32>,
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     rssi_cdbm: Arc<AtomicI32>,
@@ -71,8 +75,12 @@ impl KiwiSource {
             ar_out_hz: 44_100,
             agc_on: true,
             man_gain: 50,
+            gen_attn: 0,
+            rf_attn_db: 0.0,
             compression: false,
             streaming: false,
+            has_rf_attn: Arc::new(AtomicBool::new(false)),
+            rf_attn_cdb: Arc::new(AtomicI32::new(-1)),
             stop: Arc::new(AtomicBool::new(false)),
             dropped: Arc::new(AtomicU64::new(0)),
             rssi_cdbm: Arc::new(AtomicI32::new(0)),
@@ -99,6 +107,18 @@ impl KiwiSource {
     /// Manual RF gain 0..=100 (used when AGC is off; still sent with AGC on).
     pub fn with_man_gain(mut self, gain: u8) -> Self {
         self.man_gain = gain.clamp(0, 100);
+        self
+    }
+
+    /// Test generator attenuation for the IQ handshake (`SET genattn=`).
+    pub fn with_gen_attn(mut self, attn: u8) -> Self {
+        self.gen_attn = attn;
+        self
+    }
+
+    /// Hardware RF attenuator in dB (KiwiSDR 2, when `has_attn=1`).
+    pub fn with_rf_attn_db(mut self, db: f32) -> Self {
+        self.rf_attn_db = db.clamp(0.0, protocol::KIWI_RF_ATTN_MAX_DB);
         self
     }
 
@@ -139,6 +159,8 @@ impl KiwiSource {
             freq_hz: self.kiwi_freq_khz() * 1000.0,
             agc_on: self.agc_on,
             man_gain: self.man_gain,
+            gen_attn: self.gen_attn,
+            rf_attn_db: self.rf_attn_db,
             compression: self.compression,
             ar_out_hz: self.ar_out_hz,
         }
@@ -231,6 +253,8 @@ impl KiwiSource {
         let rssi = Arc::clone(&self.rssi_cdbm);
         let iq_streaming = Arc::clone(&self.iq_streaming);
         let link_error = Arc::clone(&self.link_error);
+        let has_rf_attn = Arc::clone(&self.has_rf_attn);
+        let rf_attn_cdb = Arc::clone(&self.rf_attn_cdb);
         let stop_thread = Arc::clone(&stop);
         let rx_setup = self.rx_setup();
         let handle = thread::spawn(move || {
@@ -243,6 +267,8 @@ impl KiwiSource {
                 rssi,
                 iq_streaming,
                 link_error,
+                has_rf_attn,
+                rf_attn_cdb,
                 rx_setup,
             );
         });
@@ -347,6 +373,30 @@ impl IqSource for KiwiSource {
         Ok(())
     }
 
+    fn has_rf_attn(&self) -> bool {
+        self.has_rf_attn.load(Ordering::Relaxed)
+    }
+
+    fn rf_attn_db(&self) -> Option<f32> {
+        let cdb = self.rf_attn_cdb.load(Ordering::Relaxed);
+        if cdb < 0 {
+            None
+        } else {
+            Some(cdb as f32 / 10.0)
+        }
+    }
+
+    fn set_rf_attn_db(&mut self, db: f32) -> Result<()> {
+        let db = db.clamp(0.0, protocol::KIWI_RF_ATTN_MAX_DB);
+        self.rf_attn_db = db;
+        self.rf_attn_cdb
+            .store((db * 10.0).round() as i32, Ordering::Relaxed);
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.send(protocol::rf_attn_command(db));
+        }
+        Ok(())
+    }
+
     fn link_ready(&self) -> bool {
         self.iq_ready()
     }
@@ -398,6 +448,9 @@ mod tests {
         src.set_passband(-4_000, 4_000).unwrap();
         src.set_agc(true).unwrap();
         src.set_man_gain(60).unwrap();
+        assert!(!src.has_rf_attn());
+        assert!(src.rf_attn_db().is_none());
+        src.set_rf_attn_db(6.0).unwrap();
         assert!(src.rssi_dbm().is_some());
         assert!(!src.link_ready());
         assert!(!src.link_alive());

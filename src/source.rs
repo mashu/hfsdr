@@ -103,6 +103,22 @@ pub trait IqSource {
         Ok(())
     }
 
+    /// KiwiSDR 2 hardware RF attenuator is available on this link.
+    fn has_rf_attn(&self) -> bool {
+        false
+    }
+
+    /// Latest hardware RF attenuator setting in dB (KiwiSDR 2).
+    fn rf_attn_db(&self) -> Option<f32> {
+        None
+    }
+
+    /// Hardware RF attenuator in dB (KiwiSDR 2 `SET rf_attn=`).
+    fn set_rf_attn_db(&mut self, db: f32) -> Result<()> {
+        let _ = db;
+        Ok(())
+    }
+
     /// HF attenuator step 0..=8 (Airspy HF+, 6 dB per step).
     fn set_hf_att(&mut self, _step: u8) -> Result<()> {
         Ok(())
@@ -246,6 +262,7 @@ mod tests {
         src.set_tuner_gain_mode(true).unwrap();
         src.set_freq_correction(1).unwrap();
         src.set_rf_gain_db(10).unwrap();
+        src.set_rf_attn_db(3.0).unwrap();
         assert!(src.link_ready());
         assert!(src.link_alive());
         assert!(src.link_error().is_none());
