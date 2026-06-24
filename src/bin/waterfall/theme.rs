@@ -65,6 +65,14 @@ pub fn apply(ctx: &eframe::egui::Context) {
     ctx.set_global_style(style);
 }
 
+/// Side panel chrome — fills the full panel width while resizing.
+pub fn side_panel_frame() -> Frame {
+    Frame::new()
+        .fill(PANEL)
+        .inner_margin(eframe::egui::Margin::symmetric(8, 6))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(38, 46, 62)))
+}
+
 /// Top status bar chrome.
 pub fn status_panel_frame() -> Frame {
     Frame::new()
@@ -126,6 +134,7 @@ pub fn section_frame() -> eframe::egui::Frame {
 pub fn section_card(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
     section_frame().show(ui, |ui| {
         let w = ui.available_width();
+        ui.set_min_width(w);
         ui.set_max_width(w);
         add_contents(ui);
     });
@@ -175,9 +184,7 @@ pub fn rich_tooltip_body(ui: &mut Ui, title: Option<&str>, lines: &[(&str, Color
 }
 
 pub fn attach_rich_tooltip(resp: &Response, title: Option<&str>, lines: &[(&str, Color32)]) {
-    resp.clone()
-        .on_hover_cursor(eframe::egui::CursorIcon::Help)
-        .on_hover_ui(|ui| rich_tooltip_body(ui, title, lines));
+    resp.clone().on_hover_ui(|ui| rich_tooltip_body(ui, title, lines));
 }
 
 pub fn section_heading_with_tip(ui: &mut Ui, title: &str, tip: &[(&str, Color32)]) {

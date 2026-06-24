@@ -700,6 +700,13 @@ mod tests {
     }
 
     #[test]
+    fn kiwi_default_man_gain_is_full_scale() {
+        let s = KiwiSettings::default();
+        assert_eq!(s.man_gain, hfsdr::kiwi::protocol::KIWI_MAN_GAIN_DEFAULT);
+        assert_eq!(s.man_gain, 100);
+    }
+
+    #[test]
     fn kiwi_ingress_decimation_divides_evenly() {
         let mut s = KiwiSettings::default();
         s.iq_resample_hz = 6_000;

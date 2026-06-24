@@ -168,7 +168,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            bfo_hz: 650.0,
+            bfo_hz: 500.0,
             passband_hz: 200.0,
             channel_filter: 0,
             decim_filter: 0,
@@ -321,5 +321,16 @@ mod tests {
         assert_eq!(back.continent_filter, s.continent_filter);
         assert_eq!(back.show_continents, s.show_continents);
         assert!(!back.show_console);
+    }
+
+    #[test]
+    fn default_kiwi_rf_gain_is_max_manual() {
+        let s = AppSettings::default();
+        assert_eq!(
+            s.kiwi_man_gain,
+            hfsdr::kiwi::protocol::KIWI_MAN_GAIN_DEFAULT
+        );
+        assert_eq!(s.kiwi_man_gain, 100);
+        assert_eq!(s.kiwi.man_gain, 100);
     }
 }

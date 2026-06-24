@@ -200,7 +200,7 @@ impl Default for CwChannelSettings {
     fn default() -> Self {
         Self {
             listen_offset_hz: ChannelOffsetHz::ZERO,
-            bfo_hz: 650.0,
+            bfo_hz: 500.0,
             passband_hz: 200.0,
             channel_filter: ChannelFilterKind::LinearFir,
             decim_filter: DecimFilterKind::LinearFir,

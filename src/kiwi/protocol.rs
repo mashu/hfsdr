@@ -65,6 +65,15 @@ pub fn man_gain_from_db_below_max(db: i32) -> u8 {
     (db + i32::from(KIWI_MAN_GAIN_MAX)).clamp(0, i32::from(KIWI_MAN_GAIN_MAX)) as u8
 }
 
+/// Linear IQ multiply factor from Kiwi CuteSDR `CAgc` when RF AGC is off.
+///
+/// Firmware: `m_ManualAgcGain = MAX_MANUAL_AMPLITUDE * 10^(-(100 - manGain)/20)`.
+/// Normalized so `100` → `1.0` (0 dB below max).
+pub fn kiwi_manual_agc_linear(man_gain: u8) -> f32 {
+    let g = f32::from(man_gain.clamp(0, KIWI_MAN_GAIN_MAX));
+    10f32.powf(-(f32::from(KIWI_MAN_GAIN_MAX) - g) / 20.0)
+}
+
 /// Build the Kiwi `SET agc=… manGain=…` command.
 pub fn agc_command(agc_on: bool, man_gain: u8) -> String {
     format!(
@@ -268,6 +277,42 @@ mod parse_tests {
         assert_eq!(man_gain_db_below_max(50), -50);
         assert_eq!(man_gain_from_db_below_max(0), 100);
         assert_eq!(man_gain_from_db_below_max(-10), 90);
+        assert_eq!(KIWI_MAN_GAIN_DEFAULT, KIWI_MAN_GAIN_MAX);
+    }
+
+    #[test]
+    fn man_gain_db_roundtrip_and_clamp() {
+        for mg in 0..=100u8 {
+            let db = man_gain_db_below_max(mg);
+            assert_eq!(man_gain_from_db_below_max(db), mg);
+        }
+        assert_eq!(man_gain_from_db_below_max(-200), 0);
+        assert_eq!(man_gain_from_db_below_max(50), 100);
+    }
+
+    #[test]
+    fn kiwi_manual_agc_matches_firmware_curve() {
+        assert!((kiwi_manual_agc_linear(100) - 1.0).abs() < 1e-6);
+        assert!((kiwi_manual_agc_linear(90) - 10f32.powf(-0.5)).abs() < 1e-5);
+        assert!((kiwi_manual_agc_linear(50) - 10f32.powf(-2.5)).abs() < 1e-5);
+        // Last 10 steps ≈ last 10 dB — explains why only 90–100 feels active on noise.
+        let top_decade = kiwi_manual_agc_linear(100) / kiwi_manual_agc_linear(90);
+        let mid_to_top = kiwi_manual_agc_linear(90) / kiwi_manual_agc_linear(50);
+        assert!((top_decade - 10f32.powf(0.5)).abs() < 0.02);
+        assert!(mid_to_top > 20.0, "50→90 spans most of the dynamic range: {mid_to_top}");
+    }
+
+    #[test]
+    fn agc_command_manual_vs_automatic() {
+        assert_eq!(
+            agc_command(false, 100),
+            "SET agc=0 hang=0 thresh=-100 slope=6 decay=1000 manGain=100"
+        );
+        assert_eq!(
+            agc_command(true, 100),
+            "SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=100"
+        );
+        assert!(agc_command(true, 200).ends_with("manGain=100"));
     }
 
     #[test]

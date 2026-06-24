@@ -488,4 +488,59 @@ mod tests {
         assert!(!audio.is_empty());
         assert!(channel.snr_db().is_finite());
     }
+
+    fn scaled_tone_iq(rate: f32, offset_hz: f32, n: usize, amp: f32) -> Vec<Complex32> {
+        tone_iq(rate, offset_hz, n)
+            .into_iter()
+            .map(|s| Complex32 {
+                re: s.re * amp,
+                im: s.im * amp,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rf_meter_tracks_input_level_not_software_agc() {
+        let rate = 12_000.0;
+        let n = rate as usize * 3;
+        let listen = ChannelOffsetHz::new(200.0);
+        let mut settings = CwChannelSettings {
+            listen_offset_hz: listen,
+            bfo_hz: 650.0,
+            passband_hz: 400.0,
+            ..CwChannelSettings::default()
+        };
+        settings.agc.enabled = true;
+        settings.agc.target = 0.25;
+        let origin = ListenOrigin::from_settings(listen);
+
+        let mut quiet = CwChannel::new(rate);
+        let iq_quiet = scaled_tone_iq(rate, listen.hz(), n, 0.05);
+        let mut audio_quiet = Vec::new();
+        quiet.process(&iq_quiet, rate, &settings, origin, &mut audio_quiet);
+        let rf_quiet = quiet.iq_rf_level();
+        let gain_quiet = quiet.agc_gain();
+
+        let mut loud = CwChannel::new(rate);
+        let iq_loud = scaled_tone_iq(rate, listen.hz(), n, 0.5);
+        let mut audio_loud = Vec::new();
+        loud.process(&iq_loud, rate, &settings, origin, &mut audio_loud);
+        let rf_loud = loud.iq_rf_level();
+        let gain_loud = loud.agc_gain();
+
+        assert!(
+            rf_loud > rf_quiet * 3.0,
+            "S-meter tap should follow input: quiet={rf_quiet} loud={rf_loud}"
+        );
+        assert!(
+            gain_quiet > gain_loud,
+            "IQ AGC should ride down on hot input: quiet_gain={gain_quiet} loud_gain={gain_loud}"
+        );
+        let rms_quiet = audio_rms(&audio_quiet, audio_quiet.len() / 2);
+        let rms_loud = audio_rms(&audio_loud, audio_loud.len() / 2);
+        assert!(
+            rms_loud < rms_quiet * 2.5,
+            "AF should stay roughly leveled despite hotter RF: quiet={rms_quiet} loud={rms_loud}"
+        );
+    }
 }

@@ -1049,4 +1049,20 @@ mod tests {
     fn s_reading_weak_signal() {
         assert_eq!(dbm_to_s_reading(-100.0), "S5");
     }
+
+    #[test]
+    fn if_agc_fill_monotonic_with_gain() {
+        assert!(if_agc_fill(2.0, true) > if_agc_fill(1.0, true));
+        assert!(if_agc_fill(16.0, true) > if_agc_fill(2.0, true));
+        assert!((if_agc_fill(1.0, false) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn needle_position_tracks_dbm_monotonically() {
+        let t_quiet = dbm_to_needle_t(-120.0);
+        let t_loud = dbm_to_needle_t(-70.0);
+        assert!(t_loud > t_quiet);
+        assert!((dbm_to_needle_t(-127.0) - 0.0).abs() < 1e-6);
+        assert!((dbm_to_needle_t(-33.0) - 1.0).abs() < 1e-6);
+    }
 }

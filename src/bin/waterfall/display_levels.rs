@@ -96,9 +96,30 @@ pub fn smooth_levels(
     )
 }
 
+/// Whether periodic auto Ref/Range estimation should run.
+pub fn should_auto_adjust_display_levels(initialized: bool, auto_track: bool) -> bool {
+    !initialized || auto_track
+}
+
+/// Pin waterfall Ref/Range so RF gain changes appear as brightness, not auto-leveling.
+pub fn lock_display_levels_for_rf_tuning(auto_track: &mut bool, initialized: &mut bool) {
+    *auto_track = false;
+    *initialized = true;
+}
+
+/// `display_levels_initialized` after loading persisted display settings.
+pub fn display_levels_initialized_after_settings_load(auto_track: bool) -> bool {
+    !auto_track
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn waterfall_brightness(db: f32, ref_db: f32, range_db: f32) -> f32 {
+        let floor = ref_db - range_db;
+        ((db - floor) / range_db).clamp(0.0, 1.0)
+    }
 
     #[test]
     fn quiet_band_maps_to_dark_floor() {
@@ -191,5 +212,41 @@ mod tests {
         );
         let mid = db_to_colour(-80.0, ref_db, range_db);
         assert!(mid.r() < 40 && mid.g() < 40, "mid noise should stay dark");
+    }
+
+    #[test]
+    fn locked_levels_show_rf_gain_brightening() {
+        let ref_db = -65.0;
+        let range_db = 17.0;
+        let quiet = waterfall_brightness(-82.0, ref_db, range_db);
+        let louder = waterfall_brightness(-76.0, ref_db, range_db);
+        assert!(louder > quiet, "fixed ref: +6 dB input should brighten");
+
+        let row_quiet = vec![-82.0; 2048];
+        let row_loud = vec![-76.0; 2048];
+        let (ref_q, range_q) = estimate_levels(&row_quiet).expect("quiet");
+        let (ref_l, range_l) = estimate_levels(&row_loud).expect("loud");
+        let auto_q = waterfall_brightness(-82.0, ref_q, range_q);
+        let auto_l = waterfall_brightness(-76.0, ref_l, range_l);
+        assert!(
+            (auto_l - auto_q).abs() < 0.05,
+            "auto-track cancels brightness change: quiet={auto_q} loud={auto_l}"
+        );
+    }
+
+    #[test]
+    fn display_level_policy_for_rf_tuning() {
+        assert!(should_auto_adjust_display_levels(false, false));
+        assert!(!should_auto_adjust_display_levels(true, false));
+        assert!(should_auto_adjust_display_levels(true, true));
+        assert!(display_levels_initialized_after_settings_load(false));
+        assert!(!display_levels_initialized_after_settings_load(true));
+
+        let mut auto_track = true;
+        let mut initialized = false;
+        lock_display_levels_for_rf_tuning(&mut auto_track, &mut initialized);
+        assert!(!auto_track);
+        assert!(initialized);
+        assert!(!should_auto_adjust_display_levels(initialized, auto_track));
     }
 }

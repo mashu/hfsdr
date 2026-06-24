@@ -32,7 +32,10 @@ use crate::controls::{
     preset_combo_f64, preset_combo_u32, scroll_slider_f32, scroll_slider_f32_step,
     scroll_slider_log_f32, vfo_wheel_khz,
 };
-use crate::display_levels::{estimate_levels, estimate_levels_from_rows};
+use crate::display_levels::{
+    display_levels_initialized_after_settings_load, estimate_levels, estimate_levels_from_rows,
+    lock_display_levels_for_rf_tuning, should_auto_adjust_display_levels,
+};
 use crate::engine::{
     ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
 };
@@ -60,13 +63,20 @@ use crate::spot_filter::{
 use crate::theme::{
     apply, attach_rich_tooltip, band_lock_toggle, clickable_badge, collapsible_section,
     panel_toggle, section_card, section_frame, section_heading, section_heading_with_tip, section_hint,
-    stat_row, stage_toggle, status_panel_frame, toggle, ACCENT, MUTED, OK, WARN,
+    side_panel_frame, stat_row, stage_toggle, status_panel_frame, toggle, ACCENT, MUTED, OK, WARN,
 };
 use crate::widgets::{
     update_trace, PanadapterPlot, SpotLabel, TraceViewKey, SCOPE_HEIGHT,
 };
 
 const SMOOTH_ALPHA: f32 = 0.09;
+
+/// Minimum RX panel width (VFO digit wheels + section margins).
+const LEFT_PANEL_MIN_W: f32 = 288.0;
+const LEFT_PANEL_MAX_W: f32 = 440.0;
+/// Minimum DSP panel width (AF scope, stage toggles, labeled sliders).
+const RIGHT_PANEL_MIN_W: f32 = 312.0;
+const RIGHT_PANEL_MAX_W: f32 = 480.0;
 
 /// CW band plan: calling frequency + typical CW segment width for panadapter zoom.
 struct CwBandPreset {
@@ -663,8 +673,8 @@ impl WaterfallApp {
         if self.display_auto_track {
             self.display_levels_initialized = false;
         } else {
-            // Respect saved Ref/Range — do not re-estimate on every connect (that hides RF gain).
-            self.display_levels_initialized = true;
+            self.display_levels_initialized =
+                display_levels_initialized_after_settings_load(self.display_auto_track);
         }
         self.smooth_alpha = s.smooth_alpha;
         self.waterfall_avg = normalize_waterfall_avg(s.waterfall_avg);
@@ -1098,14 +1108,18 @@ impl WaterfallApp {
         }
     }
 
-    /// Fixed Ref/Range so RF front-end gain shows as waterfall brightness (not auto-normalized away).
     fn lock_display_levels_for_rf_tuning(&mut self) {
-        self.display_auto_track = false;
-        self.display_levels_initialized = true;
+        lock_display_levels_for_rf_tuning(
+            &mut self.display_auto_track,
+            &mut self.display_levels_initialized,
+        );
     }
 
     fn update_display_levels(&mut self) {
-        if self.display_levels_initialized && !self.display_auto_track {
+        if !should_auto_adjust_display_levels(
+            self.display_levels_initialized,
+            self.display_auto_track,
+        ) {
             return;
         }
         let target = self.estimate_display_levels();
@@ -2914,42 +2928,48 @@ impl WaterfallApp {
         self.show_shortcuts = open;
     }
 
-    fn left_panel(&mut self, ui: &mut egui::Ui) {
+    fn side_panel_scroll(&mut self, ui: &mut egui::Ui, mut body: impl FnMut(&mut Self, &mut egui::Ui)) {
+        let panel_w = ui.max_rect().width();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if self.show_smeter {
-                    self.smeter_card(ui);
-                }
-                if !self.show_left {
-                    return;
-                }
-                self.frequency_card(ui);
-                self.rf_front_end_card(ui);
-                self.receive_chain_card(ui);
+                ui.set_min_width(panel_w);
+                body(self, ui);
             });
+    }
+
+    fn left_panel(&mut self, ui: &mut egui::Ui) {
+        self.side_panel_scroll(ui, |this, ui| {
+            if this.show_smeter {
+                this.smeter_card(ui);
+            }
+            if !this.show_left {
+                return;
+            }
+            this.frequency_card(ui);
+            this.rf_front_end_card(ui);
+            this.receive_chain_card(ui);
+        });
     }
 
     fn right_panel(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                self.af_tuning_card(ui);
-                self.cw_demod_card(ui);
-                self.display_section(ui);
-                self.spot_display_section(ui);
-                collapsible_section(ui, "skimmer-settings", "Skimmer settings", None, false, |ui| {
-                    self.skimmer_settings_body(ui);
-                });
-                collapsible_section(ui, "audio", "Audio", None, false, |ui| {
-                    self.audio_card_body(ui);
-                });
-                self.performance_section(ui);
+        self.side_panel_scroll(ui, |this, ui| {
+            this.af_tuning_card(ui);
+            this.cw_demod_card(ui);
+            this.display_section(ui);
+            this.spot_display_section(ui);
+            collapsible_section(ui, "skimmer-settings", "Skimmer settings", None, false, |ui| {
+                this.skimmer_settings_body(ui);
             });
+            collapsible_section(ui, "audio", "Audio", None, false, |ui| {
+                this.audio_card_body(ui);
+            });
+            this.performance_section(ui);
+        });
     }
 
     fn spot_display_section(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "spots", "Spots", None, true, |ui| {
+        collapsible_section(ui, "spots", "Spots", None, false, |ui| {
             self.spot_display_body(ui);
         });
     }
@@ -3566,7 +3586,7 @@ impl WaterfallApp {
                     MUTED,
                 ),
             ]),
-            false,
+            true,
             |ui| {
             let max_zoom = self.plot_max_zoom_out();
             scroll_slider_f32(ui, &mut self.plot_view.zoom, 0.04..=max_zoom, "View zoom");
@@ -3795,6 +3815,7 @@ impl WaterfallApp {
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
             let w = ui.available_width();
+            ui.set_min_width(w);
             ui.set_max_width(w);
             section_heading_with_tip(
                 ui,
@@ -4378,7 +4399,7 @@ impl WaterfallApp {
             let resp = ui.add(
                 egui::Slider::new(&mut gain_db, -100..=0)
                     .suffix(" dB")
-                    .clamp_to_range(true),
+                    .clamping(egui::SliderClamping::Always),
             );
             if resp.changed() {
                 self.form_kiwi.man_gain = man_gain_from_db_below_max(gain_db);
@@ -5248,9 +5269,10 @@ impl eframe::App for WaterfallApp {
         if self.show_left || self.show_smeter {
             egui::Panel::left("left")
                 .resizable(true)
-                .size_range(200.0..=340.0)
+                .frame(side_panel_frame())
+                .size_range(LEFT_PANEL_MIN_W..=LEFT_PANEL_MAX_W)
                 .default_size(if self.show_smeter && !self.show_left {
-                    260.0
+                    LEFT_PANEL_MIN_W
                 } else {
                     300.0
                 })
@@ -5260,6 +5282,8 @@ impl eframe::App for WaterfallApp {
         if self.show_right {
             egui::Panel::right("controls")
                 .resizable(true)
+                .frame(side_panel_frame())
+                .size_range(RIGHT_PANEL_MIN_W..=RIGHT_PANEL_MAX_W)
                 .default_size(330.0)
                 .show_inside(ui, |ui| self.right_panel(ui));
         }
