@@ -13,6 +13,7 @@ use crate::engine::policy::{
 };
 use crate::engine::types::{ConnState, EngineStats};
 use crate::engine::{WATERFALL_ROWS};
+use crate::source::Connection;
 
 
 impl Engine {
@@ -88,7 +89,9 @@ impl Engine {
         // Yaesu-style software RF gain: scale the IQ after recording (so captures stay raw)
         // but before spectrum/S-meter/AGC see it. One chokepoint → identical behavior on
         // every source and on playback, even when hardware/RF AGC is active.
-        apply_software_rf_gain(&mut self.drain, params.rf_gain_db);
+        // Kiwi manGain is emulated here when Kiwi RF AGC is on (firmware ignores manGain then).
+        let gain_db = effective_rf_gain_db(params.rf_gain_db, self.conn.as_ref());
+        apply_software_rf_gain(&mut self.drain, gain_db);
         if !self.first_iq_received {
             self.first_iq_received = true;
             self.rate_window_start = Instant::now();
@@ -553,6 +556,12 @@ impl Engine {
     pub(super) fn hw_rf_gain(&self) -> Option<u8> {
         self.conn.as_ref().and_then(|c| c.device.hw_rf_gain())
     }
+}
+
+/// Total software RF gain: user knob + Kiwi `manGain` when Kiwi RF AGC hides it from firmware.
+fn effective_rf_gain_db(rf_gain_db: f32, conn: Option<&Connection>) -> f32 {
+    let extra = conn.map(Connection::kiwi_software_man_gain_db).unwrap_or(0.0);
+    (rf_gain_db + extra).clamp(-80.0, 80.0)
 }
 
 /// Scale IQ in place by a software RF gain in dB (no-op at 0 dB).

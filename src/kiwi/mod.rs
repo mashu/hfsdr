@@ -393,6 +393,10 @@ impl KiwiControls for KiwiSource {
         KiwiSource::set_agc(self, on)
     }
 
+    fn rf_agc_on(&self) -> bool {
+        self.agc_on
+    }
+
     fn set_man_gain(&mut self, gain: u8) -> Result<()> {
         KiwiSource::set_man_gain(self, gain)
     }

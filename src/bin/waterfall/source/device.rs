@@ -118,3 +118,58 @@ pub struct Connection {
     /// Client-side integer decimation for the spectrum path (1 = none).
     pub iq_ingress_decim: usize,
 }
+
+impl Connection {
+    /// When Kiwi RF AGC is on, firmware ignores `manGain` — return the same dB offset for software scaling.
+    pub fn kiwi_software_man_gain_db(&self) -> f32 {
+        if !self.is_kiwi {
+            return 0.0;
+        }
+        let DeviceSource::Kiwi(kiwi) = &self.device else {
+            return 0.0;
+        };
+        if !KiwiControls::rf_agc_on(kiwi) {
+            return 0.0;
+        }
+        KiwiControls::hw_rf_gain(kiwi)
+            .map(|mg| hfsdr::kiwi::protocol::man_gain_db_below_max(mg) as f32)
+            .unwrap_or(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hfsdr::kiwi::KiwiSource;
+    use hfsdr::source::controls::KiwiControls;
+    use rtrb::RingBuffer;
+
+    fn kiwi_conn(agc_on: bool, man_gain: u8) -> Connection {
+        let mut kiwi = KiwiSource::new("test.local", 8073);
+        KiwiControls::set_agc(&mut kiwi, agc_on).unwrap();
+        KiwiControls::set_man_gain(&mut kiwi, man_gain).unwrap();
+        let (_prod, cons) = RingBuffer::new(64);
+        Connection {
+            device: DeviceSource::Kiwi(kiwi),
+            iq: cons,
+            iq_ring_capacity: 64,
+            device_sample_rate: 12_000.0,
+            sample_rate: 12_000.0,
+            center_hz: 14_000_000.0,
+            is_kiwi: true,
+            iq_ingress_decim: 1,
+        }
+    }
+
+    #[test]
+    fn kiwi_man_gain_emulated_when_rf_agc_on() {
+        let conn = kiwi_conn(true, 50);
+        assert!((conn.kiwi_software_man_gain_db() - (-50.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn kiwi_man_gain_not_emulated_when_rf_agc_off() {
+        let conn = kiwi_conn(false, 50);
+        assert!((conn.kiwi_software_man_gain_db()).abs() < 1e-6);
+    }
+}
