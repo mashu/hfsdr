@@ -54,4 +54,18 @@ mod tests {
         assert!(mid.r() > floor.r());
         assert!(mid.r() < ceiling.r());
     }
+
+    #[test]
+    fn below_floor_matches_floor_colour() {
+        let floor = db_to_colour(-100.0, -20.0, 80.0);
+        let below = db_to_colour(-200.0, -20.0, 80.0);
+        assert_eq!(floor, below);
+    }
+
+    #[test]
+    fn above_ref_matches_ceiling_colour() {
+        let ceiling = db_to_colour(-20.0, -20.0, 80.0);
+        let above = db_to_colour(10.0, -20.0, 80.0);
+        assert_eq!(ceiling, above);
+    }
 }

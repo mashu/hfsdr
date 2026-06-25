@@ -126,4 +126,61 @@ mod tests {
     fn airspy_rate_decimates() {
         assert!(decimation_factor(768_000.0) >= 32);
     }
+
+    #[test]
+    fn unity_factor_passthrough() {
+        let mut dec = Decimator::with_factor(12_000.0, 1, DecimFilterKind::LinearFir);
+        let sample = Complex32::new(1.0, 0.5);
+        assert_eq!(dec.push(sample, false), Some(sample));
+        assert_eq!(dec.factor(), 1);
+        assert!((dec.output_rate(12_000.0) - 12_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn factor_four_emits_every_fourth_sample() {
+        let mut dec = Decimator::with_factor(48_000.0, 4, DecimFilterKind::LinearFir);
+        let mut outputs = 0;
+        for i in 0..16 {
+            if dec.push(Complex32::new(i as f32, 0.0), false).is_some() {
+                outputs += 1;
+            }
+        }
+        assert_eq!(outputs, 4);
+    }
+
+    #[test]
+    fn bypass_fir_skips_anti_alias() {
+        let mut dec = Decimator::with_factor(48_000.0, 4, DecimFilterKind::LinearFir);
+        dec.reset_state();
+        let mut with_fir = 0;
+        let mut bypass = 0;
+        for i in 0..32 {
+            let s = Complex32::new(i as f32, 0.0);
+            if dec.push(s, false).is_some() {
+                with_fir += 1;
+            }
+        }
+        dec.reset_state();
+        for i in 0..32 {
+            let s = Complex32::new(i as f32, 0.0);
+            if dec.push(s, true).is_some() {
+                bypass += 1;
+            }
+        }
+        assert_eq!(with_fir, bypass);
+        assert_eq!(with_fir, 8);
+    }
+
+    #[test]
+    fn effective_decimation_manual_override() {
+        assert_eq!(effective_decimation(384_000.0, 8), 8);
+        assert_eq!(effective_decimation(384_000.0, 0), decimation_factor(384_000.0));
+        assert!((audio_sample_rate(48_000.0, 4) - 12_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn wideband_ingress_compact_mode() {
+        let dec = Decimator::for_wideband_ingress(384_000.0, 32, DecimFilterKind::LinearFir);
+        assert_eq!(dec.factor(), 32);
+    }
 }

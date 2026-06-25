@@ -32,7 +32,8 @@ pub(crate) use crate::display_levels::{
     lock_display_levels_for_rf_tuning, should_auto_adjust_display_levels,
 };
 pub(crate) use crate::engine::{
-    ConnState, EngineCommand, EngineHandle, EngineParams, EngineStats, FFT_SIZE, WATERFALL_ROWS,
+    ConnState, EngineCommand, EngineHandle, EngineParams, EnginePoll, EngineStats, FFT_SIZE,
+    WATERFALL_ROWS,
 };
 pub(crate) use crate::ham_bands;
 pub(crate) use crate::rf_view;

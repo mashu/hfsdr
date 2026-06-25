@@ -20,7 +20,7 @@ mod types;
 
 pub use handle::EngineHandle;
 pub use types::{
-    ConnState, EngineCommand, EngineParams, EngineStats,
+    ConnState, EngineCommand, EngineParams, EnginePoll, EngineStats,
 };
 
 pub const FFT_SIZE: usize = 2048;

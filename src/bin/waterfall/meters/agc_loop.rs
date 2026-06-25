@@ -187,3 +187,30 @@ pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams) {
         );
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn if_agc_fill_disabled_is_mid() {
+        assert!((if_agc_fill(32.0, false) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn if_agc_fill_scales_log_gain() {
+        let low = if_agc_fill(2.0, true);
+        let mid = if_agc_fill(8.0, true);
+        let high = if_agc_fill(64.0, true);
+        assert!(low < mid);
+        assert!(mid < high);
+        assert!((high - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn af_peak_fill_clamps_to_half_scale() {
+        assert!((af_peak_fill(0.0) - 0.0).abs() < 1e-5);
+        assert!((af_peak_fill(HALF_SCALE) - 1.0).abs() < 1e-5);
+        assert!((af_peak_fill(10.0) - 1.0).abs() < 1e-5);
+    }
+}

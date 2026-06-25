@@ -172,4 +172,11 @@ mod tests {
         let conn = kiwi_conn(false, 50);
         assert!((conn.kiwi_software_man_gain_db()).abs() < 1e-6);
     }
+
+    #[test]
+    fn combined_rf_gain_clamps_with_kiwi_emulation() {
+        let conn = kiwi_conn(true, 50);
+        let combined = (10.0 + conn.kiwi_software_man_gain_db()).clamp(-80.0, 80.0);
+        assert!((combined - (-40.0)).abs() < 0.01);
+    }
 }

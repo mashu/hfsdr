@@ -41,6 +41,10 @@ impl NoiseBlanker {
     /// running average magnitude. `width` is the recovery tail in samples.
     pub fn process(&mut self, sample: Complex32, threshold: f32, width: usize) -> Complex32 {
         let mag = sample.norm();
+        if self.avg_mag < 1e-9 {
+            self.avg_mag = mag.max(1e-9);
+            return sample;
+        }
         self.avg_mag = 0.9995 * self.avg_mag + 0.0005 * mag;
         let limit = self.avg_mag * threshold.max(1.5);
         if mag > limit {
@@ -78,5 +82,26 @@ mod tests {
         }
         let recovered = nb.process(Complex32 { re: 1.0, im: 0.0 }, 4.0, 4);
         assert!(recovered.re > 0.85);
+    }
+
+    #[test]
+    fn reset_state_clears_hold() {
+        let mut nb = NoiseBlanker::new();
+        for _ in 0..100 {
+            nb.process(Complex32 { re: 50.0, im: 0.0 }, 4.0, 8);
+        }
+        nb.reset_state();
+        for _ in 0..50 {
+            nb.process(Complex32 { re: 1.0, im: 0.0 }, 4.0, 4);
+        }
+        let steady = nb.process(Complex32 { re: 1.0, im: 0.0 }, 4.0, 4);
+        assert!(steady.re > 0.85);
+    }
+
+    #[test]
+    fn threshold_floor_prevents_divide_by_zero() {
+        let mut nb = NoiseBlanker::new();
+        let out = nb.process(Complex32 { re: 2.0, im: 0.0 }, 0.5, 4);
+        assert!(out.re.is_finite());
     }
 }

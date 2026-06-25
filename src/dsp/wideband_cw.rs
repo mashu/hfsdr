@@ -91,6 +91,7 @@ pub fn demod_wideband(
 mod tests {
     use super::*;
     use crate::ChannelOffsetHz;
+    use crate::dsp::cw::DiagnosticBypassSettings;
     use std::f32::consts::TAU;
 
     fn tone_iq(sample_rate: f32, offset_hz: f32, n: usize) -> Vec<Complex32> {
@@ -168,5 +169,45 @@ mod tests {
         let mut out = Vec::new();
         demod_wideband(&mut ingress, &mut channel, &iq, iq_rate, &settings, &mut out);
         assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn demod_skips_narrow_iq_rates() {
+        let mut ingress = WidebandCwIngress::new(48_000.0, 0, DecimFilterKind::LinearFir);
+        let mut channel = CwChannel::new(12_000.0);
+        let settings = CwChannelSettings::default();
+        let iq = tone_iq(48_000.0, 100.0, 512);
+        let mut out = vec![1.0];
+        demod_wideband(&mut ingress, &mut channel, &iq, 48_000.0, &settings, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn diagnostic_bypass_skips_listen_nco_shift() {
+        let iq_rate = 384_000.0;
+        let iq = tone_iq(iq_rate, 400.0, 2048);
+        let listen = ChannelOffsetHz::new(400.0);
+        let mut ingress_normal = WidebandCwIngress::new(iq_rate, 0, DecimFilterKind::LinearFir);
+        let normal = ingress_normal.to_baseband(
+            &iq,
+            iq_rate,
+            listen,
+            &DiagnosticBypassSettings::default(),
+        );
+        let mut ingress_bypass = WidebandCwIngress::new(iq_rate, 0, DecimFilterKind::LinearFir);
+        let bypass = ingress_bypass.to_baseband(
+            &iq,
+            iq_rate,
+            listen,
+            &DiagnosticBypassSettings {
+                listen_nco: true,
+                ..Default::default()
+            },
+        );
+        assert!(!normal.is_empty());
+        assert!(!bypass.is_empty());
+        let p_normal: f32 = normal.iter().map(|s| s.norm_sqr()).sum();
+        let p_bypass: f32 = bypass.iter().map(|s| s.norm_sqr()).sum();
+        assert!(p_normal > 0.0 && p_bypass > 0.0);
     }
 }

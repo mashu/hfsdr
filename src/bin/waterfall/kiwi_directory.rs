@@ -435,4 +435,63 @@ mod tests {
         assert!(out.is_char_boundary(out.len()));
         assert!(out.chars().count() <= 73);
     }
+
+    #[test]
+    fn parse_rejects_non_array_payload() {
+        assert!(parse_receiver_list("not json").is_err());
+        assert!(parse_receiver_list("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_kiwi_url_host_and_port() {
+        assert_eq!(
+            parse_kiwi_url("http://g3sdr.com:8073/"),
+            Some(("g3sdr.com".into(), 8073))
+        );
+        assert_eq!(
+            parse_kiwi_url("https://rx.test"),
+            Some(("rx.test".into(), 8073))
+        );
+        assert!(parse_kiwi_url("ftp://bad").is_none());
+    }
+
+    #[test]
+    fn parse_gps_parentheses() {
+        let (lat, lon) = parse_gps("(51.317266, -2.950479)").expect("gps");
+        assert!((lat - 51.317266).abs() < 1e-6);
+        assert!((lon + 2.950479).abs() < 1e-6);
+        assert!(parse_gps("bad").is_none());
+    }
+
+    #[test]
+    fn haversine_same_point_is_zero() {
+        assert!(haversine_km(51.5, -0.1, 51.5, -0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn location_matches_country_by_name_or_code() {
+        let geo = GeoLocation {
+            country: "Sweden".into(),
+            country_code: "SE".into(),
+            lat: 59.0,
+            lon: 18.0,
+        };
+        assert!(location_matches_country("Stockholm, Sweden", &geo));
+        assert!(location_matches_country("Somewhere, se", &geo));
+        assert!(!location_matches_country("Berlin, Germany", &geo));
+    }
+
+    #[test]
+    fn extract_json_array_from_js_wrapper() {
+        let body = "var kiwisdr_com =\n[{\"a\":1}];";
+        let json = extract_json_array(body).expect("extract");
+        assert!(json.starts_with('['));
+        assert!(json.contains("\"a\""));
+    }
+
+    #[test]
+    fn sanitize_json_strips_trailing_commas() {
+        let clean = sanitize_json_array("[{\"x\":1},]");
+        assert!(!clean.contains(",]"));
+    }
 }

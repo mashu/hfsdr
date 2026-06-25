@@ -73,4 +73,10 @@ mod tests {
     fn above_highest_snaps_to_6m_top() {
         assert_eq!(clamp_hz(60_000_000.0), 54_000_000.0);
     }
+
+    #[test]
+    fn sixty_meter_band_edges() {
+        assert_eq!(clamp_hz(5_354_000.0), 5_354_000.0);
+        assert_eq!(clamp_hz(5_400_000.0), 5_366_500.0);
+    }
 }

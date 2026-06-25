@@ -30,6 +30,12 @@ mod status_widgets;
 mod theme;
 mod widgets;
 
+#[cfg(test)]
+mod ui_smoke;
+
+#[cfg(test)]
+mod app_logic_tests;
+
 use app::WaterfallApp;
 use eframe::egui;
 

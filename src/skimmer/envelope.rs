@@ -110,3 +110,39 @@ pub struct EnvelopeStep {
     pub thr_low: f32,
     pub signal_present: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skimmer::config::EnvelopeSettings;
+
+    #[test]
+    fn envelope_rises_on_tone() {
+        let mut env = KeyingEnvelope::new(EnvelopeSettings::default());
+        let mut last = env.update(0.0);
+        for _ in 0..200 {
+            last = env.update(0.8);
+        }
+        assert!(last.env > 0.3);
+        assert!(last.signal_present);
+        assert!(last.thr_high > last.thr_low);
+    }
+
+    #[test]
+    fn decode_gate_arms_after_warmup() {
+        let mut gate = DecodeGate::new(12_000.0, 25.0);
+        let mut env = KeyingEnvelope::new(EnvelopeSettings {
+            thr_low: 0.3,
+            thr_high: 0.45,
+            min_span_fraction: 0.05,
+        });
+        assert!(!gate.is_armed());
+        for _ in 0..500 {
+            let step = env.update(0.9);
+            gate.feed(&step);
+        }
+        assert!(gate.is_armed());
+        gate.reset();
+        assert!(!gate.is_armed());
+    }
+}

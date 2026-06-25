@@ -322,3 +322,50 @@ fn connect_qmx(
         iq_ingress_decim: ingress_decim,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn kiwi_label_includes_host_and_port() {
+        let req = ConnectRequest {
+            kind: SourceKind::Kiwi,
+            host: "rx.example".into(),
+            port: 8073,
+            center_hz: 14_010_000.0,
+            ..ConnectRequest::default()
+        };
+        assert_eq!(req.label(), "rx.example:8073");
+    }
+
+    #[test]
+    fn connect_aborts_when_cancelled_before_start() {
+        let cancel = AtomicBool::new(true);
+        let req = ConnectRequest {
+            kind: SourceKind::Kiwi,
+            host: "unused.example".into(),
+            port: 8073,
+            center_hz: 14_010_000.0,
+            ..ConnectRequest::default()
+        };
+        let err = connect(&req, &cancel).err().expect("cancelled");
+        assert!(err.contains("cancelled"));
+        cancel.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn connect_kiwi_rejects_empty_host() {
+        let cancel = AtomicBool::new(false);
+        let req = ConnectRequest {
+            kind: SourceKind::Kiwi,
+            host: "  ".into(),
+            port: 8073,
+            center_hz: 14_010_000.0,
+            ..ConnectRequest::default()
+        };
+        let err = connect(&req, &cancel).err().expect("empty host");
+        assert!(err.contains("empty"));
+    }
+}

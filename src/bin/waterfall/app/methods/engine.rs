@@ -131,6 +131,7 @@ impl WaterfallApp {
         let Some(poll) = self.engine.try_poll() else {
             return;
         };
+        let poll = poll.sanitized(self.plot.latest.len().max(FFT_SIZE));
 
         if poll.stats.slow && !self.engine_ui.stats.slow {
             log::warn("link slow or unstable");

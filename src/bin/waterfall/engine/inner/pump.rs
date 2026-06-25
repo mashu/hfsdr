@@ -578,7 +578,7 @@ fn apply_software_rf_gain(iq: &mut [Complex32], gain_db: f32) {
 
 #[cfg(test)]
 mod rf_gain_tests {
-    use super::apply_software_rf_gain;
+    use super::{apply_software_rf_gain, effective_rf_gain_db};
     use hfsdr::Complex32;
 
     #[test]
@@ -601,5 +601,11 @@ mod rf_gain_tests {
         let mut iq = vec![Complex32::new(1.0, 0.0)];
         apply_software_rf_gain(&mut iq, -20.0);
         assert!((iq[0].re - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn effective_rf_gain_clamps_extremes() {
+        assert!((effective_rf_gain_db(100.0, None) - 80.0).abs() < 1e-6);
+        assert!((effective_rf_gain_db(-100.0, None) + 80.0).abs() < 1e-6);
     }
 }

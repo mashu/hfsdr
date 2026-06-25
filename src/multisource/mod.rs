@@ -101,4 +101,32 @@ mod tests {
         assert_eq!(spot_display_snr(&spot), 20.0);
         assert_eq!(spot_primary_source(&spot), Some("rx2".into()));
     }
+
+    #[test]
+    fn empty_sources_use_aggregate_snr() {
+        let now = Instant::now();
+        let spot = Spot {
+            frequency_hz: 7_030_000.0,
+            callsign: None,
+            kind: SpotKind::Heard,
+            snr_db: 14.5,
+            wpm: 22.0,
+            first_heard: now,
+            last_heard: now,
+            sources: Vec::new(),
+            callsign_rank: 0,
+        };
+        assert_eq!(spot_display_snr(&spot), 14.5);
+        assert_eq!(spot_primary_source(&spot), None);
+    }
+
+    #[test]
+    fn snr_weights_empty_returns_empty() {
+        assert!(snr_weights(&[]).is_empty());
+    }
+
+    #[test]
+    fn select_best_empty_is_none() {
+        assert_eq!(select_best(&[]), None);
+    }
 }

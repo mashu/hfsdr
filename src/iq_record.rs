@@ -193,6 +193,7 @@ fn writer_thread(
         }
     }
     let mut file = enc.finish()?;
+    file.seek(SeekFrom::Start(0))?;
     write_header(
         &mut file,
         &IqCaptureMeta {
@@ -401,5 +402,79 @@ mod tests {
     fn header_parse_rejects_bad_magic() {
         let buf = [0u8; 32];
         assert!(parse_header(&buf).is_err());
+    }
+
+    #[test]
+    fn header_parse_rejects_unsupported_version() {
+        let mut buf = [0u8; 32];
+        buf[0..5].copy_from_slice(MAGIC);
+        buf[5] = 99;
+        let err = parse_header(&buf).unwrap_err();
+        assert!(err.to_string().contains("version"));
+    }
+
+    #[test]
+    fn duration_secs_handles_zero_rate() {
+        let meta = IqCaptureMeta {
+            sample_rate: 0,
+            center_hz: 14_000_000.0,
+            sample_count: 10_000,
+        };
+        assert_eq!(meta.duration_secs(), 0.0);
+        let meta = IqCaptureMeta {
+            sample_rate: 12_000,
+            center_hz: 14_000_000.0,
+            sample_count: 12_000,
+        };
+        assert!((meta.duration_secs() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn read_meta_from_written_capture() {
+        let dir = std::env::temp_dir().join("hfsdr_iq_meta");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("meta.hiq.gz");
+        let samples = vec![Complex32::new(0.5, -0.25); 64];
+        let rec = IqRecorder::start(path.clone(), 12_000, 14_074_000.0).expect("rec");
+        rec.push(&samples);
+        let stopped = rec.stop().expect("stop");
+        let from_disk = read_meta(&path).expect("read_meta");
+        assert_eq!(from_disk.sample_rate, 12_000);
+        assert_eq!(from_disk.center_hz, 14_074_000.0);
+        assert_eq!(from_disk.sample_count, stopped.sample_count);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn empty_push_is_noop() {
+        let dir = std::env::temp_dir().join("hfsdr_iq_empty");
+        let path = dir.join("empty.hiq.gz");
+        let rec = IqRecorder::start(path.clone(), 12_000, 14_000_000.0).expect("rec");
+        rec.push(&[]);
+        let meta = rec.stop().expect("stop");
+        assert_eq!(meta.sample_count, 0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn playback_reads_all_samples() {
+        let dir = std::env::temp_dir().join("hfsdr_iq_playback");
+        let path = dir.join("pb.hiq.gz");
+        let samples = vec![Complex32::new(1.0, 0.0); 256];
+        let rec = IqRecorder::start(path.clone(), 12_000, 14_000_000.0).expect("rec");
+        rec.push(&samples);
+        rec.stop().expect("stop");
+        let mut pb = IqPlayback::open(&path).expect("open");
+        assert_eq!(pb.meta().sample_count, 256);
+        let mut got = 0usize;
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while got < 256 && std::time::Instant::now() < deadline {
+            while pb.pop().is_some() {
+                got += 1;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(got, 256);
+        let _ = std::fs::remove_file(path);
     }
 }

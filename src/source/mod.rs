@@ -156,4 +156,16 @@ mod tests {
         assert!(src.start().is_err());
         src.stop().unwrap();
     }
+
+    #[test]
+    fn unsupported_sample_rate_errors() {
+        let mut src = StubSource;
+        assert!(src.set_sample_rate(96_000).is_err());
+    }
+
+    #[test]
+    fn source_error_implements_std_error() {
+        let err: Box<dyn std::error::Error> = Box::new(SourceError::NotFound);
+        assert!(!err.to_string().is_empty());
+    }
 }

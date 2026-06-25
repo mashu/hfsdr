@@ -61,4 +61,12 @@ mod tests {
         let mut nr = NoiseReduction::new();
         assert_eq!(nr.process(0.42, 0.0), 0.42);
     }
+
+    #[test]
+    fn reset_state_does_not_panic() {
+        let mut nr = NoiseReduction::new();
+        let _ = nr.process(0.5, 0.8);
+        nr.reset_state();
+        let _ = nr.process(0.25, 0.5);
+    }
 }

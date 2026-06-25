@@ -107,4 +107,17 @@ mod tests {
         let view = build_spectrum_view(true, 12_000.0, 12_000.0, 70_000.0, 12_000.0, false, &plot);
         assert!(view.view_span_hz >= 12_000.0);
     }
+
+    #[test]
+    fn build_waterfall_storage_view_kiwi_pads_overview() {
+        let view = build_waterfall_storage_view(true, 12_000.0, 12_000.0, 70_000.0, 12_000.0);
+        assert!(view.view_span_hz >= 12_000.0);
+        assert!(view.allow_band_padding);
+    }
+
+    #[test]
+    fn build_waterfall_storage_view_local_no_padding() {
+        let view = build_waterfall_storage_view(false, 48_000.0, 48_000.0, 48_000.0, 48_000.0);
+        assert!(!view.allow_band_padding);
+    }
 }

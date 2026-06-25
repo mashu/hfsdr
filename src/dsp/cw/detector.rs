@@ -32,3 +32,37 @@ impl ProductDetector {
         mixed.re
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::TAU;
+
+    #[test]
+    fn emits_audible_tone_at_bfo_pitch() {
+        let rate = 12_000.0;
+        let bfo = 650.0;
+        let mut det = ProductDetector::new();
+        let mut peak = 0.0f32;
+        for n in 0..rate as usize {
+            let t = n as f32 / rate;
+            let phase = TAU * bfo * t;
+            let sample = Complex32 {
+                re: phase.cos(),
+                im: phase.sin(),
+            };
+            let out = det.process(sample, bfo, rate);
+            peak = peak.max(out.abs());
+        }
+        assert!(peak > 0.5, "expected BFO tone, peak={peak}");
+    }
+
+    #[test]
+    fn reset_restores_initial_state() {
+        let mut det = ProductDetector::new();
+        let _ = det.process(Complex32::new(1.0, 0.0), 500.0, 12_000.0);
+        det.reset_state();
+        let out = det.process(Complex32::new(1.0, 0.0), 0.0, 12_000.0);
+        assert!((out - 1.0).abs() < 0.01);
+    }
+}
