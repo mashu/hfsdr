@@ -40,6 +40,7 @@ impl WaterfallApp {
         self.radio.lock_ham_bands = s.lock_ham_bands;
         self.radio.agc_rf_on = s.agc_rf_on;
         self.radio.last_agc_rf_on = s.agc_rf_on;
+        self.radio.rf_gain_db = s.rf_gain_db.clamp(-20.0, 60.0);
 
         self.display.ref_db = s.ref_db;
         self.display.range_db = s.range_db;
@@ -152,6 +153,7 @@ impl WaterfallApp {
             pitch_lock: self.radio.pitch_lock,
             lock_ham_bands: self.radio.lock_ham_bands,
             agc_rf_on: self.radio.agc_rf_on,
+            rf_gain_db: self.radio.rf_gain_db,
             kiwi_man_gain: self.connection.form.kiwi.man_gain,
             ref_db: self.display.ref_db,
             range_db: self.display.range_db,

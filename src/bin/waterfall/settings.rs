@@ -79,6 +79,9 @@ pub struct AppSettings {
     pub pitch_lock: bool,
     pub lock_ham_bands: bool,
     pub agc_rf_on: bool,
+    /// Yaesu-style software RF gain (dB) applied to IQ on every source.
+    #[serde(default)]
+    pub rf_gain_db: f32,
     #[serde(default = "default_kiwi_man_gain")]
     pub kiwi_man_gain: u8,
 
@@ -198,6 +201,7 @@ impl Default for AppSettings {
             pitch_lock: false,
             lock_ham_bands: true,
             agc_rf_on: true,
+            rf_gain_db: 0.0,
             kiwi_man_gain: default_kiwi_man_gain(),
             ref_db: -65.0,
             range_db: 17.0,

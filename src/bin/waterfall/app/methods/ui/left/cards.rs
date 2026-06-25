@@ -118,11 +118,11 @@ impl WaterfallApp {
                 &[
                     ("RF gain", ACCENT),
                     (
-                        "Raise until AF scope sits near half scale; lower if IQ AGC is pinned or AF clips.",
+                        "Yaesu-style software gain — moves the S-meter and waterfall on every radio, even with hardware/RF AGC on.",
                         MUTED,
                     ),
-                    ("Kiwi RF AGC", OK),
-                    ("Turn off for manual RF gain — while on, Kiwi ignores the gain slider.", MUTED),
+                    ("Hardware front-end", OK),
+                    ("Per-radio gain/attenuator/AGC below set what the SDR actually sends.", MUTED),
                 ],
             );
             ui.horizontal(|ui| {
@@ -139,6 +139,9 @@ impl WaterfallApp {
                     );
                 }
             });
+            self.software_rf_gain_control(ui);
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Hardware front-end").small().color(MUTED));
             self.hardware_rf_controls(ui, live);
         });
     }

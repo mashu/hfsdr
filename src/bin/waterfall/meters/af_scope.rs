@@ -404,13 +404,17 @@ mod tests {
     }
 
     #[test]
-    fn rf_level_prefers_iq_when_available() {
-        let iq_dbm = rf_level_dbm(None, 0.5);
-        assert!((iq_dbm - (-121.0)).abs() < 0.5);
-        assert_eq!(rf_level_dbm(Some(-80.0), 0.0), -80.0);
+    fn rf_level_follows_iq_and_ignores_hardware_rssi() {
+        // S9 calibration anchor: iq == 0.1 → −73 dBm.
+        assert!((rf_level_dbm(None, 0.1) - (-73.0)).abs() < 0.5);
+        // Hardware RSSI must not change the needle — it is a reference only.
+        assert_eq!(rf_level_dbm(Some(-30.0), 0.1), rf_level_dbm(None, 0.1));
+        // Software RF gain (×10 IQ ≈ +20 dB) moves the needle by ~20 dB.
+        let lo = rf_level_dbm(None, 0.01);
+        let hi = rf_level_dbm(None, 0.1);
+        assert!((hi - lo - 20.0).abs() < 0.5);
+        // Silence pins to the bottom of the scale.
         assert_eq!(rf_level_dbm(None, 0.0), -127.0);
-        let blended = rf_level_dbm(Some(-90.0), 0.5);
-        assert!((blended - (-90.0)).abs() < 0.01 || blended > -90.0);
     }
 
     #[test]

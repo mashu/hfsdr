@@ -120,6 +120,11 @@ pub struct EngineParams {
     pub fft_auto: bool,
     /// Feed the full IQ drain batch to the spectrum analyzer (not just the recent tail).
     pub full_drain_spectrum: bool,
+    /// Yaesu-style software RF gain (dB) applied to IQ before spectrum, S-meter, and AGC.
+    ///
+    /// Source-independent: works on every radio, even when hardware/RF AGC is on,
+    /// because it scales the IQ we receive rather than a front-end gain stage.
+    pub rf_gain_db: f32,
 }
 
 impl Default for EngineParams {
@@ -133,6 +138,7 @@ impl Default for EngineParams {
             fft_size: FFT_SIZE,
             fft_auto: true,
             full_drain_spectrum: false,
+            rf_gain_db: 0.0,
         }
     }
 }
