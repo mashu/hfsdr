@@ -134,13 +134,7 @@ impl RtlSdr {
 
     /// Nearest supported tuner gain (tenths of dB) at or below `gain_db10`.
     pub fn clamp_tuner_gain(&self, gain_db10: i32) -> i32 {
-        self.tuner_gains
-            .iter()
-            .copied()
-            .filter(|&g| g <= gain_db10)
-            .max()
-            .or_else(|| self.tuner_gains.first().copied())
-            .unwrap_or(0)
+        clamp_tuner_gain_table(&self.tuner_gains, gain_db10)
     }
 
     pub fn set_rtl_agc(&mut self, on: bool) -> Result<()> {
@@ -319,6 +313,16 @@ pub fn iq_ring_capacity(sample_rate: u32) -> usize {
     target.next_power_of_two().clamp(1 << 18, 1 << 21)
 }
 
+fn clamp_tuner_gain_table(gains: &[i32], gain_db10: i32) -> i32 {
+    gains
+        .iter()
+        .copied()
+        .filter(|&g| g <= gain_db10)
+        .max()
+        .or_else(|| gains.first().copied())
+        .unwrap_or(0)
+}
+
 fn read_tuner_gains(dev: *mut sys::rtlsdr_dev_t) -> Vec<i32> {
     let count = unsafe { sys::rtlsdr_get_tuner_gains(dev, std::ptr::null_mut()) };
     if count <= 0 {
@@ -341,6 +345,7 @@ fn check(op: &'static str, rc: c_int) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn sample_rate_presets_non_empty() {
@@ -378,6 +383,72 @@ mod tests {
     #[test]
     fn check_maps_success_and_error() {
         assert!(check("ok", sys::SUCCESS).is_ok());
-        assert!(check("fail", -1).is_err());
+        let err = check("fail", -1).unwrap_err();
+        assert!(matches!(err, SourceError::Backend { op: "fail", code: -1 }));
+    }
+
+    #[test]
+    fn clamp_tuner_gain_table_picks_nearest_at_or_below() {
+        let gains = [0, 49, 98, 147, 196, 245];
+        assert_eq!(clamp_tuner_gain_table(&gains, 200), 196);
+        assert_eq!(clamp_tuner_gain_table(&gains, 196), 196);
+        assert_eq!(clamp_tuner_gain_table(&gains, 0), 0);
+        assert_eq!(clamp_tuner_gain_table(&gains, -10), 0);
+        assert_eq!(clamp_tuner_gain_table(&gains, 500), 245);
+    }
+
+    #[test]
+    fn clamp_tuner_gain_table_empty_defaults_zero() {
+        assert_eq!(clamp_tuner_gain_table(&[], 100), 0);
+    }
+
+    #[test]
+    fn iq_ring_capacity_clamps_to_bounds() {
+        assert_eq!(iq_ring_capacity(0), 1 << 18);
+        assert!(iq_ring_capacity(10_000_000) <= 1 << 21);
+    }
+
+    #[test]
+    fn stream_cb_drops_overflow_samples() {
+        let (prod, _cons) = RingBuffer::<Complex32>::new(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let mut ctx = StreamCtx {
+            prod,
+            dropped: Arc::clone(&dropped),
+        };
+        let mut raw = [255u8, 127, 128, 0, 0, 0, 0, 0];
+        stream_cb(
+            raw.as_mut_ptr(),
+            raw.len() as u32,
+            &mut ctx as *mut StreamCtx as *mut c_void,
+        );
+        drop(ctx);
+        assert_eq!(dropped.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn stream_cb_ignores_null_and_short_buffers() {
+        stream_cb(std::ptr::null_mut(), 4, std::ptr::null_mut());
+        let (prod, mut cons) = RingBuffer::<Complex32>::new(4);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let mut ctx = StreamCtx {
+            prod,
+            dropped,
+        };
+        let mut raw = [128u8];
+        stream_cb(
+            raw.as_mut_ptr(),
+            raw.len() as u32,
+            &mut ctx as *mut StreamCtx as *mut c_void,
+        );
+        drop(ctx);
+        assert!(cons.pop().is_err());
+    }
+
+    #[test]
+    fn sample_rates_are_ascending_presets() {
+        for w in SAMPLE_RATES.windows(2) {
+            assert!(w[0] < w[1], "SAMPLE_RATES should be sorted: {:?}", SAMPLE_RATES);
+        }
     }
 }

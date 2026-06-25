@@ -3,7 +3,7 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    Align, Align2, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Pos2, Rect,
+    Align2, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Pos2, Rect,
     Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2, Visuals,
 };
 
@@ -198,11 +198,14 @@ pub fn section_heading_with_tip(ui: &mut Ui, title: &str, tip: &[(&str, Color32)
 }
 
 pub fn stat_row(ui: &mut Ui, label: &str, value: impl Display) {
-    ui.horizontal(|ui| {
+    ui.vertical(|ui| {
+        let w = ui.available_width();
+        ui.set_max_width(w);
         ui.label(RichText::new(label).small().color(MUTED));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(value.to_string()).strong());
-        });
+        ui.add(
+            eframe::egui::Label::new(RichText::new(value.to_string()).strong())
+                .wrap_mode(eframe::egui::TextWrapMode::Wrap),
+        );
     });
 }
 
@@ -300,6 +303,7 @@ pub fn stage_toggle(
     let id = ui.id().with(title);
     let row_h = if subtitle.is_some() { 46.0 } else { 38.0 };
     let width = ui.available_width();
+    let show_shortcut = shortcut.is_some() && width >= 280.0;
     let (rect, resp) =
         ui.allocate_exact_size(eframe::egui::vec2(width, row_h), eframe::egui::Sense::click());
     let mut changed = false;
@@ -388,25 +392,30 @@ pub fn stage_toggle(
         );
     }
     if let Some(key) = shortcut {
-        let chip = format!("[{key}]");
-        let chip_rect = eframe::egui::Rect::from_min_size(
-            eframe::egui::pos2(pill_rect.left() - 36.0, rect.center().y - 9.0),
-            eframe::egui::vec2(28.0, 18.0),
-        );
-        painter.rect(
-            chip_rect,
-            CornerRadius::same(4),
-            Color32::from_rgb(38, 44, 58),
-            Stroke::new(1.0, Color32::from_rgb(70, 80, 100)),
-            eframe::egui::StrokeKind::Inside,
-        );
-        painter.text(
-            chip_rect.center(),
-            Align2::CENTER_CENTER,
-            chip,
-            FontId::monospace(10.0),
-            MUTED,
-        );
+        if show_shortcut {
+            let chip = format!("[{key}]");
+            let chip_rect = eframe::egui::Rect::from_min_size(
+                eframe::egui::pos2(pill_rect.left() - 36.0, rect.center().y - 9.0),
+                eframe::egui::vec2(28.0, 18.0),
+            );
+            painter.rect(
+                chip_rect,
+                CornerRadius::same(4),
+                Color32::from_rgb(38, 44, 58),
+                Stroke::new(1.0, Color32::from_rgb(70, 80, 100)),
+                eframe::egui::StrokeKind::Inside,
+            );
+            painter.text(
+                chip_rect.center(),
+                Align2::CENTER_CENTER,
+                chip,
+                FontId::monospace(10.0),
+                MUTED,
+            );
+        } else {
+            let tip_key = format!("Shortcut: {key}");
+            resp.clone().on_hover_text(tip_key);
+        }
     }
 
     if let Some(lines) = tip {
@@ -453,7 +462,9 @@ pub fn collapsible_section(
     add_contents: impl FnOnce(&mut Ui),
 ) {
     section_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
+        let w = ui.available_width();
+        ui.set_min_width(w);
+        ui.set_max_width(w);
         let cr = eframe::egui::CollapsingHeader::new(RichText::new(title).strong().color(ACCENT))
             .id_salt(id)
             .default_open(default_open)

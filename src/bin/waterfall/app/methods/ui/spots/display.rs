@@ -4,54 +4,83 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn spot_display_section(&mut self, ui: &mut egui::Ui) {
-        collapsible_section(ui, "spots", "Spots", None, false, |ui| {
-            self.spot_display_body(ui);
-        });
+        collapsible_section(
+            ui,
+            "spots",
+            "Spots",
+            Some(&[
+                ("Skimmer", ACCENT),
+                ("Decode callsigns across the visible band and list them below.", MUTED),
+                ("Table", OK),
+                ("Click a row to tune. Sort by column headers.", MUTED),
+            ]),
+            false,
+            |ui| {
+                self.spot_display_body(ui);
+            },
+        );
     }
 
-
     pub(crate) fn spot_display_body(&mut self, ui: &mut egui::Ui) {
-            ui.horizontal(|ui| {
-                toggle(ui, &mut self.skimmer_ui.skimmer_enabled, "Skimmer on");
-                if ui.button("Clear").on_hover_text("Clear all spots").clicked() {
-                    self.clear_spots();
-                }
-                let n = self.skimmer_ui.frame_visible_spots.len();
-                ui.label(
-                    egui::RichText::new(format!("{n} shown · {} decoded", self.skimmer_ui.skimmer_spots.len()))
-                        .small()
-                        .color(MUTED),
-                );
-            });
-            if !self.skimmer_ui.skimmer_enabled {
-                ui.colored_label(MUTED, "Enable skimmer to decode callsigns on the band.");
-            } else if !self.skimmer_spectrum_ok() {
-                ui.colored_label(
-                    WARN,
-                    "Skimmer needs Process IQ ≤96 kHz on Airspy (Connection → Process IQ), then reconnect.",
-                );
+        ui.horizontal(|ui| {
+            toggle(ui, &mut self.skimmer_ui.skimmer_enabled, "Skimmer on");
+            if ui.button("Clear").on_hover_text("Clear all spots").clicked() {
+                self.clear_spots();
             }
-            scroll_slider_f32(ui, &mut self.skimmer_ui.min_spot_snr, 0.0..=40.0, "Table min SNR");
-            scroll_slider_f32(ui, &mut self.skimmer_ui.spot_max_age_secs, 0.0..=300.0, "Max age (s, 0=all)");
+        });
+        let n = self.skimmer_ui.frame_visible_spots.len();
+        stat_row(
+            ui,
+            "Visible",
+            format!("{n} shown · {} decoded", self.skimmer_ui.skimmer_spots.len()),
+        );
+        if !self.skimmer_ui.skimmer_enabled {
+            ui.colored_label(MUTED, "Enable skimmer to decode callsigns on the band.");
+        } else if !self.skimmer_spectrum_ok() {
+            ui.colored_label(
+                WARN,
+                "Skimmer needs Process IQ ≤96 kHz on Airspy (Connection → Process IQ), then reconnect.",
+            );
+        }
+
+        popup_section(ui, "Table filters", Some("Which decoded spots appear in the list"), |ui| {
+            scroll_slider_f32(ui, &mut self.skimmer_ui.min_spot_snr, 0.0..=40.0, "Min SNR");
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer_ui.spot_max_age_secs,
+                0.0..=300.0,
+                "Max age (s, 0 = all)",
+            );
+            toggle(ui, &mut self.skimmer_ui.spot_cq_only, "CQ only");
+        });
+
+        popup_section(ui, "Plot labels", Some("Callsign tags drawn on the spectrum"), |ui| {
             let mut label_lim = self.skimmer_ui.spot_label_limit as i32;
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Plot labels").small().color(MUTED));
+                ui.label(egui::RichText::new("Max labels").small().color(MUTED));
                 ui.add(egui::DragValue::new(&mut label_lim).range(8..=80).speed(1));
             });
             self.skimmer_ui.spot_label_limit = label_lim as usize;
+            toggle(
+                ui,
+                &mut self.skimmer_ui.spot_hide_heard_labels,
+                "Hide unconfirmed on plot",
+            );
+        });
+
+        popup_section(ui, "Call filter", Some("Narrow by prefix or continent"), |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Call filter").small().color(MUTED));
+                ui.label(egui::RichText::new("Prefix").small().color(MUTED));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.skimmer_ui.spot_callsign_filter)
-                        .desired_width(100.0)
+                        .desired_width(ui.available_width().min(120.0))
                         .hint_text("e.g. G or DL"),
                 );
             });
-            toggle(ui, &mut self.skimmer_ui.spot_cq_only, "CQ only");
-            toggle(ui, &mut self.skimmer_ui.spot_hide_heard_labels, "Hide unconfirmed on plot");
-            ui.checkbox(&mut self.skimmer_ui.continent_filter, "Filter by continent");
+            toggle(ui, &mut self.skimmer_ui.continent_filter, "Filter by continent");
             if self.skimmer_ui.continent_filter {
                 ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     for c in Continent::ALL {
                         let idx = continent_index(c);
                         let on = self.skimmer_ui.show_continents[idx];
@@ -64,10 +93,12 @@ impl WaterfallApp {
             if self.skimmer_ui.continent_filter && !self.skimmer_ui.show_continents.iter().any(|&on| on) {
                 ui.colored_label(WARN, "All continents off — no spots will match");
             }
-            ui.separator();
-            self.spot_table(ui);
-    }
+        });
 
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("Spot table").small().strong().color(ACCENT));
+        self.spot_table(ui);
+    }
 
     pub(crate) fn spot_table(&mut self, ui: &mut egui::Ui) {
         let spots = &self.skimmer_ui.frame_visible_spots;
@@ -77,12 +108,12 @@ impl WaterfallApp {
             .striped(true)
             .sense(egui::Sense::click())
             .max_scroll_height(300.0)
-            .column(Column::exact(24.0))
-            .column(Column::remainder().at_least(56.0))
-            .column(Column::exact(72.0))
-            .column(Column::exact(40.0))
-            .column(Column::exact(40.0))
-            .column(Column::exact(36.0))
+            .column(Column::exact(18.0))
+            .column(Column::remainder().at_least(40.0))
+            .column(Column::exact(50.0))
+            .column(Column::exact(26.0))
+            .column(Column::exact(26.0))
+            .column(Column::exact(30.0))
             .header(18.0, |mut header| {
                 header.col(|_| {});
                 header.col(|ui| {
@@ -159,7 +190,4 @@ impl WaterfallApp {
             self.tune_to_hz(hz);
         }
     }
-
-
-
 }

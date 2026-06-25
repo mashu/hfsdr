@@ -431,3 +431,100 @@ fn extended_api_unsupported(feature: &'static str) -> SourceError {
         "{feature} requires libairspyhf >= 1.8 (upgrade libairspyhf-dev / brew install airspyhf)"
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn iq_ring_capacity_scales_and_clamps() {
+        let low = iq_ring_capacity(250_000);
+        let high = iq_ring_capacity(2_048_000);
+        assert!(high >= low);
+        assert!(low >= 1 << 18);
+        assert!(high <= 1 << 21);
+        assert_eq!(iq_ring_capacity(0), 1 << 18);
+    }
+
+    #[test]
+    fn frontend_flag_constants() {
+        assert_eq!(FLAGS_OPTIMIZE_BAND_III, 1);
+        assert_eq!(FLAGS_OPTIMIZE_PLL_INT_BOUNDARY, 2);
+    }
+
+    #[test]
+    fn check_maps_success_and_error() {
+        assert!(check("ok", sys::SUCCESS).is_ok());
+        let err = check("fail", -1).unwrap_err();
+        assert!(matches!(err, SourceError::Backend { op: "fail", code: -1 }));
+    }
+
+    #[test]
+    fn stream_cb_writes_iq_samples() {
+        let (prod, mut cons) = RingBuffer::<Complex32>::new(8);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let mut ctx = StreamCtx {
+            prod,
+            dropped: Arc::clone(&dropped),
+        };
+        let samples = [
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, -1.0),
+        ];
+        let mut transfer = sys::airspyhf_transfer_t {
+            device: std::ptr::null_mut(),
+            ctx: (&mut ctx as *mut StreamCtx).cast(),
+            samples: samples.as_ptr().cast_mut(),
+            sample_count: 2,
+            dropped_samples: 0,
+        };
+        assert_eq!(stream_cb(&mut transfer), 0);
+        drop(ctx);
+
+        let s0 = cons.pop().expect("sample 0");
+        assert!((s0.re - 1.0).abs() < 1e-6);
+        assert!(s0.im.abs() < 1e-6);
+        let s1 = cons.pop().expect("sample 1");
+        assert!(s1.re.abs() < 1e-6);
+        assert!((s1.im + 1.0).abs() < 1e-6);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn stream_cb_drops_on_full_ring() {
+        let (prod, _cons) = RingBuffer::<Complex32>::new(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let mut ctx = StreamCtx {
+            prod,
+            dropped: Arc::clone(&dropped),
+        };
+        let samples = [
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.5, 0.0),
+            Complex32::new(0.25, 0.0),
+        ];
+        let mut transfer = sys::airspyhf_transfer_t {
+            device: std::ptr::null_mut(),
+            ctx: (&mut ctx as *mut StreamCtx).cast(),
+            samples: samples.as_ptr().cast_mut(),
+            sample_count: 3,
+            dropped_samples: 0,
+        };
+        stream_cb(&mut transfer);
+        drop(ctx);
+        assert_eq!(dropped.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn stream_cb_ignores_null_pointers() {
+        let mut transfer = sys::airspyhf_transfer_t {
+            device: std::ptr::null_mut(),
+            ctx: std::ptr::null_mut(),
+            samples: std::ptr::null_mut(),
+            sample_count: 4,
+            dropped_samples: 0,
+        };
+        assert_eq!(stream_cb(&mut transfer), 0);
+    }
+}

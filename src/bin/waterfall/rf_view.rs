@@ -76,3 +76,35 @@ pub fn build_waterfall_storage_view(
         is_kiwi,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interaction::PlotViewState;
+
+    #[test]
+    fn spectrum_plot_span_prefers_spectrum_rate() {
+        assert_eq!(spectrum_plot_span_hz(48_000.0, 384_000.0), 48_000.0);
+        assert_eq!(spectrum_plot_span_hz(0.0, 12_000.0), 12_000.0);
+    }
+
+    #[test]
+    fn iq_passband_uses_stats_or_kiwi_half_band() {
+        assert_eq!(iq_passband_hz(false, 48_000.0, 384_000.0), 48_000.0);
+        assert_eq!(iq_passband_hz(true, 0.0, 12_000.0), 11_960.0);
+        assert_eq!(iq_passband_hz(false, 0.0, 2_048_000.0), 2_048_000.0);
+    }
+
+    #[test]
+    fn max_zoom_out_local_sdr_stays_at_one() {
+        assert_eq!(max_zoom_out(false, 48_000.0, 70_000.0), 1.0);
+        assert!(max_zoom_out(true, 12_000.0, 70_000.0) > 1.0);
+    }
+
+    #[test]
+    fn build_spectrum_view_respects_kiwi_overview() {
+        let plot = PlotViewState::new();
+        let view = build_spectrum_view(true, 12_000.0, 12_000.0, 70_000.0, 12_000.0, false, &plot);
+        assert!(view.view_span_hz >= 12_000.0);
+    }
+}

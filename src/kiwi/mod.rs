@@ -450,6 +450,7 @@ mod tests {
     use super::*;
     use crate::source::controls::KiwiControls;
     use crate::source::IqSource;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn builder_sets_passband_and_agc() {
@@ -493,5 +494,41 @@ mod tests {
         let src = KiwiSource::new("kiwi.test", 8073);
         src.rssi_cdbm.store(1_234, Ordering::Relaxed);
         assert!((src.meter_dbm() - 12.34).abs() < 1e-3);
+    }
+
+    #[test]
+    fn builder_clamps_gain_and_rf_attn() {
+        let src = KiwiSource::new("kiwi.test", 8073)
+            .with_man_gain(150)
+            .with_rf_attn_db(99.0)
+            .with_ar_out_hz(1_000);
+        assert_eq!(src.man_gain, 100);
+        assert_eq!(src.rf_attn_db, protocol::KIWI_RF_ATTN_MAX_DB);
+        assert_eq!(src.ar_out_hz, 8_000);
+    }
+
+    #[test]
+    fn set_rf_attn_db_updates_stored_cdb() {
+        let mut src = KiwiSource::new("kiwi.test", 8073);
+        src.set_rf_attn_db(12.5).unwrap();
+        assert_eq!(src.rf_attn_db, 12.5);
+        assert_eq!(src.rf_attn_cdb.load(Ordering::Relaxed), 125);
+        assert_eq!(KiwiControls::rf_attn_db(&src), Some(12.5));
+    }
+
+    #[test]
+    fn default_passband_matches_protocol_half_width() {
+        let src = KiwiSource::new("kiwi.test", 8073);
+        let half = kiwi_iq_half_hz(KIWI_IQ_RATE);
+        assert_eq!(src.low_cut, -half);
+        assert_eq!(src.high_cut, half);
+    }
+
+    #[test]
+    fn tune_before_streaming_does_not_panic() {
+        let mut src = KiwiSource::new("kiwi.test", 8073)
+            .with_freq_offset_khz(5.0);
+        src.tune(14_030_000.0).unwrap();
+        assert_eq!(src.frequency(), 14_030_000.0);
     }
 }

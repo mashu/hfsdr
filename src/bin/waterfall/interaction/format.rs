@@ -72,4 +72,29 @@ mod tests {
         assert!(step >= 200.0 && step <= 1_500.0);
         assert!((3_000.0 / step).round() >= 2.0);
     }
+
+    #[test]
+    fn format_offset_uses_khz_above_threshold() {
+        assert_eq!(format_offset_label(1500.0), "1.50 kHz");
+        assert_eq!(format_offset_label(250.0), "250 Hz");
+    }
+
+    #[test]
+    fn format_absolute_freq_mhz() {
+        assert_eq!(format_absolute_freq_hz(14_030_000.0), "14.030000 MHz");
+        assert_eq!(format_absolute_freq_hz(500.0), "500 Hz");
+        assert_eq!(format_absolute_freq_hz(7030.0), "7.030 kHz");
+    }
+
+    #[test]
+    fn format_freq_hz_compact_axis() {
+        assert_eq!(format_freq_hz(14_030_000.0), "14.030");
+        assert_eq!(format_freq_hz(703_000.0), "703.0k");
+    }
+
+    #[test]
+    fn nice_freq_step_non_positive_span() {
+        assert_eq!(nice_freq_step_hz(0.0), 1000.0);
+        assert_eq!(nice_freq_step_hz(-5.0), 1000.0);
+    }
 }

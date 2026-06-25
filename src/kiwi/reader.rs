@@ -235,3 +235,80 @@ pub fn reader_loop(
     }
     let _ = ws.close(None);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn link_err() -> Arc<Mutex<Option<String>>> {
+        Arc::new(Mutex::new(None))
+    }
+
+    #[test]
+    fn record_badp_ignores_success() {
+        let slot = link_err();
+        record_badp(&slot, "0");
+        assert!(slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn record_badp_maps_known_codes() {
+        let cases = [
+            ("1", "public slots are busy"),
+            ("2", "determining your network address"),
+            ("3", "Admin connection not allowed"),
+            ("4", "No admin password"),
+            ("5", "does not allow multiple connections"),
+            ("6", "database update in progress"),
+            ("7", "Another admin connection"),
+        ];
+        for (code, fragment) in cases {
+            let slot = link_err();
+            record_badp(&slot, code);
+            let msg = slot.lock().unwrap().clone().expect("message");
+            assert!(
+                msg.to_ascii_lowercase().contains(&fragment.to_ascii_lowercase()),
+                "badp={code}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn record_badp_unknown_code_includes_value() {
+        let slot = link_err();
+        record_badp(&slot, "99");
+        assert_eq!(
+            slot.lock().unwrap().as_deref(),
+            Some("Kiwi refused connection (badp=99)")
+        );
+    }
+
+    #[test]
+    fn record_too_busy_with_slot_count() {
+        let slot = link_err();
+        record_too_busy(&slot, "4");
+        let msg = slot.lock().unwrap().clone().unwrap();
+        assert!(msg.contains("4"));
+        assert!(msg.contains("busy"));
+    }
+
+    #[test]
+    fn record_too_busy_without_count() {
+        let slot = link_err();
+        record_too_busy(&slot, "nope");
+        assert!(slot
+            .lock()
+            .unwrap()
+            .as_deref()
+            .unwrap()
+            .contains("busy"));
+    }
+
+    #[test]
+    fn record_link_lost_only_sets_first_error() {
+        let slot = link_err();
+        record_link_lost(&slot, "first");
+        record_link_lost(&slot, "second");
+        assert_eq!(slot.lock().unwrap().as_deref(), Some("first"));
+    }
+}

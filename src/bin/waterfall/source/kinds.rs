@@ -57,3 +57,33 @@ pub fn is_local_source(kind: SourceKind) -> bool {
         SourceKind::Qmx => true,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_kind_index_roundtrip() {
+        for kind in all_source_kinds() {
+            let idx = source_kind_index(kind);
+            assert_eq!(source_kind_from_index(idx), kind);
+            assert!(!source_kind_label(kind).is_empty());
+        }
+    }
+
+    #[test]
+    fn kiwi_is_not_local() {
+        assert!(!is_local_source(SourceKind::Kiwi));
+    }
+
+    #[cfg(any(feature = "airspy", feature = "rtlsdr", feature = "qmx"))]
+    #[test]
+    fn local_sources_flagged() {
+        #[cfg(feature = "airspy")]
+        assert!(is_local_source(SourceKind::Airspy));
+        #[cfg(feature = "rtlsdr")]
+        assert!(is_local_source(SourceKind::RtlSdr));
+        #[cfg(feature = "qmx")]
+        assert!(is_local_source(SourceKind::Qmx));
+    }
+}
