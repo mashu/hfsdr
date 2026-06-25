@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use hfsdr::{
     Complex32, DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, IqPlayback, IqRecorder,
-    SpectrumAnalyzer, SpectrumFrontEnd,
+    PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd,
 };
 
 use crate::audio::AudioOutput;
@@ -92,6 +92,10 @@ pub(super) struct Engine {
     level_agc_envelope: f32,
     level_iq_rf: f32,
     level_audio_scope: Vec<f32>,
+
+    pipeline_avg: PipelineMetrics,
+    last_perf_log: Instant,
+    last_pipeline: PipelineMetrics,
 
     /// Set by Disconnect/Cancel so an in-flight `connect()` can abort promptly.
     connect_cancel: Arc<AtomicBool>,

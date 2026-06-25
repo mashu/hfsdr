@@ -7,6 +7,7 @@
 
 mod cli;
 mod connection;
+mod iq_bridge;
 pub mod controls_dispatch;
 mod device;
 mod kinds;

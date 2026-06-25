@@ -16,6 +16,7 @@ use hfsdr::{
 use serde::{Deserialize, Serialize};
 
 use super::device::DeviceSource;
+use super::iq_bridge::attach_dual_ring;
 use super::settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};
 #[cfg(feature = "airspy")]
 use super::settings::default_airspy_sample_rate;
@@ -188,11 +189,17 @@ fn connect_kiwi(
     }
     let reported = src.sample_rate();
     let (ingress_decim, eff_sr) = req.kiwi.ingress_decimation(reported);
-    let iq = src.start_cancellable(cancel).map_err(|e| e.to_string())?;
+    let device_iq = src.start_cancellable(cancel).map_err(|e| e.to_string())?;
+    let ring_cap = 1 << 16;
+    let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
+        attach_dual_ring(device_iq, ingress_decim, reported as f32, ring_cap);
     Ok(super::device::Connection {
         device: DeviceSource::Kiwi(src),
         iq,
-        iq_ring_capacity: 1 << 16,
+        iq_spectrum,
+        bridge,
+        iq_ring_capacity: ring_cap,
+        iq_spectrum_ring_capacity,
         device_sample_rate: reported as f32,
         sample_rate: eff_sr,
         center_hz: req.center_hz,
@@ -230,11 +237,16 @@ fn connect_airspy(
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
     let (ingress_decim, eff_sr) = req.airspy.ingress_decimation(sr);
     let ring_cap = iq_ring_capacity(sr);
-    let iq = src.start().map_err(|e| e.to_string())?;
+    let device_iq = src.start().map_err(|e| e.to_string())?;
+    let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
+        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap);
     Ok(super::device::Connection {
         device: DeviceSource::Airspy(src),
         iq,
+        iq_spectrum,
+        bridge,
         iq_ring_capacity: ring_cap,
+        iq_spectrum_ring_capacity,
         device_sample_rate: sr as f32,
         sample_rate: eff_sr,
         center_hz: req.center_hz,
@@ -275,11 +287,16 @@ fn connect_rtlsdr(
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
     let (ingress_decim, eff_sr) = req.rtlsdr.ingress_decimation(sr);
     let ring_cap = rtlsdr_ring_capacity(sr);
-    let iq = src.start().map_err(|e| e.to_string())?;
+    let device_iq = src.start().map_err(|e| e.to_string())?;
+    let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
+        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap);
     Ok(super::device::Connection {
         device: DeviceSource::RtlSdr(src),
         iq,
+        iq_spectrum,
+        bridge,
         iq_ring_capacity: ring_cap,
+        iq_spectrum_ring_capacity,
         device_sample_rate: sr as f32,
         sample_rate: eff_sr,
         center_hz: req.center_hz,
@@ -310,11 +327,16 @@ fn connect_qmx(
     let sr = qmx::SAMPLE_RATE;
     let (ingress_decim, eff_sr) = q.ingress_decimation(sr);
     let ring_cap = qmx_ring_capacity();
-    let iq = src.start().map_err(|e| e.to_string())?;
+    let device_iq = src.start().map_err(|e| e.to_string())?;
+    let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
+        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap);
     Ok(super::device::Connection {
         device: DeviceSource::Qmx(src),
         iq,
+        iq_spectrum,
+        bridge,
         iq_ring_capacity: ring_cap,
+        iq_spectrum_ring_capacity,
         device_sample_rate: sr as f32,
         sample_rate: eff_sr,
         center_hz: req.center_hz,

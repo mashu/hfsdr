@@ -151,6 +151,7 @@ impl WaterfallApp {
                 fft_size: FFT_SIZE,
                 fft_auto: true,
                 full_drain_spectrum: false,
+                perf_trace: false,
             },
             audio: AudioUiState {
                 audio_devices,

@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, SpectrumAnalyzer, SpectrumFrontEnd};
+use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd};
 
 use crate::skimmer::SkimmerHandle;
 
@@ -83,6 +83,9 @@ impl Engine {
             level_agc_envelope: 0.0,
             level_iq_rf: 0.0,
             level_audio_scope: Vec::new(),
+            pipeline_avg: PipelineMetrics::default(),
+            last_perf_log: Instant::now(),
+            last_pipeline: PipelineMetrics::default(),
             connect_cancel,
         }
     }

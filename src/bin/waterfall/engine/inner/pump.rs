@@ -1,13 +1,14 @@
 //! IQ drain pump and stats publishing.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use hfsdr::{Complex32, FirDecimator};
+use hfsdr::{Complex32, FirDecimator, PipelineMetrics};
 use rayon::join;
 
 use crate::log;
 use super::Engine;
+use crate::engine::perf::perf_enabled;
 use crate::engine::policy::{
     is_wideband_rate, ring_catchup_target_slots, skimmer_throttle, SKIMMER_PEAK_HOLD_DECAY_DB,
 };
@@ -21,6 +22,10 @@ impl Engine {
     pub(super) fn pump_stream(&mut self) -> usize {
         self.last_iq_dropped = 0;
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
+        let perf = perf_enabled(&params);
+        let mut metrics = PipelineMetrics::default();
+        let t_pump = Instant::now();
+
         let dt = self
             .last_pump_at
             .elapsed()
@@ -28,6 +33,7 @@ impl Engine {
             .clamp(0.001, 0.1);
         let ring_before = self.measure_iq_buffer();
 
+        let t_drain = Instant::now();
         self.drain.clear();
         let drain_cap = self.max_drain();
         if let Some(pb) = &mut self.playback {
@@ -78,24 +84,61 @@ impl Engine {
             .map(|c| c.iq_ingress_decim)
             .unwrap_or(1)
             .max(1);
+        let dual_ring = self.conn.as_ref().is_some_and(|c| c.dual_ring_active());
+        metrics.dual_ring = dual_ring;
+
         let got = self.drain.len();
+        if dual_ring && got > 0 {
+            self.drain_decim.clear();
+            if let Some(conn) = &mut self.conn {
+                if let Some(decim) = conn.iq_spectrum.as_mut() {
+                    let want = (got / ingress_decim).max(1) + self.spectrum_hop;
+                    while self.drain_decim.len() < want {
+                        match decim.pop() {
+                            Ok(s) => self.drain_decim.push(s),
+                            Err(_) => break,
+                        }
+                    }
+                }
+                metrics.decim_ring_dropped = conn.bridge_decim_dropped();
+            }
+        }
+        if perf {
+            metrics.drain_ns = t_drain.elapsed().as_nanos() as u64;
+            metrics.got_samples = got;
+            metrics.iq_dropped_catchup = self.last_iq_dropped;
+        }
+
         self.last_pump_got = got;
         self.update_ring_utilization(device_rate, ring_before, got, dt);
         self.last_pump_at = Instant::now();
         if got == 0 {
+            self.finish_pipeline_metrics(perf, &metrics, false);
             self.publish_stats(0);
             return 0;
         }
+
+        let t_record = Instant::now();
         if let Some(rec) = &self.recorder {
             rec.push(&self.drain);
             self.recorder_samples += got as u64;
         }
+        if perf {
+            metrics.record_ns = t_record.elapsed().as_nanos() as u64;
+        }
+
+        let t_gain = Instant::now();
         // Yaesu-style software RF gain: scale the IQ after recording (so captures stay raw)
         // but before spectrum/S-meter/AGC see it. One chokepoint → identical behavior on
         // every source and on playback, even when hardware/RF AGC is active.
-        // Kiwi manGain is emulated here when Kiwi RF AGC is on (firmware ignores manGain then).
         let gain_db = effective_rf_gain_db(params.rf_gain_db, self.conn.as_ref());
         apply_software_rf_gain(&mut self.drain, gain_db);
+        if dual_ring && !self.drain_decim.is_empty() {
+            apply_software_rf_gain(&mut self.drain_decim, gain_db);
+        }
+        if perf {
+            metrics.gain_ns = t_gain.elapsed().as_nanos() as u64;
+        }
         if !self.first_iq_received {
             self.first_iq_received = true;
             self.rate_window_start = Instant::now();
@@ -122,7 +165,8 @@ impl Engine {
         let batch = Arc::new(std::mem::take(&mut self.drain));
         self.drain = Vec::with_capacity(self.max_drain());
 
-        if ingress_decim > 1 {
+        let t_demod = Instant::now();
+        if !dual_ring && ingress_decim > 1 {
             let rebuild_ingress = ingress_decim != self.spectrum_ingress_factor
                 || (device_rate - self.spectrum_ingress_rate).abs() > 1.0
                 || cw.decim_filter != self.spectrum_ingress_filter;
@@ -141,7 +185,8 @@ impl Engine {
             }
         }
 
-        let use_ingress_worker = wideband
+        let use_ingress_worker = !dual_ring
+            && wideband
             && ingress_decim > 1
             && self.spectrum_decim <= 1
             && self.ingress_worker.as_ref().is_some_and(|w| {
@@ -166,7 +211,7 @@ impl Engine {
                 self.spectrum_ingress
                     .decimate_block(batch.as_slice(), &mut self.drain_decim, false);
             }
-        } else if wideband && ingress_decim > 1 && self.spectrum_decim <= 1 {
+        } else if wideband && ingress_decim > 1 && self.spectrum_decim <= 1 && !dual_ring {
             let batch_demod = Arc::clone(&batch);
             let demod_input = self.demod_input(batch_demod.as_slice(), device_rate);
             let (demod, audio_scratch, ingress, decim_buf) = (
@@ -180,7 +225,7 @@ impl Engine {
                 || ingress.decimate_block(batch.as_slice(), decim_buf, false),
             );
         } else {
-            if ingress_decim > 1 {
+            if !dual_ring && ingress_decim > 1 {
                 self.spectrum_ingress
                     .decimate_block(batch.as_slice(), &mut self.drain_decim, false);
             }
@@ -215,12 +260,22 @@ impl Engine {
                 );
             }
         }
+        if perf {
+            metrics.demod_ns = t_demod.elapsed().as_nanos() as u64;
+        }
 
-        let ingress_base: &[Complex32] = if ingress_decim > 1 {
-            &self.drain_decim
-        } else {
-            batch.as_slice()
-        };
+        let t_ingress = Instant::now();
+        let ingress_base: &[Complex32] =
+            if (dual_ring || ingress_decim > 1) && !self.drain_decim.is_empty() {
+                &self.drain_decim
+            } else {
+                batch.as_slice()
+            };
+        if perf {
+            metrics.ingress_ns = t_ingress.elapsed().as_nanos() as u64;
+        }
+
+        let t_spec_front = Instant::now();
         let fft_base = self.spectrum_fft_slice(
             ingress_base,
             batch.len(),
@@ -236,6 +291,9 @@ impl Engine {
         } else {
             self.spectrum_scratch.clear();
             self.spectrum_scratch.extend_from_slice(fft_base);
+        }
+        if perf {
+            metrics.spectrum_front_ns = t_spec_front.elapsed().as_nanos() as u64;
         }
 
         if params.audio_enabled {
@@ -270,6 +328,7 @@ impl Engine {
         self.level_audio_peak = self.audio_scope.peak;
         self.level_audio_rms = self.audio_scope.rms;
 
+        let t_fft = Instant::now();
         let fft_input: &[Complex32] = &self.spectrum_scratch;
         let max_rows = self.adaptive_spectrum_rows(device_rate);
         self.last_spectrum_rows = max_rows;
@@ -279,7 +338,7 @@ impl Engine {
         let skimmer_peak_hold = &mut self.skimmer_peak_hold;
         let row_pool = &mut self.row_pool;
         let mut produced: Vec<Vec<f32>> = Vec::new();
-        analyzer.process_limited(fft_input, max_rows, |row| {
+        let fft_rows = analyzer.process_limited(fft_input, max_rows, |row| {
             latest.copy_from_slice(row);
             if skimmer_peak_hold.len() != row.len() {
                 skimmer_peak_hold.resize(row.len(), -120.0);
@@ -302,10 +361,15 @@ impl Engine {
             buf.copy_from_slice(row);
             produced.push(buf);
         });
+        if perf {
+            metrics.fft_ns = t_fft.elapsed().as_nanos() as u64;
+            metrics.fft_rows = fft_rows;
+        }
 
         self.pump_serial = self.pump_serial.wrapping_add(1);
         let run_skimmer = params.skimmer_enabled;
         self.skimmer.set_enabled(run_skimmer);
+        let t_skimmer = Instant::now();
         if run_skimmer {
             let spectrum_iq_rate = if let Some(pb) = &self.playback {
                 pb.meta().sample_rate as f32
@@ -314,7 +378,8 @@ impl Engine {
             } else {
                 device_rate
             };
-            let (skimmer_iq, skimmer_iq_rate) = if ingress_decim > 1 && !self.drain_decim.is_empty() {
+            let (skimmer_iq, skimmer_iq_rate) =
+                if (dual_ring || ingress_decim > 1) && !self.drain_decim.is_empty() {
                 (self.drain_decim.as_slice(), spectrum_iq_rate)
             } else {
                 (batch.as_slice(), device_rate)
@@ -335,10 +400,43 @@ impl Engine {
                 );
             }
         }
+        if perf {
+            metrics.skimmer_submit_ns = t_skimmer.elapsed().as_nanos() as u64;
+        }
 
         let snr = self.demod.snr_db();
+        let t_publish = Instant::now();
         self.publish_rows(produced, snr, got);
+        if perf {
+            metrics.publish_ns = t_publish.elapsed().as_nanos() as u64;
+        }
+        let slow = self
+            .shared
+            .lock()
+            .map(|g| g.stats.slow)
+            .unwrap_or(false);
+        self.finish_pipeline_metrics(perf, &metrics, slow);
+        let _ = t_pump;
         got
+    }
+
+    fn finish_pipeline_metrics(&mut self, perf: bool, sample: &PipelineMetrics, slow: bool) {
+        if !perf {
+            return;
+        }
+        self.last_pipeline = sample.clone();
+        self.pipeline_avg.blend(sample, 0.15);
+        if slow && self.last_perf_log.elapsed() >= Duration::from_secs(5) {
+            log::warn(&pipeline_perf_summary("slow link", &self.pipeline_avg));
+            self.last_perf_log = Instant::now();
+        }
+    }
+
+    pub(super) fn attach_pipeline_stats(&self, stats: &mut EngineStats) {
+        if self.last_pipeline.measured_total_ns() > 0 {
+            stats.pipeline = self.last_pipeline.clone();
+            stats.pipeline_avg = self.pipeline_avg.clone();
+        }
     }
     pub(super) fn measure_iq_buffer(&self) -> (f32, f32) {
         if let Some(pb) = &self.playback {
@@ -446,7 +544,7 @@ impl Engine {
                 guard.rows_seq = guard.rows_seq.wrapping_add(1);
             }
             guard.spots = spots;
-            guard.stats = EngineStats {
+            let mut stats = EngineStats {
                 sample_rate: self
                     .conn
                     .as_ref()
@@ -483,7 +581,11 @@ impl Engine {
                 kiwi_has_rf_attn,
                 kiwi_rf_attn_db,
                 hw_rf_gain,
+                pipeline: PipelineMetrics::default(),
+                pipeline_avg: PipelineMetrics::default(),
             };
+            self.attach_pipeline_stats(&mut stats);
+            guard.stats = stats;
             guard.audio_scope = self.level_audio_scope.clone();
         }
     }
@@ -516,7 +618,7 @@ impl Engine {
         let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
         let hw_rf_gain = self.hw_rf_gain();
         if let Ok(mut guard) = self.shared.lock() {
-            guard.stats = EngineStats {
+            let mut stats = EngineStats {
                 sample_rate: self
                     .conn
                     .as_ref()
@@ -553,7 +655,11 @@ impl Engine {
                 kiwi_has_rf_attn,
                 kiwi_rf_attn_db,
                 hw_rf_gain,
+                pipeline: PipelineMetrics::default(),
+                pipeline_avg: PipelineMetrics::default(),
             };
+            self.attach_pipeline_stats(&mut stats);
+            guard.stats = stats;
         }
     }
 
@@ -588,6 +694,35 @@ fn apply_software_rf_gain(iq: &mut [Complex32], gain_db: f32) {
     for s in iq.iter_mut() {
         s.re *= g;
         s.im *= g;
+    }
+}
+
+fn pipeline_perf_summary(label: &str, m: &PipelineMetrics) -> String {
+    let total = m.measured_total_ns().max(1) as f64;
+    let mut parts: Vec<String> = m
+        .stage_rows()
+        .into_iter()
+        .filter(|(_, ns)| *ns > 0)
+        .map(|(name, ns)| format!("{name} {:.0}%", ns as f64 / total * 100.0))
+        .collect();
+    if m.dual_ring {
+        parts.push("dual-ring".into());
+    }
+    if m.iq_dropped_catchup > 0 {
+        parts.push(format!("iq-drop {}", m.iq_dropped_catchup));
+    }
+    if m.decim_ring_dropped > 0 {
+        parts.push(format!("decim-drop {}", m.decim_ring_dropped));
+    }
+    let head = format!(
+        "pipeline [{label}]: {:.0} µs/pump, {} rows",
+        total / 1000.0,
+        m.fft_rows
+    );
+    if parts.is_empty() {
+        head
+    } else {
+        format!("{head} ({})", parts.join(", "))
     }
 }
 

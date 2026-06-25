@@ -1,0 +1,155 @@
+//! Dual IQ rings: raw (demod + record) and decimated (spectrum + skimmer).
+//!
+//! A bridge thread drains the device ring and fans out to both rings so the
+//! engine pump no longer runs ingress FIR decimation on the hot path.
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use hfsdr::{Complex32, DecimFilterKind, FirDecimator};
+use rtrb::{Consumer, RingBuffer};
+
+/// Background tap: device IQ → raw ring + decimated ring.
+pub struct IqDualRingBridge {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+    raw_dropped: Arc<AtomicU64>,
+    decim_dropped: Arc<AtomicU64>,
+}
+
+impl IqDualRingBridge {
+    /// Spawn the bridge. Returns `(bridge, raw_consumer, decim_consumer)`.
+    pub fn spawn(
+        mut device: Consumer<Complex32>,
+        device_rate: f32,
+        factor: usize,
+        filter_kind: DecimFilterKind,
+        raw_cap: usize,
+        decim_cap: usize,
+    ) -> (Self, Consumer<Complex32>, Consumer<Complex32>) {
+        let (mut raw_prod, raw_cons) = RingBuffer::new(raw_cap);
+        let (mut decim_prod, decim_cons) = RingBuffer::new(decim_cap);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_t = Arc::clone(&stop);
+        let raw_dropped = Arc::new(AtomicU64::new(0));
+        let decim_dropped = Arc::new(AtomicU64::new(0));
+        let raw_dropped_t = Arc::clone(&raw_dropped);
+        let decim_dropped_t = Arc::clone(&decim_dropped);
+
+        let join = thread::Builder::new()
+            .name("hfsdr-iq-bridge".into())
+            .spawn(move || {
+                let mut decim = FirDecimator::with_factor(device_rate, factor, true, filter_kind);
+                loop {
+                    if stop_t.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    match device.pop() {
+                        Ok(sample) => {
+                            if raw_prod.push(sample).is_err() {
+                                raw_dropped_t.fetch_add(1, Ordering::Relaxed);
+                            }
+                            if let Some(d) = decim.push(sample, false) {
+                                if decim_prod.push(d).is_err() {
+                                    decim_dropped_t.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        Err(rtrb::PopError::Empty) => {
+                            thread::sleep(Duration::from_micros(200));
+                        }
+                    }
+                }
+            })
+            .expect("spawn iq bridge");
+
+        (
+            Self {
+                stop,
+                join: Some(join),
+                raw_dropped,
+                decim_dropped,
+            },
+            raw_cons,
+            decim_cons,
+        )
+    }
+
+    pub fn raw_dropped(&self) -> u64 {
+        self.raw_dropped.load(Ordering::Relaxed)
+    }
+
+    pub fn decim_dropped(&self) -> u64 {
+        self.decim_dropped.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for IqDualRingBridge {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+/// Wire dual rings when `ingress_decim > 1`; otherwise pass the device consumer through.
+pub fn attach_dual_ring(
+    device_iq: Consumer<Complex32>,
+    ingress_decim: usize,
+    device_rate: f32,
+    ring_cap: usize,
+) -> (
+    Consumer<Complex32>,
+    Option<Consumer<Complex32>>,
+    Option<IqDualRingBridge>,
+    usize,
+) {
+    if ingress_decim <= 1 {
+        return (device_iq, None, None, 0);
+    }
+    let decim_cap = (ring_cap / ingress_decim).max(4096);
+    let (bridge, raw, decim) = IqDualRingBridge::spawn(
+        device_iq,
+        device_rate,
+        ingress_decim,
+        DecimFilterKind::LinearFir,
+        ring_cap,
+        decim_cap,
+    );
+    (raw, Some(decim), Some(bridge), decim_cap)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtrb::RingBuffer;
+
+    #[test]
+    fn bridge_decimates_into_second_ring() {
+        let (mut dev_prod, dev_cons) = RingBuffer::<Complex32>::new(256);
+        for i in 0..32i32 {
+            let t = i as f32 / 48_000.0;
+            let _ = dev_prod.push(Complex32::new((t * 1000.0).cos(), 0.0));
+        }
+        drop(dev_prod);
+
+        let (_bridge, mut raw, mut decim) =
+            IqDualRingBridge::spawn(dev_cons, 48_000.0, 4, DecimFilterKind::LinearFir, 256, 64);
+
+        std::thread::sleep(Duration::from_millis(50));
+
+        let mut raw_n = 0usize;
+        while raw.pop().is_ok() {
+            raw_n += 1;
+        }
+        let mut decim_n = 0usize;
+        while decim.pop().is_ok() {
+            decim_n += 1;
+        }
+        assert_eq!(raw_n, 32);
+        assert!(decim_n > 0 && decim_n < raw_n);
+    }
+}

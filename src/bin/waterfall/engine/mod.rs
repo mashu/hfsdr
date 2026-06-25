@@ -15,6 +15,7 @@
 mod audio;
 mod handle;
 mod inner;
+mod perf;
 mod policy;
 mod types;
 
