@@ -13,7 +13,6 @@ pub const MAX_CATCHUP_PUMPS_LIGHT: usize = 2;
 pub const MAX_AUDIO_SAMPLES_WB: usize = 8192;
 /// Max IQ samples per pump through listen demod at Kiwi/narrow rates (~170 ms @ 12 kHz).
 pub const MAX_AUDIO_SAMPLES_NARROW: usize = 2048;
-pub const MAX_FFT_INPUT_WB: usize = 20_480;
 pub const SKIMMER_PEAK_HOLD_DECAY_DB: f32 = 0.25;
 pub const RING_CATCHUP_FILL: f32 = 0.55;
 pub const RING_CATCHUP_TARGET: f32 = 0.25;
@@ -50,14 +49,6 @@ pub fn max_drain_for(sample_rate: f32) -> usize {
     }
 }
 
-pub fn max_fft_input_for(sample_rate: f32, spectrum_hop: usize, fft_size: usize) -> usize {
-    if sample_rate > WIDEBAND_IQ_THRESHOLD {
-        (spectrum_hop * MAX_SPECTRUM_ROWS_WIDEBAND + fft_size).min(MAX_FFT_INPUT_WB)
-    } else {
-        usize::MAX
-    }
-}
-
 pub fn wideband_tail_len(sample_len: usize, _rate: f32, max: usize) -> usize {
     sample_len.min(max)
 }
@@ -73,15 +64,6 @@ pub fn demod_tail_max(rate: f32) -> usize {
 /// Whether listen demod should see the entire drained batch (contest / recording).
 pub fn demod_uses_full_batch(recording: bool, full_demod: bool) -> bool {
     recording || full_demod
-}
-
-/// IQ sample count fed to listen demod for this pump.
-pub fn demod_input_len(batch_len: usize, rate: f32, recording: bool, full_demod: bool) -> usize {
-    if demod_uses_full_batch(recording, full_demod) {
-        batch_len
-    } else {
-        wideband_tail_len(batch_len, rate, demod_tail_max(rate))
-    }
 }
 
 /// Decimated ingress length that covers the same time span as [`demod_tail_max`].
@@ -194,6 +176,24 @@ pub const RECONNECT_BUSY_DELAY_SECS: f32 = 15.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MAX_FFT_INPUT_WB: usize = 20_480;
+
+    fn max_fft_input_for(sample_rate: f32, spectrum_hop: usize, fft_size: usize) -> usize {
+        if sample_rate > WIDEBAND_IQ_THRESHOLD {
+            (spectrum_hop * MAX_SPECTRUM_ROWS_WIDEBAND + fft_size).min(MAX_FFT_INPUT_WB)
+        } else {
+            usize::MAX
+        }
+    }
+
+    fn demod_input_len(batch_len: usize, rate: f32, recording: bool, full_demod: bool) -> usize {
+        if demod_uses_full_batch(recording, full_demod) {
+            batch_len
+        } else {
+            wideband_tail_len(batch_len, rate, demod_tail_max(rate))
+        }
+    }
 
     #[test]
     fn ring_catchup_only_when_full_and_not_recording() {

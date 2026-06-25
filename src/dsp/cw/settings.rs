@@ -5,10 +5,7 @@
 //! node-graph compositor can reorder/connect these same stages without changing
 //! the DSP structs themselves.
 
-use super::filter_plan::{
-    clamp_passband_hz, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
-    DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA,
-};
+use super::filter_plan::{clamp_passband_hz, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
 use super::fir::WindowKind;
 use super::super::freq_offset::ChannelOffsetHz;
 
@@ -251,6 +248,7 @@ impl CwChannelSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::filter_plan::{CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ};
 
     #[test]
     fn defaults_match_contest_cw_profile() {

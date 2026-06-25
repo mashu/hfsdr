@@ -5,7 +5,7 @@ use eframe::egui::{
     StrokeKind, Ui, Vec2,
 };
 
-use crate::theme::{attach_rich_tooltip, ACCENT, MUTED, OK, SURFACE, TRACE, TRACE_GLOW, WARN};
+use crate::theme::{attach_rich_tooltip, ACCENT, MUTED, OK, SURFACE, TRACE, WARN};
 
 use super::level::{dbm_to_s_reading, rf_level_dbm, AudioLevelHint, HALF_SCALE};
 
@@ -55,6 +55,7 @@ fn hint_accent(h: AudioLevelHint) -> Color32 {
 pub struct AfScopeParams<'a> {
     pub samples: &'a [f32],
     pub peak: f32,
+    pub peak_display: f32,
     pub rms: f32,
     pub agc_gain: f32,
     pub agc_envelope: f32,
@@ -167,7 +168,7 @@ pub fn show_af_scope(ui: &mut Ui, p: &AfScopeParams<'_>) {
     paint_clip_zones(&painter, plot);
     paint_half_scale_guides(&painter, plot);
     paint_trace(&painter, plot, p);
-    paint_peak_meter(&painter, meter_rect, p.peak, p.hint);
+    paint_peak_meter(&painter, meter_rect, p.peak_display, p.hint);
     paint_y_labels(&painter, outer, plot);
 }
 
@@ -261,37 +262,43 @@ fn paint_trace(painter: &eframe::egui::Painter, rect: Rect, p: &AfScopeParams<'_
 
     let mid_y = rect.center().y;
     let half_h = rect.height() * 0.44;
-    let n = p.samples.len();
-    let dx = (rect.width() - 4.0) / (n - 1) as f32;
-
-    let mut pts = Vec::with_capacity(n);
-    let mut clipped = false;
+    let cols = (((rect.width() - 4.0) / 2.5).round() as usize).clamp(40, 96);
+    let col_w = (rect.width() - 4.0) / cols as f32;
     let clip_top = rect.top() + rect.height() * 0.08;
     let clip_bot = rect.bottom() - rect.height() * 0.08;
+    let n = p.samples.len();
+    let mut clipped = false;
 
-    for (i, &s) in p.samples.iter().enumerate() {
-        let x = rect.left() + 2.0 + i as f32 * dx;
-        let norm = s.clamp(-1.15, 1.15);
-        let y = mid_y - norm * half_h;
-        if y <= clip_top || y >= clip_bot {
+    for col in 0..cols {
+        let i0 = col * n / cols;
+        let i1 = ((col + 1) * n / cols).max(i0 + 1).min(n);
+        let mut min_s = f32::MAX;
+        let mut max_s = f32::MIN;
+        for &s in &p.samples[i0..i1] {
+            let v = s.clamp(-1.15, 1.15);
+            min_s = min_s.min(v);
+            max_s = max_s.max(v);
+        }
+        let x = rect.left() + 2.0 + col as f32 * col_w + col_w * 0.5;
+        let y_top = mid_y - max_s * half_h;
+        let y_bot = mid_y - min_s * half_h;
+        if y_top <= clip_top || y_bot >= clip_bot {
             clipped = true;
         }
-        pts.push(Pos2::new(x, y));
+        painter.line_segment(
+            [Pos2::new(x, y_top), Pos2::new(x, y_bot)],
+            Stroke::new(1.35, TRACE),
+        );
     }
 
-    let trace = if clipped {
-        Color32::from_rgb(251, 146, 120)
-    } else {
-        TRACE
-    };
-    let glow = if clipped {
-        Color32::from_rgba_unmultiplied(251, 146, 120, 80)
-    } else {
-        TRACE_GLOW
-    };
-
-    painter.add(Shape::line(pts.clone(), Stroke::new(3.5, glow)));
-    painter.add(Shape::line(pts, Stroke::new(1.35, trace)));
+    if clipped {
+        painter.rect_stroke(
+            rect,
+            6.0,
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(251, 146, 120, 90)),
+            StrokeKind::Inside,
+        );
+    }
 }
 
 fn paint_peak_meter(

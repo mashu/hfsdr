@@ -42,6 +42,33 @@ impl WaterfallApp {
         rf_level_dbm(self.engine_ui.stats.rssi_dbm, self.engine_ui.stats.iq_rf_level)
     }
 
+    pub(crate) fn tick_meter_display(&mut self, dt: f32) {
+        use crate::meters::{af_peak_fill, dbm_to_needle_t, if_agc_fill, MeterTargets};
+
+        let live = matches!(self.engine_ui.conn_state, ConnState::Streaming);
+        let stats = &self.engine_ui.stats;
+        let if_fill = if live && self.radio.cw.agc.enabled {
+            if_agc_fill(stats.agc_gain, true)
+        } else {
+            0.0
+        };
+        let af_peak = if live { stats.audio_peak } else { 0.0 };
+        self.meter_display.tick(
+            dt,
+            MeterTargets {
+                needle_t: if live {
+                    dbm_to_needle_t(self.rf_meter_dbm())
+                } else {
+                    0.0
+                },
+                if_fill,
+                af_fill: af_peak_fill(af_peak),
+                af_scope_peak: af_peak,
+                live,
+            },
+        );
+    }
+
     pub(crate) fn apply_radio_settings(&mut self) {
         if (self.radio.center_khz - self.radio.last_center_khz).abs() > f64::EPSILON {
             self.invalidate_waterfall_history();

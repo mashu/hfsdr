@@ -17,7 +17,8 @@ mod prelude;
 pub(crate) use prelude::*;
 pub(crate) use state::{
     AudioUiState, ChromeState, ConnectionFormState, ConnectionState, DisplayState, EngineUiState,
-    KiwiDirectoryState, PlotState, RadioState, SkimmerUiState, WaterfallTextureCache,
+    KiwiDirectoryState, MeterDisplayState, PlotState, RadioState, SkimmerUiState,
+    WaterfallTextureCache,
 };
 
 pub(crate) use constants::*;
@@ -32,6 +33,7 @@ pub struct WaterfallApp {
     pub(crate) audio: AudioUiState,
     pub(crate) skimmer_ui: SkimmerUiState,
     pub(crate) chrome: ChromeState,
+    pub(crate) meter_display: MeterDisplayState,
     resolver: ContinentResolver,
     annotated: HashSet<String>,
     slow: SlowWaterfall,
@@ -198,6 +200,7 @@ impl WaterfallApp {
                 iq: IqPanel::new(hfsdr::default_capture_dir()),
                 themed: false,
             },
+            meter_display: MeterDisplayState::default(),
             resolver: ContinentResolver::new(),
             annotated: HashSet::new(),
             slow: SlowWaterfall::new(2.0, 600.0, RowFold::Peak),
@@ -273,6 +276,9 @@ impl eframe::App for WaterfallApp {
         self.handle_shortcuts(&ctx);
         self.pump_engine();
         self.skimmer_ui.frame_visible_spots = self.visible_spots();
+
+        let meter_dt = ui.input(|i| i.stable_dt);
+        self.tick_meter_display(meter_dt);
 
         self.update_plot_hover(&ctx);
         egui::Panel::top("status")

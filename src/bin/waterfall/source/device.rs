@@ -117,6 +117,8 @@ pub struct Connection {
     /// Keeps the ingress bridge thread alive.
     pub(crate) bridge: Option<IqDualRingBridge>,
     pub iq_ring_capacity: usize,
+    /// Decimated IQ ring capacity when [`Self::iq_spectrum`] is active.
+    #[allow(dead_code)]
     pub iq_spectrum_ring_capacity: usize,
     /// Native device IQ rate (full passband for demod and display).
     pub device_sample_rate: f32,
@@ -172,6 +174,7 @@ impl Connection {
     }
 
     /// Ring buffer pre-filled with IQ for engine pump tests and benchmarks.
+    #[allow(dead_code)]
     pub(crate) fn mock_ring(samples: &[Complex32], center_hz: f64, is_kiwi: bool) -> Self {
         let (mut prod, cons) = RingBuffer::<Complex32>::new(65_536);
         for &s in samples {

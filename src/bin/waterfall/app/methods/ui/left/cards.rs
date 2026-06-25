@@ -55,6 +55,7 @@ impl WaterfallApp {
                     },
                     streaming: live,
                 },
+                self.meter_display.display,
             );
         });
     }

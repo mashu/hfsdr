@@ -255,7 +255,6 @@ fn block_fft_real(
         scratch[hist.len() + i] = Complex::new(v, 0.0);
     }
     plan_forward(fft_n).process(scratch);
-    let scale = 1.0 / fft_n as f32;
     for i in 0..fft_n {
         scratch[i] *= h_fft[i];
     }

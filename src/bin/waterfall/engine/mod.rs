@@ -19,12 +19,15 @@ mod perf;
 mod policy;
 mod types;
 
+#[allow(unused_imports)] // engine-bench binary
 pub use policy::{
     demod_tail_max, wideband_tail_len, MAX_AUDIO_SAMPLES_NARROW, MAX_AUDIO_SAMPLES_WB,
 };
 
 pub use handle::EngineHandle;
+#[allow(unused_imports)] // engine-bench binary
 pub(crate) use inner::Engine;
+#[allow(unused_imports)] // engine-bench binary
 pub(crate) use types::EngineShared;
 pub use types::{
     ConnState, EngineCommand, EngineParams, EnginePoll, EngineStats,

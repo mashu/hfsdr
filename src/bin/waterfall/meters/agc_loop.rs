@@ -5,6 +5,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec
 use crate::theme::{attach_rich_tooltip, ACCENT, MUTED, TRACE};
 
 use super::level::HALF_SCALE;
+use super::motion::MeterSmoothed;
 use super::s_meter::{show_analog_s_meter, AnalogSmeterParams};
 
 const LOOP_METER_LABEL_H: f32 = 13.0;
@@ -21,7 +22,7 @@ pub(crate) fn if_agc_fill(agc_gain: f32, agc_enabled: bool) -> f32 {
     (g.log10() / 64.0_f32.log10()).clamp(0.0, 1.0)
 }
 
-fn af_peak_fill(peak: f32) -> f32 {
+pub(crate) fn af_peak_fill(peak: f32) -> f32 {
     (peak / HALF_SCALE).clamp(0.0, 1.0)
 }
 
@@ -116,7 +117,7 @@ fn paint_loop_meter(
 }
 
 /// RF / IF / AF feedback — analog S-meter plus IF/AF level bars.
-pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams) {
+pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams, smoothed: MeterSmoothed) {
     let panel_w = ui.available_width();
     let block_h = LOOP_METER_ROW_H * 2.0 + LOOP_METER_ROW_GAP;
     ui.vertical(|ui| {
@@ -129,6 +130,7 @@ pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams) {
                 hw_rssi_dbm: p.hw_rssi_dbm,
                 streaming: p.streaming,
             },
+            smoothed.needle_t,
         );
         ui.add_space(LOOP_METER_ROW_GAP);
         ui.allocate_ui_with_layout(
@@ -140,11 +142,11 @@ pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams) {
                 let (if_value, if_fill, if_accent) = if live && p.agc_enabled {
                     (
                         format!("{:.1}×", p.agc_gain),
-                        if_agc_fill(p.agc_gain, true),
+                        smoothed.if_fill,
                         ACCENT,
                     )
                 } else if live {
-                    ("off".to_string(), 0.0, MUTED)
+                    ("off".to_string(), smoothed.if_fill, MUTED)
                 } else {
                     ("—".to_string(), 0.0, MUTED)
                 };
@@ -166,7 +168,7 @@ pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams) {
                 );
                 ui.add_space(LOOP_METER_ROW_GAP);
                 let (af_value, af_fill) = if live {
-                    (format!("{:.2}", p.audio_peak), af_peak_fill(p.audio_peak))
+                    (format!("{:.2}", p.audio_peak), smoothed.af_fill)
                 } else {
                     ("—".to_string(), 0.0)
                 };

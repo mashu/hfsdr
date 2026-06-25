@@ -13,7 +13,7 @@ impl WaterfallApp {
                 "AF tuning",
                 &[
                     ("Goal", ACCENT),
-                    ("Tune RF gain so the AF trace sits near ±half scale.", MUTED),
+                    ("Tune RF gain so the AF envelope sits near ±half scale.", MUTED),
                     ("Status badge", OK),
                     (
                         "LOW / OK / HOT reflects RF level, IQ AGC headroom, and AF peak.",
@@ -35,6 +35,7 @@ impl WaterfallApp {
                 &AfScopeParams {
                     samples: &self.audio.audio_scope,
                     peak: self.engine_ui.stats.audio_peak,
+                    peak_display: self.meter_display.display.af_scope_peak,
                     rms: self.engine_ui.stats.audio_rms,
                     agc_gain: self.engine_ui.stats.agc_gain,
                     agc_envelope: self.engine_ui.stats.agc_envelope,
