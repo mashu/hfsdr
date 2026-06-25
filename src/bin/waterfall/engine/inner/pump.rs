@@ -85,6 +85,10 @@ impl Engine {
             rec.push(&self.drain);
             self.recorder_samples += got as u64;
         }
+        // Yaesu-style software RF gain: scale the IQ after recording (so captures stay raw)
+        // but before spectrum/S-meter/AGC see it. One chokepoint → identical behavior on
+        // every source and on playback, even when hardware/RF AGC is active.
+        apply_software_rf_gain(&mut self.drain, params.rf_gain_db);
         if !self.first_iq_received {
             self.first_iq_received = true;
             self.rate_window_start = Instant::now();
@@ -548,5 +552,45 @@ impl Engine {
 
     pub(super) fn hw_rf_gain(&self) -> Option<u8> {
         self.conn.as_ref().and_then(|c| c.device.hw_rf_gain())
+    }
+}
+
+/// Scale IQ in place by a software RF gain in dB (no-op at 0 dB).
+fn apply_software_rf_gain(iq: &mut [Complex32], gain_db: f32) {
+    if gain_db.abs() < 1e-3 {
+        return;
+    }
+    let g = 10f32.powf(gain_db / 20.0);
+    for s in iq.iter_mut() {
+        s.re *= g;
+        s.im *= g;
+    }
+}
+
+#[cfg(test)]
+mod rf_gain_tests {
+    use super::apply_software_rf_gain;
+    use hfsdr::Complex32;
+
+    #[test]
+    fn zero_db_is_noop() {
+        let mut iq = vec![Complex32::new(0.3, -0.4)];
+        apply_software_rf_gain(&mut iq, 0.0);
+        assert!((iq[0].re - 0.3).abs() < 1e-9);
+        assert!((iq[0].im + 0.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn twenty_db_is_ten_times_amplitude() {
+        let mut iq = vec![Complex32::new(0.1, 0.0)];
+        apply_software_rf_gain(&mut iq, 20.0);
+        assert!((iq[0].re - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn negative_db_attenuates() {
+        let mut iq = vec![Complex32::new(1.0, 0.0)];
+        apply_software_rf_gain(&mut iq, -20.0);
+        assert!((iq[0].re - 0.1).abs() < 1e-5);
     }
 }

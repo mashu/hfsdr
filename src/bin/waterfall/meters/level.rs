@@ -45,32 +45,25 @@ pub fn classify_level(
     }
 }
 
-/// Fixed IQ reference for S-unit calibration (not tied to the live AGC target knob).
-const SMETER_IQ_REF: f32 = 0.25;
+/// Pre-AGC IQ magnitude that maps to S9 (−73 dBm). Each ×10 in IQ amplitude is +20 dB.
+const SMETER_IQ_S9: f32 = 0.1;
 
 /// Pre-software-AGC IQ level mapped to an approximate dBm scale.
+///
+/// Calibrated so a healthy CW signal lands mid-scale and a ×10 change in IQ amplitude
+/// (e.g. +20 dB of software RF gain) moves the needle by +20 dB (~3 S-units).
 pub fn iq_rf_level_to_dbm(iq_rf_level: f32) -> f32 {
-    let ratio = iq_rf_level.max(1e-7) / SMETER_IQ_REF;
-    (-127.0 + 20.0 * ratio.log10()).clamp(SMETER_DBM_MIN, SMETER_DBM_MAX)
+    let ratio = iq_rf_level.max(1e-9) / SMETER_IQ_S9;
+    (-73.0 + 20.0 * ratio.log10()).clamp(SMETER_DBM_MIN, SMETER_DBM_MAX)
 }
 
-fn combine_dbm_max(a: f32, b: f32) -> f32 {
-    let pa = 10f32.powf(a / 10.0);
-    let pb = 10f32.powf(b / 10.0);
-    10.0 * pa.max(pb).log10()
-}
-
-/// RF level for the S-meter needle (hardware + pre-AGC IQ; independent of software AGC).
-pub fn rf_level_dbm(rssi_dbm: Option<f32>, iq_rf_level: f32) -> f32 {
-    let iq_dbm = iq_rf_level_to_dbm(iq_rf_level);
-    let Some(hw) = rssi_dbm else {
-        return iq_dbm;
-    };
-    if iq_rf_level > 1e-6 {
-        combine_dbm_max(iq_dbm, hw)
-    } else {
-        hw
-    }
+/// RF level for the S-meter needle.
+///
+/// Driven by the pre-AGC IQ tap so it behaves identically on every source and tracks the
+/// software RF gain even when hardware/RF AGC is on. Hardware RSSI (`_rssi_dbm`) is shown
+/// separately as a reference in the meter and is intentionally not blended in here.
+pub fn rf_level_dbm(_rssi_dbm: Option<f32>, iq_rf_level: f32) -> f32 {
+    iq_rf_level_to_dbm(iq_rf_level)
 }
 
 /// Map dBm to classic S-unit readout (S1..S9, S9+n).

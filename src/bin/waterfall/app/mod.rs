@@ -82,6 +82,7 @@ impl WaterfallApp {
                 lock_ham_bands: true,
                 agc_rf_on: true,
                 last_agc_rf_on: true,
+                rf_gain_db: 0.0,
                 last_kiwi_man_gain: hfsdr::kiwi::protocol::KIWI_MAN_GAIN_DEFAULT,
                 last_kiwi_rf_attn_db: 0.0,
                 last_kiwi_has_rf_attn: false,

@@ -3,6 +3,52 @@ use crate::app::prelude::*;
 
 impl WaterfallApp {
 
+    /// Unified Yaesu-style software RF gain — applies to IQ on every source, even with
+    /// hardware/RF AGC on, so the S-meter and waterfall always track this knob.
+    pub(crate) fn software_rf_gain_control(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("RF gain").color(ACCENT));
+            let resp = ui.add(
+                egui::Slider::new(&mut self.radio.rf_gain_db, -20.0..=60.0)
+                    .suffix(" dB")
+                    .fixed_decimals(0)
+                    .clamping(egui::SliderClamping::Always),
+            );
+            if resp.changed() {
+                self.lock_display_levels_for_rf_tuning();
+            }
+            if ui
+                .small_button("0")
+                .on_hover_text("Reset RF gain to 0 dB")
+                .clicked()
+            {
+                self.radio.rf_gain_db = 0.0;
+                self.lock_display_levels_for_rf_tuning();
+            }
+            attach_rich_tooltip(
+                &resp,
+                Some("RF gain (software)"),
+                &[
+                    ("Yaesu-style", ACCENT),
+                    (
+                        "Scales the IQ before the S-meter, waterfall, and software AGC — identical on every radio, even when hardware/RF AGC is on.",
+                        MUTED,
+                    ),
+                    ("S-meter & waterfall", OK),
+                    (
+                        "Both rise/fall with this knob. Software AGC compensates the audio, so volume stays steady while the meter still moves.",
+                        MUTED,
+                    ),
+                    ("Hardware gain", MUTED),
+                    (
+                        "Use the per-radio controls below to fix real front-end overload; use this for the day-to-day RF gain feel.",
+                        MUTED,
+                    ),
+                ],
+            );
+        });
+    }
+
     pub(crate) fn hardware_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
         match self.connection.form.kind {
             SourceKind::Kiwi => self.kiwi_rf_controls(ui, live),
@@ -39,7 +85,7 @@ impl WaterfallApp {
             self.sync_kiwi_rf_now();
         }
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("RF gain").small().color(MUTED));
+            ui.label(egui::RichText::new("HW gain (manGain)").small().color(MUTED));
             let mut gain_db = man_gain_db_below_max(self.connection.form.kiwi.man_gain);
             let resp = ui.add(
                 egui::Slider::new(&mut gain_db, -100..=0)
@@ -125,7 +171,7 @@ impl WaterfallApp {
     pub(crate) fn qmx_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
         let _ = live;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("RF gain").small().color(MUTED));
+            ui.label(egui::RichText::new("HW gain").small().color(MUTED));
             ui.add(
                 egui::Slider::new(&mut self.connection.form.qmx.rf_gain_db, 0..=99)
                     .suffix(" dB")

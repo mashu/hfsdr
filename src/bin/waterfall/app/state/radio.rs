@@ -12,6 +12,8 @@ pub struct RadioState {
     pub lock_ham_bands: bool,
     pub agc_rf_on: bool,
     pub last_agc_rf_on: bool,
+    /// Yaesu-style software RF gain (dB), applied to IQ on every source.
+    pub rf_gain_db: f32,
     pub last_kiwi_man_gain: u8,
     pub last_kiwi_rf_attn_db: f32,
     pub last_kiwi_has_rf_attn: bool,
