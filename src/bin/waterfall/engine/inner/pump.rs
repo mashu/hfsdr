@@ -19,7 +19,7 @@ use crate::source::Connection;
 
 impl Engine {
 /// Drain and process available IQ; returns sample count processed.
-    pub(super) fn pump_stream(&mut self) -> usize {
+    pub(crate) fn pump_stream(&mut self) -> usize {
         self.last_iq_dropped = 0;
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
         let perf = perf_enabled(&params);
@@ -101,6 +101,7 @@ impl Engine {
                     }
                 }
                 metrics.decim_ring_dropped = conn.bridge_decim_dropped();
+                metrics.raw_ring_dropped = conn.bridge_raw_dropped();
             }
         }
         if perf {
@@ -161,6 +162,9 @@ impl Engine {
         self.touch_skimmer_center(center_hz);
 
         let cw = params.cw.clone();
+        if let Some(conn) = &self.conn {
+            conn.sync_bridge_decim_filter(cw.decim_filter);
+        }
         let wideband = is_wideband_rate(device_rate);
         let batch = Arc::new(std::mem::take(&mut self.drain));
         self.drain = Vec::with_capacity(self.max_drain());
@@ -710,6 +714,9 @@ fn pipeline_perf_summary(label: &str, m: &PipelineMetrics) -> String {
     }
     if m.iq_dropped_catchup > 0 {
         parts.push(format!("iq-drop {}", m.iq_dropped_catchup));
+    }
+    if m.raw_ring_dropped > 0 {
+        parts.push(format!("raw-drop {}", m.raw_ring_dropped));
     }
     if m.decim_ring_dropped > 0 {
         parts.push(format!("decim-drop {}", m.decim_ring_dropped));

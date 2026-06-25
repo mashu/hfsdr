@@ -1,6 +1,6 @@
 use std::fmt;
 
-use hfsdr::{IqSource, KiwiSource};
+use hfsdr::{DecimFilterKind, IqSource, KiwiSource};
 #[cfg(feature = "airspy")]
 use hfsdr::{airspyhf::iq_ring_capacity, AirspyHf};
 #[cfg(feature = "qmx")]
@@ -192,7 +192,7 @@ fn connect_kiwi(
     let device_iq = src.start_cancellable(cancel).map_err(|e| e.to_string())?;
     let ring_cap = 1 << 16;
     let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
-        attach_dual_ring(device_iq, ingress_decim, reported as f32, ring_cap);
+        attach_dual_ring(device_iq, ingress_decim, reported as f32, ring_cap, DecimFilterKind::LinearFir);
     Ok(super::device::Connection {
         device: DeviceSource::Kiwi(src),
         iq,
@@ -239,7 +239,7 @@ fn connect_airspy(
     let ring_cap = iq_ring_capacity(sr);
     let device_iq = src.start().map_err(|e| e.to_string())?;
     let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
-        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap);
+        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap, DecimFilterKind::LinearFir);
     Ok(super::device::Connection {
         device: DeviceSource::Airspy(src),
         iq,
@@ -289,7 +289,7 @@ fn connect_rtlsdr(
     let ring_cap = rtlsdr_ring_capacity(sr);
     let device_iq = src.start().map_err(|e| e.to_string())?;
     let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
-        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap);
+        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap, DecimFilterKind::LinearFir);
     Ok(super::device::Connection {
         device: DeviceSource::RtlSdr(src),
         iq,
@@ -329,7 +329,7 @@ fn connect_qmx(
     let ring_cap = qmx_ring_capacity();
     let device_iq = src.start().map_err(|e| e.to_string())?;
     let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
-        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap);
+        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap, DecimFilterKind::LinearFir);
     Ok(super::device::Connection {
         device: DeviceSource::Qmx(src),
         iq,

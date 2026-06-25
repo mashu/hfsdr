@@ -8,6 +8,7 @@
 //! [`IqSource`].
 
 pub mod controls;
+pub mod ingress;
 
 use std::fmt;
 

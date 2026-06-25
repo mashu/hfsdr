@@ -11,6 +11,63 @@ use std::thread;
 
 use hfsdr::{Complex32, Skimmer, SkimmerConfig, Spot, SpotSort};
 
+/// Reused `Vec` buffers for skimmer IQ / spectrum handoff (avoids per-frame alloc).
+struct SkimmerBufferPool {
+    iq: Mutex<Vec<Vec<Complex32>>>,
+    spectrum: Mutex<Vec<Vec<f32>>>,
+    max_bufs: usize,
+}
+
+impl SkimmerBufferPool {
+    fn new(max_bufs: usize) -> Self {
+        Self {
+            iq: Mutex::new(Vec::new()),
+            spectrum: Mutex::new(Vec::new()),
+            max_bufs,
+        }
+    }
+
+    fn take_iq(&self, len: usize) -> Vec<Complex32> {
+        let mut free = self.iq.lock().expect("skimmer iq pool");
+        if let Some(mut buf) = free.pop() {
+            buf.clear();
+            if buf.capacity() < len {
+                buf.reserve(len - buf.capacity());
+            }
+            return buf;
+        }
+        Vec::with_capacity(len)
+    }
+
+    fn take_spectrum(&self, len: usize) -> Vec<f32> {
+        let mut free = self.spectrum.lock().expect("skimmer spectrum pool");
+        if let Some(mut buf) = free.pop() {
+            buf.clear();
+            if buf.capacity() < len {
+                buf.reserve(len - buf.capacity());
+            }
+            return buf;
+        }
+        Vec::with_capacity(len)
+    }
+
+    fn return_iq(&self, mut buf: Vec<Complex32>) {
+        let mut free = self.iq.lock().expect("skimmer iq pool");
+        if free.len() < self.max_bufs {
+            buf.clear();
+            free.push(buf);
+        }
+    }
+
+    fn return_spectrum(&self, mut buf: Vec<f32>) {
+        let mut free = self.spectrum.lock().expect("skimmer spectrum pool");
+        if free.len() < self.max_bufs {
+            buf.clear();
+            free.push(buf);
+        }
+    }
+}
+
 struct SkimmerInput {
     iq: Vec<Complex32>,
     spectrum: Vec<f32>,
@@ -18,6 +75,7 @@ struct SkimmerInput {
     spectrum_rate: f32,
     spectrum_pan_hz: f32,
     center_hz: f64,
+    pool: Arc<SkimmerBufferPool>,
 }
 
 enum SkimmerMsg {
@@ -43,6 +101,7 @@ pub struct SkimmerHandle {
     channels: Arc<Mutex<usize>>,
     scp_status: Arc<Mutex<ScpStatus>>,
     config: Arc<Mutex<SkimmerConfig>>,
+    pool: Arc<SkimmerBufferPool>,
     enabled: bool,
 }
 
@@ -60,7 +119,7 @@ fn publish_scp(skimmer: &Skimmer, status: &Arc<Mutex<ScpStatus>>) {
 
 fn process_frame(
     skimmer: &mut Skimmer,
-    input: &SkimmerInput,
+    input: SkimmerInput,
     config_thread: &Arc<Mutex<SkimmerConfig>>,
     spots_thread: &Arc<Mutex<Vec<Spot>>>,
     channels_thread: &Arc<Mutex<usize>>,
@@ -69,10 +128,13 @@ fn process_frame(
     if let Ok(cfg) = config_thread.lock() {
         skimmer.set_config(cfg.clone());
     }
+    let pool = Arc::clone(&input.pool);
+    let iq = input.iq;
+    let spectrum = input.spectrum;
     skimmer.process(
-        &input.iq,
+        &iq,
         input.iq_rate,
-        &input.spectrum,
+        &spectrum,
         input.spectrum_rate,
         input.spectrum_pan_hz,
         input.center_hz,
@@ -84,13 +146,19 @@ fn process_frame(
         *guard = skimmer.active_channels();
     }
     publish_scp(skimmer, scp_thread);
+    pool.return_iq(iq);
+    pool.return_spectrum(spectrum);
 }
 
 fn coalesce_frame(rx: &Receiver<SkimmerMsg>, mut input: SkimmerInput) -> (SkimmerInput, Vec<SkimmerMsg>) {
     let mut deferred = Vec::new();
     loop {
         match rx.try_recv() {
-            Ok(SkimmerMsg::Frame(next)) => input = next,
+            Ok(SkimmerMsg::Frame(next)) => {
+                let old = std::mem::replace(&mut input, next);
+                old.pool.return_iq(old.iq);
+                old.pool.return_spectrum(old.spectrum);
+            }
             Ok(other) => deferred.push(other),
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => break,
@@ -130,7 +198,7 @@ fn dispatch_msg(
             let (input, deferred) = coalesce_frame(rx, input);
             process_frame(
                 skimmer,
-                &input,
+                input,
                 config_thread,
                 spots_thread,
                 channels_thread,
@@ -165,6 +233,7 @@ impl SkimmerHandle {
         let channels_thread = Arc::clone(&channels);
         let scp_thread = Arc::clone(&scp_status);
         let config_thread = Arc::clone(&config);
+        let pool = Arc::new(SkimmerBufferPool::new(4));
 
         thread::Builder::new()
             .name("skimmer".into())
@@ -192,6 +261,7 @@ impl SkimmerHandle {
             channels,
             scp_status,
             config,
+            pool,
             enabled: false,
         }
     }
@@ -240,13 +310,19 @@ impl SkimmerHandle {
         if !self.enabled || iq.is_empty() {
             return;
         }
+        let mut iq_buf = self.pool.take_iq(iq.len());
+        iq_buf.extend_from_slice(iq);
+        let mut spec_buf = self.pool.take_spectrum(spectrum.len());
+        spec_buf.extend_from_slice(spectrum);
+        let pool = Arc::clone(&self.pool);
         let _ = self.tx.try_send(SkimmerMsg::Frame(SkimmerInput {
-            iq: iq.to_vec(),
-            spectrum: spectrum.to_vec(),
+            iq: iq_buf,
+            spectrum: spec_buf,
             iq_rate,
             spectrum_rate,
             spectrum_pan_hz,
             center_hz,
+            pool,
         }));
     }
 
@@ -280,6 +356,7 @@ mod tests {
             spectrum_rate: 12_000.0,
             spectrum_pan_hz: 0.0,
             center_hz: 14_010_000.0,
+            pool: Arc::new(SkimmerBufferPool::new(1)),
         }
     }
 

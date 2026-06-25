@@ -68,7 +68,8 @@ path = "src/bin/kiwi_pipeline_bench.rs"
 
 [[bin]]
 name = "engine-bench"
-path = "src/bin/engine_bench.rs"
+path = "src/bin/waterfall/bench_main.rs"
+required-features = ["gui-core"]
 
 [profile.release]
 opt-level = 3

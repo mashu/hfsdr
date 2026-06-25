@@ -127,7 +127,7 @@ pub(super) fn poll_handshake(&mut self) {
         reconnect_retry_secs(self.is_kiwi_request(), self.reconnect_attempt)
     }
 
-    pub(super) fn set_state(&self, state: ConnState) {
+    pub(crate) fn set_state(&self, state: ConnState) {
         if let Ok(mut guard) = self.shared.lock() {
             guard.state = state;
         }
