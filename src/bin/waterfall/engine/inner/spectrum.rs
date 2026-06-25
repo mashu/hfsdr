@@ -6,8 +6,8 @@ use hfsdr::{Complex32, spectrum_hop, spectrum_plan, SpectrumAnalyzer};
 
 use super::Engine;
 use crate::engine::policy::{
-    adaptive_spectrum_rows as policy_adaptive_rows, demod_tail_max, max_drain_for,
-    slow_link, spectrum_aligned_len, wideband_tail_len,
+    adaptive_spectrum_rows as policy_adaptive_rows, demod_uses_full_batch, demod_tail_max,
+    max_drain_for, slow_link, spectrum_aligned_len, wideband_tail_len,
 };
 use crate::engine::types::EngineParams;
 
@@ -71,8 +71,14 @@ impl Engine {
         }
     }
 
-    pub(super) fn demod_input<'a>(&self, samples: &'a [Complex32], rate: f32) -> &'a [Complex32] {
-        if self.recorder.is_some() {
+    pub(super) fn demod_input<'a>(
+        &self,
+        samples: &'a [Complex32],
+        rate: f32,
+        full_demod: bool,
+    ) -> &'a [Complex32] {
+        let recording = self.recorder.is_some();
+        if demod_uses_full_batch(recording, full_demod) {
             return samples;
         }
         let max = demod_tail_max(rate);

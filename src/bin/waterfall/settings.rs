@@ -22,6 +22,10 @@ const fn window_to_persisted(w: WindowKind) -> u8 {
     }
 }
 
+const fn default_full_demod() -> bool {
+    true
+}
+
 fn default_pan_step_hz() -> f32 {
     500.0
 }
@@ -66,6 +70,8 @@ pub struct AppSettings {
     pub passband_flatten: bool,
     #[serde(default)]
     pub economy_filter: bool,
+    #[serde(default = "default_full_demod")]
+    pub full_demod: bool,
     pub decimation: u32,
     pub nb_enabled: bool,
     pub nb_threshold: f32,
@@ -195,6 +201,7 @@ impl Default for AppSettings {
             kaiser_beta: DEFAULT_KAISER_BETA,
             passband_flatten: false,
             economy_filter: false,
+            full_demod: true,
             decimation: 0,
             nb_enabled: false,
             nb_threshold: 6.0,
