@@ -46,10 +46,29 @@ $depsBin = Join-Path $depsPrefix "bin"
 $depsPkgConfig = Join-Path $depsLib "pkgconfig"
 New-Item -ItemType Directory -Force -Path $depsLib, $depsBin, $depsPkgConfig | Out-Null
 
+# airspyhf ships a custom FindThreads.cmake that searches for pthreadVC2; vcpkg
+# pthreads 3.x installs pthreadVC3. Point CMake at the vcpkg install explicitly.
+$pthreadsInclude = Join-Path $vcpkgInstalled "include"
+$pthreadsLibDir = Join-Path $vcpkgInstalled "lib"
+$pthreadsLib = Get-ChildItem -Path $pthreadsLibDir -Filter "pthreadVC*.lib" |
+    Where-Object { $_.Name -notmatch 'd\.lib$' } |
+    Sort-Object Name |
+    Select-Object -First 1
+if (-not $pthreadsLib) {
+    throw "pthreadVC*.lib not found under $pthreadsLibDir"
+}
+if (-not (Test-Path (Join-Path $pthreadsInclude "pthread.h"))) {
+    throw "pthread.h not found under $pthreadsInclude"
+}
+
+$toolchainFile = Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake"
 cmake -S $airspySrc -B $buildDir `
     -A x64 `
-    -DCMAKE_TOOLCHAIN_FILE=(Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake") `
-    -DCMAKE_INSTALL_PREFIX=$depsPrefix
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile" `
+    -DCMAKE_INSTALL_PREFIX=$depsPrefix `
+    -DTHREADS_USE_PTHREADS_WIN32=ON `
+    "-DTHREADS_PTHREADS_INCLUDE_DIR=$pthreadsInclude" `
+    "-DTHREADS_PTHREADS_WIN32_LIBRARY=$($pthreadsLib.FullName)"
 cmake --build $buildDir --config Release --target airspyhf
 cmake --install $buildDir --config Release
 
