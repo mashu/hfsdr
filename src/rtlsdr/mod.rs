@@ -80,6 +80,20 @@ pub struct RtlSdr {
     dropped: Arc<AtomicU64>,
     ctx: Option<Box<StreamCtx>>,
     async_thread: Option<JoinHandle<()>>,
+    #[cfg(any(test, coverage, mock_hal))]
+    mock: Option<RtlMock>,
+}
+
+#[cfg(any(test, coverage, mock_hal))]
+struct RtlMock {
+    stream: Option<crate::mock_hal::MockIqStream>,
+}
+
+#[cfg(any(test, coverage, mock_hal))]
+impl RtlSdr {
+    fn mock_mut(&mut self) -> Option<&mut RtlMock> {
+        self.mock.as_mut()
+    }
 }
 
 impl RtlSdr {
@@ -90,6 +104,22 @@ impl RtlSdr {
 
     /// Open a specific device by index (see [`RtlSdr::device_count`]).
     pub fn open_index(index: u32) -> Result<Self> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            let sdr = Self {
+                dev: std::ptr::null_mut(),
+                device_index: index,
+                sample_rate: DEFAULT_SAMPLE_RATE,
+                freq_hz: 0.0,
+                tuner_gains: vec![0, 49, 98, 147, 196, 245],
+                streaming: false,
+                dropped: Arc::new(AtomicU64::new(0)),
+                ctx: None,
+                async_thread: None,
+                mock: Some(RtlMock { stream: None }),
+            };
+            return Ok(sdr);
+        }
         let mut dev: *mut sys::rtlsdr_dev_t = std::ptr::null_mut();
         let rc = unsafe { sys::rtlsdr_open(&mut dev, index) };
         if rc != sys::SUCCESS || dev.is_null() {
@@ -105,16 +135,26 @@ impl RtlSdr {
             dropped: Arc::new(AtomicU64::new(0)),
             ctx: None,
             async_thread: None,
+            #[cfg(any(test, coverage, mock_hal))]
+            mock: None,
         };
         sdr.set_sample_rate(DEFAULT_SAMPLE_RATE)?;
         Ok(sdr)
     }
 
     pub fn device_count() -> u32 {
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            return 1;
+        }
         unsafe { sys::rtlsdr_get_device_count() }
     }
 
     pub fn device_name(index: u32) -> String {
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            return format!("Mock RTL-SDR #{index}");
+        }
         let ptr = unsafe { sys::rtlsdr_get_device_name(index) };
         if ptr.is_null() {
             return format!("RTL-SDR #{index}");
@@ -138,6 +178,11 @@ impl RtlSdr {
     }
 
     pub fn set_rtl_agc(&mut self, on: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            let _ = on;
+            return Ok(());
+        }
         check("rtlsdr_set_agc_mode", unsafe {
             sys::rtlsdr_set_agc_mode(self.dev, on as c_int)
         })
@@ -149,22 +194,41 @@ impl RtlSdr {
                 "direct sampling mode {mode} (use 0, 1, or 2)"
             )));
         }
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            return Ok(());
+        }
         check("rtlsdr_set_direct_sampling", unsafe {
             sys::rtlsdr_set_direct_sampling(self.dev, mode as c_int)
         })
     }
 
     pub fn set_offset_tuning(&mut self, on: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            let _ = on;
+            return Ok(());
+        }
         check("rtlsdr_set_offset_tuning", unsafe {
             sys::rtlsdr_set_offset_tuning(self.dev, on as c_int)
         })
     }
 
     pub fn set_bias_tee(&mut self, on: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            let _ = on;
+            return Ok(());
+        }
         check("rtlsdr_set_bias_tee", unsafe { sys::rtlsdr_set_bias_tee(self.dev, on as c_int) })
     }
 
     pub fn set_tuner_gain(&mut self, gain_db10: i32) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            let _ = gain_db10;
+            return Ok(());
+        }
         let gain = self.clamp_tuner_gain(gain_db10);
         check("rtlsdr_set_tuner_gain", unsafe {
             sys::rtlsdr_set_tuner_gain(self.dev, gain)
@@ -172,12 +236,22 @@ impl RtlSdr {
     }
 
     pub fn set_tuner_gain_mode(&mut self, manual: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            let _ = manual;
+            return Ok(());
+        }
         check("rtlsdr_set_tuner_gain_mode", unsafe {
             sys::rtlsdr_set_tuner_gain_mode(self.dev, manual as c_int)
         })
     }
 
     pub fn set_freq_correction(&mut self, ppm: i32) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            let _ = ppm;
+            return Ok(());
+        }
         check("rtlsdr_set_freq_correction", unsafe {
             sys::rtlsdr_set_freq_correction(self.dev, ppm)
         })
@@ -197,6 +271,11 @@ impl IqSource for RtlSdr {
         if self.streaming {
             return Err(SourceError::InvalidState("stop before changing sample rate"));
         }
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            self.sample_rate = sr;
+            return Ok(());
+        }
         check("rtlsdr_set_sample_rate", unsafe {
             sys::rtlsdr_set_sample_rate(self.dev, sr)
         })?;
@@ -206,6 +285,11 @@ impl IqSource for RtlSdr {
     }
 
     fn tune(&mut self, hz: f64) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            self.freq_hz = hz;
+            return Ok(());
+        }
         let freq = hz.round().clamp(0.0, u32::MAX as f64) as u32;
         check("rtlsdr_set_center_freq", unsafe {
             sys::rtlsdr_set_center_freq(self.dev, freq)
@@ -221,6 +305,15 @@ impl IqSource for RtlSdr {
     fn start(&mut self) -> Result<Consumer<Complex32>> {
         if self.streaming {
             return Err(SourceError::InvalidState("already streaming"));
+        }
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock.as_mut() {
+            let sr = self.sample_rate;
+            let capacity = iq_ring_capacity(sr);
+            let (stream, cons) = crate::mock_hal::MockIqStream::start(sr, capacity);
+            m.stream = Some(stream);
+            self.streaming = true;
+            return Ok(cons);
         }
         let capacity = iq_ring_capacity(self.sample_rate);
         let (prod, cons) = RingBuffer::<Complex32>::new(capacity);
@@ -255,6 +348,14 @@ impl IqSource for RtlSdr {
 
     fn stop(&mut self) -> Result<()> {
         if !self.streaming {
+            return Ok(());
+        }
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.stream.take();
+            self.streaming = false;
+            self.ctx = None;
+            self.async_thread = None;
             return Ok(());
         }
         let rc = unsafe { sys::rtlsdr_cancel_async(self.dev) };
@@ -300,6 +401,10 @@ impl RtlSdrControls for RtlSdr {
 impl Drop for RtlSdr {
     fn drop(&mut self) {
         let _ = self.stop();
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            return;
+        }
         if !self.dev.is_null() {
             unsafe { sys::rtlsdr_close(self.dev) };
             self.dev = std::ptr::null_mut();

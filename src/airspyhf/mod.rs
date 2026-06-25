@@ -68,9 +68,56 @@ pub struct AirspyHf {
     dropped: Arc<AtomicU64>,
     // Kept alive (and pinned) for as long as the C side may call back.
     ctx: Option<Box<StreamCtx>>,
+    #[cfg(any(test, coverage, mock_hal))]
+    mock: Option<AirspyMock>,
+}
+
+#[cfg(any(test, coverage, mock_hal))]
+struct AirspyMock {
+    stream: Option<crate::mock_hal::MockIqStream>,
+    hf_att: u8,
+    hf_lna: bool,
+    hf_agc: bool,
+    hf_agc_threshold_high: bool,
+    frontend_flags: u32,
+    bias_tee: bool,
+    lib_dsp: bool,
+    calibration_ppb: i32,
+}
+
+#[cfg(any(test, coverage, mock_hal))]
+impl AirspyHf {
+    fn mock_mut(&mut self) -> Option<&mut AirspyMock> {
+        self.mock.as_mut()
+    }
+
+    fn mock_ref(&self) -> Option<&AirspyMock> {
+        self.mock.as_ref()
+    }
+}
+
+#[cfg(any(test, coverage, mock_hal))]
+impl AirspyMock {
+    fn new() -> Self {
+        Self {
+            stream: None,
+            hf_att: 0,
+            hf_lna: false,
+            hf_agc: true,
+            hf_agc_threshold_high: false,
+            frontend_flags: 0,
+            bias_tee: false,
+            lib_dsp: true,
+            calibration_ppb: 0,
+        }
+    }
 }
 
 impl AirspyHf {
+    #[cfg(any(test, coverage, mock_hal))]
+    fn mock_rates() -> Vec<u32> {
+        vec![256_000, 384_000, 768_000]
+    }
     /// Library version string, e.g. `"1.6.8"`. Does not require a device.
     pub fn lib_version() -> String {
         let mut v = sys::airspyhf_lib_version_t {
@@ -85,6 +132,19 @@ impl AirspyHf {
 
     /// Open the first available Airspy HF+.
     pub fn open() -> Result<Self> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            return Ok(Self {
+                dev: std::ptr::null_mut(),
+                rates: Self::mock_rates(),
+                sample_rate: 384_000,
+                freq_hz: 0.0,
+                streaming: false,
+                dropped: Arc::new(AtomicU64::new(0)),
+                ctx: None,
+                mock: Some(AirspyMock::new()),
+            });
+        }
         let mut dev: *mut sys::airspyhf_device_t = std::ptr::null_mut();
         // SAFETY: `dev` is a valid out-pointer.
         let rc = unsafe { sys::airspyhf_open(&mut dev) };
@@ -101,11 +161,18 @@ impl AirspyHf {
             streaming: false,
             dropped: Arc::new(AtomicU64::new(0)),
             ctx: None,
+            #[cfg(any(test, coverage, mock_hal))]
+            mock: None,
         })
     }
 
     /// Open a specific unit by serial number.
     pub fn open_serial(serial: u64) -> Result<Self> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            let _ = serial;
+            return Self::open();
+        }
         let mut dev: *mut sys::airspyhf_device_t = std::ptr::null_mut();
         // SAFETY: `dev` is a valid out-pointer.
         let rc = unsafe { sys::airspyhf_open_sn(&mut dev, serial) };
@@ -122,11 +189,17 @@ impl AirspyHf {
             streaming: false,
             dropped: Arc::new(AtomicU64::new(0)),
             ctx: None,
+            #[cfg(any(test, coverage, mock_hal))]
+            mock: None,
         })
     }
 
     /// Serial numbers of all attached Airspy HF+ units.
     pub fn list_devices() -> Vec<u64> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            return vec![0xDEAD_BEEF];
+        }
         // SAFETY: count query with a null buffer.
         let count = unsafe { sys::airspyhf_list_devices(std::ptr::null_mut(), 0) };
         if count <= 0 {
@@ -141,6 +214,11 @@ impl AirspyHf {
 
     /// Enable/disable the library's IQ correction, IF shift, and fine tuning.
     pub fn set_lib_dsp(&mut self, on: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.lib_dsp = on;
+            return Ok(());
+        }
         check("airspyhf_set_lib_dsp", unsafe {
             sys::airspyhf_set_lib_dsp(self.dev, on as u8)
         })
@@ -148,6 +226,11 @@ impl AirspyHf {
 
     /// Frequency calibration in parts-per-billion.
     pub fn set_calibration_ppb(&mut self, ppb: i32) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.calibration_ppb = ppb;
+            return Ok(());
+        }
         check("airspyhf_set_calibration", unsafe {
             sys::airspyhf_set_calibration(self.dev, ppb)
         })
@@ -155,6 +238,10 @@ impl AirspyHf {
 
     /// Read the stored calibration (ppb).
     pub fn calibration_ppb(&self) -> Result<i32> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_ref() {
+            return Ok(m.calibration_ppb);
+        }
         let mut ppb = 0i32;
         // SAFETY: `ppb` is a valid out-pointer.
         let rc = unsafe { sys::airspyhf_get_calibration(self.dev, &mut ppb) };
@@ -163,6 +250,11 @@ impl AirspyHf {
 
     /// HF AGC on/off.
     pub fn set_hf_agc(&mut self, on: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.hf_agc = on;
+            return Ok(());
+        }
         check("airspyhf_set_hf_agc", unsafe {
             sys::airspyhf_set_hf_agc(self.dev, on as u8)
         })
@@ -170,6 +262,11 @@ impl AirspyHf {
 
     /// HF AGC threshold: `false` = low, `true` = high.
     pub fn set_hf_agc_threshold(&mut self, high: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.hf_agc_threshold_high = high;
+            return Ok(());
+        }
         check("airspyhf_set_hf_agc_threshold", unsafe {
             sys::airspyhf_set_hf_agc_threshold(self.dev, high as u8)
         })
@@ -182,6 +279,11 @@ impl AirspyHf {
                 "attenuator step {step} out of range 0..=8"
             )));
         }
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.hf_att = step;
+            return Ok(());
+        }
         check("airspyhf_set_hf_att", unsafe {
             sys::airspyhf_set_hf_att(self.dev, step)
         })
@@ -189,6 +291,11 @@ impl AirspyHf {
 
     /// LNA / preamp on/off (+6 dB, compensated digitally).
     pub fn set_hf_lna(&mut self, on: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.hf_lna = on;
+            return Ok(());
+        }
         check("airspyhf_set_hf_lna", unsafe {
             sys::airspyhf_set_hf_lna(self.dev, on as u8)
         })
@@ -198,6 +305,11 @@ impl AirspyHf {
     /// preselectors are automatic; these tune VHF Band-III and PLL behavior.
     /// Requires libairspyhf >= 1.8.
     pub fn set_frontend_options(&mut self, flags: u32) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.frontend_flags = flags;
+            return Ok(());
+        }
         #[cfg(airspyhf_extended_api)]
         {
             return check("airspyhf_set_frontend_options", unsafe {
@@ -213,6 +325,10 @@ impl AirspyHf {
 
     /// Requires libairspyhf >= 1.8.
     pub fn frontend_options(&self) -> Result<u32> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_ref() {
+            return Ok(m.frontend_flags);
+        }
         #[cfg(airspyhf_extended_api)]
         {
             let mut flags = 0u32;
@@ -226,6 +342,11 @@ impl AirspyHf {
     /// Antenna-port bias tee: powers external preamps/upconverters (0 = off, 1 = on).
     /// Requires libairspyhf >= 1.8.
     pub fn set_bias_tee(&mut self, on: bool) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            m.bias_tee = on;
+            return Ok(());
+        }
         #[cfg(airspyhf_extended_api)]
         {
             return check("airspyhf_set_bias_tee", unsafe {
@@ -241,12 +362,20 @@ impl AirspyHf {
 
     /// Whether the current sample rate runs the radio in Low-IF mode.
     pub fn is_low_if(&self) -> bool {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_ref().is_some() {
+            return false;
+        }
         // SAFETY: valid device handle.
         unsafe { sys::airspyhf_is_low_if(self.dev) == 1 }
     }
 
     /// IQ samples delivered per callback at the current sample rate.
     pub fn output_size(&self) -> usize {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_ref().is_some() {
+            return 8192;
+        }
         // SAFETY: valid device handle.
         let n = unsafe { sys::airspyhf_get_output_size(self.dev) };
         n.max(0) as usize
@@ -254,6 +383,10 @@ impl AirspyHf {
 
     /// Firmware version string reported by the device.
     pub fn firmware_version(&self) -> String {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_ref().is_some() {
+            return "mock-1.0".into();
+        }
         let mut buf = [0u8; 64];
         // SAFETY: 64-byte buffer; the library writes a NUL-terminated string.
         let rc = unsafe {
@@ -287,6 +420,11 @@ impl IqSource for AirspyHf {
         if !self.rates.is_empty() && !self.rates.contains(&sr) {
             return Err(SourceError::Unsupported(format!("sample rate {sr} not supported")));
         }
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            self.sample_rate = sr;
+            return Ok(());
+        }
         check("airspyhf_set_samplerate", unsafe {
             sys::airspyhf_set_samplerate(self.dev, sr)
         })?;
@@ -295,6 +433,11 @@ impl IqSource for AirspyHf {
     }
 
     fn tune(&mut self, hz: f64) -> Result<()> {
+        #[cfg(any(test, coverage, mock_hal))]
+        if self.mock_mut().is_some() {
+            self.freq_hz = hz;
+            return Ok(());
+        }
         let freq = hz.round().clamp(0.0, u32::MAX as f64) as u32;
         check("airspyhf_set_freq", unsafe {
             sys::airspyhf_set_freq(self.dev, freq)
@@ -310,6 +453,15 @@ impl IqSource for AirspyHf {
     fn start(&mut self) -> Result<Consumer<Complex32>> {
         if self.streaming {
             return Err(SourceError::InvalidState("already streaming"));
+        }
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock.as_mut() {
+            let sr = self.sample_rate;
+            let capacity = iq_ring_capacity(sr);
+            let (stream, cons) = crate::mock_hal::MockIqStream::start(sr, capacity);
+            m.stream = Some(stream);
+            self.streaming = true;
+            return Ok(cons);
         }
         let capacity = iq_ring_capacity(self.sample_rate);
         let (prod, cons) = RingBuffer::<Complex32>::new(capacity);
@@ -336,6 +488,15 @@ impl IqSource for AirspyHf {
         if !self.streaming {
             return Ok(());
         }
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_mut() {
+            if let Some(stream) = m.stream.take() {
+                drop(stream);
+            }
+            self.streaming = false;
+            self.ctx = None;
+            return Ok(());
+        }
         // SAFETY: valid device handle; `airspyhf_stop` blocks until the callback
         // has returned for the last time, so dropping `ctx` afterwards is sound.
         let rc = unsafe { sys::airspyhf_stop(self.dev) };
@@ -345,6 +506,12 @@ impl IqSource for AirspyHf {
     }
 
     fn dropped_samples(&self) -> u64 {
+        #[cfg(any(test, coverage, mock_hal))]
+        if let Some(m) = self.mock_ref() {
+            if let Some(stream) = &m.stream {
+                return stream.dropped.load(Ordering::Relaxed);
+            }
+        }
         self.dropped.load(Ordering::Relaxed)
     }
 
@@ -387,6 +554,13 @@ pub fn iq_ring_capacity(sample_rate: u32) -> usize {
 
 impl Drop for AirspyHf {
     fn drop(&mut self) {
+        #[cfg(any(test, coverage, mock_hal))]
+        {
+            if self.mock.is_some() {
+                let _ = <Self as IqSource>::stop(self);
+                return;
+            }
+        }
         if self.streaming {
             // SAFETY: stop the stream before freeing the callback context.
             unsafe { sys::airspyhf_stop(self.dev) };
