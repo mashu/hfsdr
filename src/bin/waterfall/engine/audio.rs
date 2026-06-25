@@ -1,7 +1,9 @@
 //! AF scope ring buffer (engine thread only).
 
-/// Samples retained for the AF scope strip (matches [`crate::meters::SCOPE_LEN`]).
-pub(crate) const SCOPE_LEN: usize = 320;
+/// Samples retained for the AF scope strip (~2–3 s of envelope history).
+pub(crate) const SCOPE_LEN: usize = 160;
+/// Max ring writes per demod block — keeps scroll rate calm.
+const SCOPE_WRITES_PER_BLOCK: usize = 4;
 
 pub(super) struct AudioScopeRing {
     buf: Vec<f32>,
@@ -24,7 +26,7 @@ impl AudioScopeRing {
         if samples.is_empty() {
             return;
         }
-        let stride = (samples.len() / 48).max(1);
+        let stride = (samples.len() / SCOPE_WRITES_PER_BLOCK).max(1);
         let mut block_peak = 0.0f32;
         let mut block_sq = 0.0f32;
         let mut n = 0u32;

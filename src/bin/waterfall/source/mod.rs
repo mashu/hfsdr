@@ -8,6 +8,7 @@
 mod cli;
 mod connection;
 mod iq_bridge;
+#[allow(unused_imports)] // engine-bench binary
 pub(crate) use iq_bridge::attach_dual_ring;
 pub mod controls_dispatch;
 mod device;
@@ -19,7 +20,9 @@ mod mock_hal_tests;
 
 pub use cli::request_from_args;
 pub use connection::{connect, ConnectRequest, SourceKind};
-pub use device::{Connection, DeviceSource};
+pub use device::Connection;
+#[allow(unused_imports)] // engine-bench binary
+pub use device::DeviceSource;
 pub use kinds::{
     is_local_source, source_kind_from_index, source_kind_index, source_kind_label,
     source_kind_labels,

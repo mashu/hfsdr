@@ -1,6 +1,5 @@
 //! RF level helpers, S-unit conversion, and tuning hints.
 
-pub const SCOPE_LEN: usize = 320;
 /// Classic “half scale” target (~−6 dB of full swing).
 pub const HALF_SCALE: f32 = 0.45;
 

@@ -18,8 +18,8 @@ pub(crate) use hfsdr::{
 pub(crate) use hfsdr::kiwi::protocol::{man_gain_db_below_max, man_gain_from_db_below_max};
 
 pub(crate) use crate::meters::{
-    self, AfScopeParams, DualAgcParams, classify_level, rf_level_dbm, show_dual_agc_loop,
-    show_status_rf_meter,
+    self, AfScopeParams, DualAgcParams, MeterSmoothed, classify_level, dbm_to_needle_t,
+    rf_level_dbm, show_dual_agc_loop, show_status_rf_meter,
 };
 pub(crate) use crate::audio::AudioOutput;
 pub(crate) use crate::colormap::db_to_colour;

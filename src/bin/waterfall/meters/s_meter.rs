@@ -287,7 +287,11 @@ fn paint_smeter_caption(
 }
 
 /// Classic analog S-meter with needle and S-unit scale (RF front-end panel only).
-pub fn show_analog_s_meter(ui: &mut Ui, p: &AnalogSmeterParams) -> eframe::egui::Response {
+pub fn show_analog_s_meter(
+    ui: &mut Ui,
+    p: &AnalogSmeterParams,
+    needle_t: f32,
+) -> eframe::egui::Response {
     let full_w = ui.available_width();
     let arc_h = (full_w * 0.44).clamp(ANALOG_SMETER_ARC_H_MIN, ANALOG_SMETER_ARC_H_MAX);
     let total_h = ANALOG_SMETER_ARC_TOP_PAD + arc_h + ANALOG_SMETER_CAPTION_H + 2.0;
@@ -297,13 +301,6 @@ pub fn show_analog_s_meter(ui: &mut Ui, p: &AnalogSmeterParams) -> eframe::egui:
         Pos2::new(face.left(), face.top() + ANALOG_SMETER_ARC_TOP_PAD),
         Pos2::new(face.right(), face.top() + ANALOG_SMETER_ARC_TOP_PAD + arc_h),
     );
-
-    let target_t = if p.streaming {
-        dbm_to_needle_t(p.dbm)
-    } else {
-        0.0
-    };
-    let needle_t = target_t;
 
     let painter = ui.painter_at(outer);
     paint_analog_s_meter_face(&painter, face, arc_rect, needle_t, p.streaming);
