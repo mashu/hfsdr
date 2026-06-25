@@ -22,11 +22,11 @@ impl WaterfallApp {
                     .small()
                     .color(if slow { egui::Color32::from_rgb(255, 180, 80) } else { MUTED }),
                 );
-            } else if nominal <= 96_000.0 {
+            } else if nominal <= 96_000.0 && !self.radio.cw.full_demod {
                 ui.label(
                     egui::RichText::new(
-                        "Listen demod uses the last 2048 IQ samples per pump on catch-up \
-                         (recording uses the full drain).",
+                        "Listen demod uses the last 2048 IQ samples per pump on catch-up. \
+                         Enable Full demod drain (below) for contest copy.",
                     )
                     .small()
                     .color(MUTED),
@@ -118,6 +118,15 @@ impl WaterfallApp {
             });
 
             popup_section(ui, "Decimation", Some("IQ rate into the CW channel chain"), |ui| {
+                ui.checkbox(
+                    &mut self.radio.cw.full_demod,
+                    "Full demod drain (contest)",
+                )
+                .on_hover_text(
+                    "Every IQ sample drained each pump goes through listen demod — no tail cap \
+                     on catch-up. Filter state stays continuous; no missed dits under ring pressure. \
+                     Off saves CPU when the ring over-fills (may clip audio during catch-up).",
+                );
                 let mut dec = self.radio.cw.decimation as i32;
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Factor").small().color(MUTED));

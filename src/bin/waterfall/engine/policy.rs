@@ -70,6 +70,20 @@ pub fn demod_tail_max(rate: f32) -> usize {
     }
 }
 
+/// Whether listen demod should see the entire drained batch (contest / recording).
+pub fn demod_uses_full_batch(recording: bool, full_demod: bool) -> bool {
+    recording || full_demod
+}
+
+/// IQ sample count fed to listen demod for this pump.
+pub fn demod_input_len(batch_len: usize, rate: f32, recording: bool, full_demod: bool) -> usize {
+    if demod_uses_full_batch(recording, full_demod) {
+        batch_len
+    } else {
+        wideband_tail_len(batch_len, rate, demod_tail_max(rate))
+    }
+}
+
 /// Decimated ingress length that covers the same time span as [`demod_tail_max`].
 pub fn spectrum_aligned_len(
     device_batch_len: usize,
@@ -273,6 +287,14 @@ mod tests {
         assert_eq!(demod_tail_max(384_000.0), MAX_AUDIO_SAMPLES_WB);
         assert_eq!(demod_tail_max(12_000.0), MAX_AUDIO_SAMPLES_NARROW);
         assert_eq!(demod_tail_max(96_000.0), MAX_AUDIO_SAMPLES_NARROW);
+    }
+
+    #[test]
+    fn demod_input_len_respects_full_batch_flag() {
+        assert_eq!(demod_input_len(8192, 12_000.0, false, true), 8192);
+        assert_eq!(demod_input_len(8192, 12_000.0, false, false), MAX_AUDIO_SAMPLES_NARROW);
+        assert_eq!(demod_input_len(8192, 12_000.0, true, false), 8192);
+        assert_eq!(demod_input_len(512, 12_000.0, false, false), 512);
     }
 
     #[test]

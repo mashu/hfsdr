@@ -146,6 +146,9 @@ impl WaterfallApp {
                         if let Some(i) = segment_choice(ui, "filter_passband", wide_sel, &["CW", "Wide"]) {
                             let was_wide = self.skimmer_ui.filter_wide;
                             self.skimmer_ui.filter_wide = i == 1;
+                            if !self.skimmer_ui.filter_wide {
+                                self.radio.cw.full_demod = true;
+                            }
                             if self.skimmer_ui.filter_wide && !was_wide
                                 && self.radio.cw.passband_hz < CW_PASSBAND_NARROW_MAX_HZ
                             {

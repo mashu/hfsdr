@@ -204,7 +204,7 @@ impl Engine {
 
         if use_ingress_worker {
             self.demod.process(
-                self.demod_input(batch.as_slice(), device_rate),
+                self.demod_input(batch.as_slice(), device_rate, cw.full_demod),
                 device_rate,
                 &cw,
                 &mut self.audio_scratch,
@@ -217,7 +217,7 @@ impl Engine {
             }
         } else if wideband && ingress_decim > 1 && self.spectrum_decim <= 1 && !dual_ring {
             let batch_demod = Arc::clone(&batch);
-            let demod_input = self.demod_input(batch_demod.as_slice(), device_rate);
+            let demod_input = self.demod_input(batch_demod.as_slice(), device_rate, cw.full_demod);
             let (demod, audio_scratch, ingress, decim_buf) = (
                 &mut self.demod,
                 &mut self.audio_scratch,
@@ -247,7 +247,7 @@ impl Engine {
                     params.full_drain_spectrum,
                 );
                 let batch_demod = Arc::clone(&batch);
-                let demod_input = self.demod_input(batch_demod.as_slice(), device_rate);
+                let demod_input = self.demod_input(batch_demod.as_slice(), device_rate, cw.full_demod);
                 let (demod, spectrum_front) = (&mut self.demod, &mut self.spectrum_front);
                 let (audio_scratch, spectrum_scratch) =
                     (&mut self.audio_scratch, &mut self.spectrum_scratch);
@@ -257,7 +257,7 @@ impl Engine {
                 );
             } else {
                 self.demod.process(
-                    self.demod_input(batch.as_slice(), device_rate),
+                    self.demod_input(batch.as_slice(), device_rate, cw.full_demod),
                     device_rate,
                     &cw,
                     &mut self.audio_scratch,

@@ -203,6 +203,8 @@ pub struct CwChannelSettings {
     pub diagnostic: DiagnosticBypassSettings,
     /// Use 2-pole IIR instead of linear FIR for lower CPU (may ring on fast CW).
     pub economy_filter: bool,
+    /// Process the full IQ drain through listen demod (no tail cap on catch-up).
+    pub full_demod: bool,
 }
 
 impl Default for CwChannelSettings {
@@ -226,6 +228,7 @@ impl Default for CwChannelSettings {
             agc_mode: AgcMode::Envelope,
             diagnostic: DiagnosticBypassSettings::default(),
             economy_filter: false,
+            full_demod: true,
         }
     }
 }
@@ -257,6 +260,7 @@ mod tests {
         assert_eq!(s.channel_filter, ChannelFilterKind::LinearFir);
         assert_eq!(s.agc_mode, AgcMode::Envelope);
         assert!(s.agc.enabled);
+        assert!(s.full_demod);
         assert!(!s.diagnostic.any_active());
     }
 
