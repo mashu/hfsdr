@@ -3,8 +3,7 @@ use crate::app::prelude::*;
 
 impl WaterfallApp {
 
-    /// Unified Yaesu-style software RF gain — applies to IQ on every source, even with
-    /// hardware/RF AGC on, so the S-meter and waterfall always track this knob.
+    /// Software RF gain — scales IQ for the S-meter, waterfall, and demod chain.
     pub(crate) fn software_rf_gain_control(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("RF gain").color(ACCENT));
@@ -27,21 +26,21 @@ impl WaterfallApp {
             }
             attach_rich_tooltip(
                 &resp,
-                Some("RF gain (software)"),
+                Some("RF gain"),
                 &[
-                    ("Yaesu-style", ACCENT),
+                    ("Level", ACCENT),
                     (
-                        "Scales the IQ before the S-meter, waterfall, and software AGC — identical on every radio, even when hardware/RF AGC is on.",
+                        "Raises or lowers signal on the S-meter, waterfall, and into the demod chain.",
                         MUTED,
                     ),
-                    ("S-meter & waterfall", OK),
+                    ("Audio volume", OK),
                     (
-                        "Both rise/fall with this knob. Software AGC compensates the audio, so volume stays steady while the meter still moves.",
+                        "Listening volume stays steady while the meter still responds to this knob.",
                         MUTED,
                     ),
-                    ("Hardware gain", MUTED),
+                    ("Hardware", MUTED),
                     (
-                        "Use the per-radio controls below to fix real front-end overload; use this for the day-to-day RF gain feel.",
+                        "Use the hardware controls below if the front end is overloaded.",
                         MUTED,
                     ),
                 ],

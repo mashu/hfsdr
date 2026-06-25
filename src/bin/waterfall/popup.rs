@@ -95,7 +95,9 @@ pub fn popup_section(ui: &mut Ui, title: &str, hint: Option<&str>, add_contents:
         .stroke(Stroke::new(1.0, Color32::from_rgb(42, 50, 66)))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
+            let w = ui.available_width();
+            ui.set_min_width(w);
+            ui.set_max_width(w);
             ui.horizontal(|ui| {
                 let bar = egui::Rect::from_min_size(ui.cursor().min, Vec2::new(2.0, 12.0));
                 ui.painter().rect_filled(bar, CornerRadius::same(1), ACCENT);
@@ -149,6 +151,16 @@ pub fn path_row(ui: &mut Ui, label: &str, path: &str, browse_label: &str) -> boo
         });
     });
     picked
+}
+
+pub fn truncate_middle(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let keep = max_chars.saturating_sub(1) / 2;
+    let head: String = s.chars().take(keep).collect();
+    let tail: String = s.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{head}…{tail}")
 }
 
 pub fn inline_stats(ui: &mut Ui, parts: &[(&str, String)]) {
@@ -211,15 +223,27 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tooltip: &str) -> egui::Response {
 }
 
 pub fn segment_choice(ui: &mut Ui, id: &str, selected: usize, labels: &[&str]) -> Option<usize> {
+    segment_choice_sized(ui, id, selected, labels, 64.0)
+}
+
+pub fn segment_choice_sized(
+    ui: &mut Ui,
+    id: &str,
+    selected: usize,
+    labels: &[&str],
+    min_button_width: f32,
+) -> Option<usize> {
     let mut picked = None;
+    let compact = min_button_width < 48.0;
     Frame::new()
         .fill(Color32::from_rgb(18, 22, 30))
         .corner_radius(CornerRadius::same(6))
         .stroke(Stroke::new(1.0, Color32::from_rgb(42, 50, 66)))
         .inner_margin(2.0)
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+            ui.set_max_width(ui.available_width());
+            let add_buttons = |ui: &mut Ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(2.0, 2.0);
                 for (i, label) in labels.iter().enumerate() {
                     let on = i == selected;
                     let resp = ui.add(
@@ -242,16 +266,43 @@ pub fn segment_choice(ui: &mut Ui, id: &str, selected: usize, labels: &[&str]) -
                             Stroke::NONE
                         })
                         .corner_radius(CornerRadius::same(5))
-                        .min_size(Vec2::new(64.0, 24.0)),
+                        .min_size(Vec2::new(min_button_width, 24.0)),
                     );
                     if resp.clicked() {
                         picked = Some(i);
                     }
                 }
-            });
+            };
+            if compact {
+                ui.horizontal_wrapped(add_buttons);
+            } else {
+                ui.horizontal(add_buttons);
+            }
         });
     let _ = id;
     picked
+}
+
+/// Segmented preset row for a numeric value; highlights the nearest preset within `match_eps`.
+pub fn preset_segment_f32(
+    ui: &mut Ui,
+    id: &str,
+    value: &mut f32,
+    presets: &[(&str, f32)],
+    match_eps: f32,
+) -> bool {
+    let selected = presets
+        .iter()
+        .position(|(_, hz)| (*value - hz).abs() <= match_eps)
+        .unwrap_or(presets.len());
+    let labels: Vec<&str> = presets.iter().map(|(label, _)| *label).collect();
+    if let Some(i) = segment_choice_sized(ui, id, selected, &labels, 36.0) {
+        if i < presets.len() {
+            *value = presets[i].1;
+            return true;
+        }
+    }
+    false
 }
 
 pub fn list_row(ui: &mut Ui, text: &str, enabled: bool) -> egui::Response {
@@ -348,12 +399,3 @@ pub fn configure_popup_window(
         .default_pos(default_pos)
 }
 
-fn truncate_middle(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let keep = max_chars.saturating_sub(1) / 2;
-    let head: String = s.chars().take(keep).collect();
-    let tail: String = s.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
-    format!("{head}…{tail}")
-}

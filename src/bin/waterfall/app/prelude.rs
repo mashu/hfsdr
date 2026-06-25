@@ -39,7 +39,7 @@ pub(crate) use crate::rf_view;
 pub(crate) use crate::popup::{
     alert_banner, chip_row, configure_popup_window, ghost_button, inline_stats, list_row,
     popup_header, popup_scroll_body, popup_section, primary_button, secondary_button,
-    segment_choice, PopupHeader,
+    preset_segment_f32, segment_choice, truncate_middle, PopupHeader,
 };
 pub(crate) use crate::iq_panel::{IqPanel, IqPanelCmd, IqPanelView};
 pub(crate) use crate::interaction::{
@@ -72,6 +72,6 @@ pub(crate) use crate::app::codec::{
     agc_mode_from_u8, agc_mode_to_u8, channel_filter_from_u8, channel_filter_to_u8,
     normalize_waterfall_avg, plot_action_changes_view, skimmer_config_from_settings,
     skimmer_decoder_from_u8, skimmer_decoder_to_u8, spot_sort_from_u8, spot_sort_to_u8,
-    window_choice, window_from_u8, window_to_u8,
+    window_from_u8, window_to_u8,
 };
 pub(crate) use crate::app::constants::*;

@@ -38,7 +38,8 @@ pub(crate) const CW_VHF_BAND_PRESETS: [CwBandPreset; 1] = [
 
 pub(crate) const DEFAULT_CENTER_HZ: f64 = 14_010_000.0;
 
-pub(crate) const BFO_PRESETS: [(&str, f32); 4] = [("500", 500.0), ("600", 600.0), ("700", 700.0), ("800", 800.0)];
+pub(crate) const BFO_PRESETS: [(&str, f32); 5] =
+    [("400", 400.0), ("450", 450.0), ("500", 500.0), ("600", 600.0), ("700", 700.0)];
 pub(crate) const FILTER_PRESETS: [(&str, f32); 6] = [
     ("50", 50.0),
     ("100", 100.0),

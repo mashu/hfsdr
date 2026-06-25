@@ -1,6 +1,5 @@
 //! Settings serialization helpers and small shared utilities.
 
-use eframe::egui;
 use hfsdr::{
     AgcMode, ChannelFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort, WindowKind,
     DecoderParams, EnvelopeSettings,
@@ -14,20 +13,6 @@ pub(crate) fn plot_action_changes_view(action: &PlotAction) -> bool {
         action,
         PlotAction::PanViewDeltaHz(_) | PlotAction::ZoomView(_) | PlotAction::SetViewPanHz(_)
     )
-}
-
-pub(crate) fn window_choice(
-    ui: &mut egui::Ui,
-    current: &mut WindowKind,
-    kind: WindowKind,
-    label: &str,
-    tip: &str,
-) {
-    let r = ui.selectable_label(*current == kind, label);
-    if r.clicked() {
-        *current = kind;
-    }
-    r.on_hover_text(tip);
 }
 
 pub(crate) fn window_to_u8(w: WindowKind) -> u8 {
@@ -145,5 +130,103 @@ pub(crate) fn normalize_waterfall_avg(value: u8) -> u8 {
         2 => 2,
         4 => 4,
         _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interaction::PlotAction;
+    use crate::settings::AppSettings;
+    use hfsdr::{
+        AgcMode, ChannelFilterKind, SkimmerDecoderKind, SpotSort, WindowKind,
+    };
+
+    #[test]
+    fn window_codec_roundtrip() {
+        for w in [
+            WindowKind::Gaussian,
+            WindowKind::RaisedCosine,
+            WindowKind::Blackman,
+            WindowKind::Kaiser,
+        ] {
+            assert_eq!(window_from_u8(window_to_u8(w)), w);
+        }
+        assert_eq!(window_from_u8(99), WindowKind::Gaussian);
+    }
+
+    #[test]
+    fn channel_filter_codec_roundtrip() {
+        for k in [ChannelFilterKind::LinearFir, ChannelFilterKind::Iir2Pole] {
+            assert_eq!(channel_filter_from_u8(channel_filter_to_u8(k)), k);
+        }
+        assert_eq!(
+            channel_filter_from_u8(9),
+            ChannelFilterKind::LinearFir
+        );
+    }
+
+    #[test]
+    fn agc_mode_codec_roundtrip() {
+        for m in [AgcMode::Envelope, AgcMode::Hang, AgcMode::DualLoop] {
+            assert_eq!(agc_mode_from_u8(agc_mode_to_u8(m)), m);
+        }
+        assert_eq!(agc_mode_from_u8(9), AgcMode::Envelope);
+    }
+
+    #[test]
+    fn spot_sort_codec_roundtrip() {
+        for s in [
+            SpotSort::SnrDesc,
+            SpotSort::Frequency,
+            SpotSort::LastHeard,
+            SpotSort::Callsign,
+        ] {
+            assert_eq!(spot_sort_from_u8(spot_sort_to_u8(s)), s);
+        }
+        assert_eq!(spot_sort_from_u8(9), SpotSort::SnrDesc);
+    }
+
+    #[test]
+    fn skimmer_decoder_codec_roundtrip() {
+        assert_eq!(
+            skimmer_decoder_from_u8(skimmer_decoder_to_u8(SkimmerDecoderKind::Bigram)),
+            SkimmerDecoderKind::Bigram
+        );
+        assert_eq!(
+            skimmer_decoder_from_u8(skimmer_decoder_to_u8(SkimmerDecoderKind::Adaptive)),
+            SkimmerDecoderKind::Adaptive
+        );
+        assert_eq!(
+            skimmer_decoder_from_u8(0),
+            SkimmerDecoderKind::Bigram
+        );
+    }
+
+    #[test]
+    fn normalize_waterfall_avg_only_allows_one_two_four() {
+        assert_eq!(normalize_waterfall_avg(1), 1);
+        assert_eq!(normalize_waterfall_avg(2), 2);
+        assert_eq!(normalize_waterfall_avg(4), 4);
+        assert_eq!(normalize_waterfall_avg(3), 1);
+        assert_eq!(normalize_waterfall_avg(99), 1);
+    }
+
+    #[test]
+    fn plot_action_changes_view_for_pan_and_zoom() {
+        assert!(plot_action_changes_view(&PlotAction::PanViewDeltaHz(100.0)));
+        assert!(plot_action_changes_view(&PlotAction::ZoomView(1.5)));
+        assert!(plot_action_changes_view(&PlotAction::SetViewPanHz(500.0)));
+        assert!(!plot_action_changes_view(&PlotAction::ClearTunePreview));
+        assert!(!plot_action_changes_view(&PlotAction::TuneDeltaHz(50.0)));
+    }
+
+    #[test]
+    fn skimmer_config_from_settings_clamps_channels() {
+        let mut s = AppSettings::default();
+        s.skimmer_max_channels = 0;
+        let cfg = skimmer_config_from_settings(&s);
+        assert!(cfg.max_channels >= 1);
+        assert_eq!(cfg.decoder_params.max_text_chars, s.skimmer_max_decode_chars.max(16));
     }
 }

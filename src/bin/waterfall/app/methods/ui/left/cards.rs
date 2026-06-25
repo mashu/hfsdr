@@ -118,11 +118,11 @@ impl WaterfallApp {
                 &[
                     ("RF gain", ACCENT),
                     (
-                        "Yaesu-style software gain — moves the S-meter and waterfall on every radio, even with hardware/RF AGC on.",
+                        "Adjusts level on the S-meter, waterfall, and into the demod chain.",
                         MUTED,
                     ),
                     ("Hardware front-end", OK),
-                    ("Per-radio gain/attenuator/AGC below set what the SDR actually sends.", MUTED),
+                    ("Gain, attenuator, and AGC settings for the connected radio.", MUTED),
                 ],
             );
             ui.horizontal(|ui| {
@@ -168,112 +168,105 @@ impl WaterfallApp {
             ]),
             true,
             |ui| {
-            ui.label(egui::RichText::new("① IQ — before demod").small().color(MUTED));
-            stage_toggle(
-                ui,
-                &mut self.radio.cw.noise_blanker.enabled,
-                "Noise blanker",
-                Some("Wideband IQ impulse blanker"),
-                Some("B"),
-                Some(&[
-                    ("Raw IQ", ACCENT),
-                    (
-                        "Blank lightning/ignition impulses — must run before the narrow channel filter.",
-                        WARN,
-                    ),
-                ]),
-            );
-            if self.radio.cw.noise_blanker.enabled {
-                scroll_slider_f32(ui, &mut self.radio.cw.noise_blanker.threshold, 2.0..=12.0, "NB threshold");
-                let mut width = self.radio.cw.noise_blanker.width as f32;
-                scroll_slider_f32(ui, &mut width, 1.0..=30.0, "NB recovery");
-                self.radio.cw.noise_blanker.width = width.round() as usize;
-            }
+                popup_section(ui, "IQ blanker", Some("Wideband impulse blanking before the channel filter"), |ui| {
+                    stage_toggle(
+                        ui,
+                        &mut self.radio.cw.noise_blanker.enabled,
+                        "Noise blanker",
+                        Some("Wideband IQ impulse blanker"),
+                        Some("B"),
+                        Some(&[
+                            ("Raw IQ", ACCENT),
+                            (
+                                "Blank lightning/ignition impulses — must run before the narrow channel filter.",
+                                WARN,
+                            ),
+                        ]),
+                    );
+                    if self.radio.cw.noise_blanker.enabled {
+                        scroll_slider_f32(
+                            ui,
+                            &mut self.radio.cw.noise_blanker.threshold,
+                            2.0..=12.0,
+                            "NB threshold",
+                        );
+                        let mut width = self.radio.cw.noise_blanker.width as f32;
+                        scroll_slider_f32(ui, &mut width, 1.0..=30.0, "NB recovery");
+                        self.radio.cw.noise_blanker.width = width.round() as usize;
+                    }
+                });
 
-            ui.separator();
-            self.manual_notches_body(ui);
+                popup_section(
+                    ui,
+                    "Manual notches",
+                    Some("Drag purple markers on the spectrum · keys 1–4"),
+                    |ui| {
+                        self.manual_notches_body(ui);
+                    },
+                );
 
-            ui.separator();
-            ui.label(egui::RichText::new("⑤ Audio — after BFO demod (optional)").small().color(MUTED));
-            stage_toggle(
-                ui,
-                &mut self.radio.cw.apf.enabled,
-                "Audio peak filter",
-                Some("Resonant boost at BFO pitch"),
-                Some("P"),
-                None,
-            );
-            if self.radio.cw.apf.enabled {
-                scroll_slider_f32(ui, &mut self.radio.cw.apf.width_hz, 40.0..=300.0, "APF width");
-                scroll_slider_f32(ui, &mut self.radio.cw.apf.gain, 0.2..=4.0, "APF gain");
-            }
+                popup_section(ui, "Audio polish", Some("Optional stages after BFO demod"), |ui| {
+                    stage_toggle(
+                        ui,
+                        &mut self.radio.cw.apf.enabled,
+                        "Audio peak filter",
+                        Some("Resonant boost at BFO pitch"),
+                        Some("P"),
+                        None,
+                    );
+                    if self.radio.cw.apf.enabled {
+                        scroll_slider_f32(ui, &mut self.radio.cw.apf.width_hz, 40.0..=300.0, "APF width");
+                        scroll_slider_f32(ui, &mut self.radio.cw.apf.gain, 0.2..=4.0, "APF gain");
+                    }
 
-            stage_toggle(
-                ui,
-                &mut self.radio.cw.auto_notch.enabled,
-                "Auto-notch",
-                Some("Audio LMS with BFO guard"),
-                Some("N"),
-                Some(&[
-                    ("Post-demod", ACCENT),
-                    (
-                        "Can see your BFO tone and freeze while you copy.",
-                        MUTED,
-                    ),
-                    (
-                        "Purple IQ notches above are better for hets — they run before demod.",
-                        OK,
-                    ),
-                ]),
-            );
-            if self.radio.cw.auto_notch.enabled {
-                scroll_slider_f32(ui, &mut self.radio.cw.auto_notch.guard_hz, 60.0..=300.0, "Guard ±Hz");
-                scroll_slider_f32(ui, &mut self.radio.cw.auto_notch.rate, 0.002..=0.1, "Adapt rate");
-            }
+                    stage_toggle(
+                        ui,
+                        &mut self.radio.cw.auto_notch.enabled,
+                        "Auto-notch",
+                        Some("Audio LMS with BFO guard"),
+                        Some("N"),
+                        Some(&[
+                            ("Post-demod", ACCENT),
+                            (
+                                "Can see your BFO tone and freeze while you copy.",
+                                MUTED,
+                            ),
+                            (
+                                "Purple IQ notches above are better for hets — they run before demod.",
+                                OK,
+                            ),
+                        ]),
+                    );
+                    if self.radio.cw.auto_notch.enabled {
+                        scroll_slider_f32(ui, &mut self.radio.cw.auto_notch.guard_hz, 60.0..=300.0, "Guard ±Hz");
+                        scroll_slider_f32(ui, &mut self.radio.cw.auto_notch.rate, 0.002..=0.1, "Adapt rate");
+                    }
 
-            stage_toggle(
-                ui,
-                &mut self.radio.cw.noise_reduction.enabled,
-                "Noise reduction",
-                Some("Light audio LMS polish"),
-                Some("R"),
-                Some(&[
-                    ("Optional polish", ACCENT),
-                    (
-                        "The IQ channel filter is the real noise remover — NR does not belong before demod.",
-                        MUTED,
-                    ),
-                ]),
-            );
-            if self.radio.cw.noise_reduction.enabled {
-                scroll_slider_f32(ui, &mut self.radio.cw.noise_reduction.level, 0.0..=0.5, "NR level");
-            }
-        });
+                    stage_toggle(
+                        ui,
+                        &mut self.radio.cw.noise_reduction.enabled,
+                        "Noise reduction",
+                        Some("Light audio LMS polish"),
+                        Some("R"),
+                        Some(&[
+                            ("Optional polish", ACCENT),
+                            (
+                                "The IQ channel filter is the real noise remover — NR does not belong before demod.",
+                                MUTED,
+                            ),
+                        ]),
+                    );
+                    if self.radio.cw.noise_reduction.enabled {
+                        scroll_slider_f32(ui, &mut self.radio.cw.noise_reduction.level, 0.0..=0.5, "NR level");
+                    }
+                });
+            },
+        );
     }
 
 
 
     pub(crate) fn manual_notches_body(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let label = ui.label(
-                egui::RichText::new("Manual notches — complex IQ")
-                    .small()
-                    .color(MUTED),
-            );
-            let hint = ui.label(egui::RichText::new("(?)").small().color(MUTED));
-            let tip = &[
-                ("Pre-demod", ACCENT),
-                (
-                    "Removes hets while the carrier is still recoverable. Drag purple markers on the spectrum.",
-                    MUTED,
-                ),
-                ("Keys 1–4", OK),
-                ("Toggle notches · new ones land on listen ±80 Hz.", MUTED),
-            ];
-            attach_rich_tooltip(&label, Some("Manual notches"), tip);
-            attach_rich_tooltip(&hint, Some("Manual notches"), tip);
-        });
         for idx in 0..MAX_NOTCHES {
             let was_enabled = self.radio.cw.notches[idx].enabled;
             let key = match idx {

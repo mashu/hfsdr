@@ -20,7 +20,3 @@ pub use kinds::{
     source_kind_labels,
 };
 pub use settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};
-#[cfg(feature = "airspy")]
-pub use settings::default_airspy_sample_rate;
-#[cfg(feature = "rtlsdr")]
-pub use settings::default_rtlsdr_sample_rate;

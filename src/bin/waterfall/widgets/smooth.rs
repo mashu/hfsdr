@@ -32,3 +32,33 @@ pub fn spatial_smooth(row: &[f32]) -> Vec<f32> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ema_seeds_from_quiet_floor() {
+        let mut smoothed = vec![-120.0; 4];
+        let row = [-80.0, -70.0, -60.0, -50.0];
+        ema_update(&mut smoothed, &row, 0.5);
+        assert_eq!(smoothed[0], -80.0);
+        ema_update(&mut smoothed, &row, 0.5);
+        assert!((smoothed[0] - -80.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn spatial_smooth_leaves_short_rows_unchanged() {
+        let row = [1.0, 2.0, 3.0];
+        assert_eq!(spatial_smooth(&row), row.to_vec());
+    }
+
+    #[test]
+    fn spatial_smooth_blends_center_bin() {
+        let row = vec![0.0, 0.0, 10.0, 0.0, 0.0];
+        let out = spatial_smooth(&row);
+        assert!(out[2] > 5.0 && out[2] < 10.0);
+        assert_eq!(out[0], 0.0);
+        assert_eq!(out[4], 0.0);
+    }
+}

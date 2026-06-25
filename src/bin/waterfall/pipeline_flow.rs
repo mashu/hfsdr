@@ -791,3 +791,77 @@ fn decim_factor(manual: u32, sample_rate: f32) -> usize {
         manual as usize
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::EngineStats;
+    use eframe::egui;
+    use hfsdr::CwChannelSettings;
+
+    fn sample_snapshot<'a>(
+        ingress_decim: usize,
+        cw: &'a CwChannelSettings,
+        stats: &'a EngineStats,
+    ) -> PipelineSnapshot<'a> {
+        PipelineSnapshot {
+            source_label: "test",
+            streaming: true,
+            device_rate_hz: 384_000.0,
+            ingress_decim,
+            cw,
+            skimmer_enabled: true,
+            audio_enabled: true,
+            stats,
+        }
+    }
+
+    #[test]
+    fn pipeline_stage_labels_non_empty() {
+        let stages = [
+            PipelineStage::NoiseBlanker,
+            PipelineStage::Skimmer,
+            PipelineStage::AudioOutput,
+        ];
+        for stage in stages {
+            assert!(!stage.label().is_empty());
+        }
+        assert!(PipelineStage::ListenNco.is_diagnostic());
+        assert!(!PipelineStage::Agc.is_diagnostic());
+    }
+
+    #[test]
+    fn pipeline_layout_tracks_offsets() {
+        let mut layout = PipelineLayout::default();
+        assert_eq!(layout.offset(NodeId::Source), egui::Vec2::ZERO);
+        layout.add_offset(NodeId::Source, egui::vec2(10.0, 5.0));
+        assert_eq!(layout.offset(NodeId::Source).x, 10.0);
+        layout.reset();
+        assert_eq!(layout.offset(NodeId::Source), egui::Vec2::ZERO);
+    }
+
+    #[test]
+    fn build_graph_includes_ingress_when_decimating() {
+        let cw = CwChannelSettings::default();
+        let stats = EngineStats::default();
+        let snap = sample_snapshot(4, &cw, &stats);
+        let graph = build_graph(&snap);
+        assert!(graph.nodes.iter().any(|n| n.id == NodeId::IngressDecim));
+        assert!(graph.edges.len() > 10);
+    }
+
+    #[test]
+    fn build_graph_omits_ingress_at_unity() {
+        let cw = CwChannelSettings::default();
+        let stats = EngineStats::default();
+        let snap = sample_snapshot(1, &cw, &stats);
+        let graph = build_graph(&snap);
+        assert!(!graph.nodes.iter().any(|n| n.id == NodeId::IngressDecim));
+    }
+
+    #[test]
+    fn decim_factor_auto_uses_library_heuristic() {
+        assert!(decim_factor(0, 384_000.0) > 1);
+        assert_eq!(decim_factor(8, 384_000.0), 8);
+    }
+}

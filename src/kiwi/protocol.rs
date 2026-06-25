@@ -361,21 +361,37 @@ mod parse_tests {
     }
 
     #[test]
-    fn parse_snd_decodes_iq_samples() {
-        let frame = make_snd_frame(&[(16384, 0), (0, -16384)]);
-        let (mut prod, mut cons) = RingBuffer::<Complex32>::new(8);
+    fn push_iq_samples_decodes_pairs() {
+        let iq: Vec<u8> = [16384i16, 0, 0, -16384]
+            .into_iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect();
+        let (mut prod, mut cons) = RingBuffer::<Complex32>::new(4);
+        let dropped = AtomicU64::new(0);
+        push_iq_samples(&iq, &mut prod, &dropped);
+        let s0 = cons.pop().unwrap();
+        assert!((s0.re - 0.5).abs() < 0.01);
+        let s1 = cons.pop().unwrap();
+        assert!((s1.im + 0.5).abs() < 0.01);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn kiwi_msg_params_strips_prefix() {
+        assert_eq!(kiwi_msg_params("MSG sample_rate=12000"), "sample_rate=12000");
+        assert_eq!(kiwi_msg_params("sample_rate=12000"), "sample_rate=12000");
+    }
+
+    #[test]
+    fn parse_snd_updates_smeter() {
+        let frame = make_snd_frame(&[(0, 0)]);
+        let (mut prod, _cons) = RingBuffer::<Complex32>::new(4);
         let dropped = AtomicU64::new(0);
         let rssi = AtomicI32::new(0);
 
         parse_snd(&frame, &mut prod, &dropped, &rssi);
-
-        let s0 = cons.pop().expect("sample 0");
-        assert!((s0.re - 0.5).abs() < 0.01);
-        assert!(s0.im.abs() < 0.01);
-
-        let s1 = cons.pop().expect("sample 1");
-        assert!(s1.re.abs() < 0.01);
-        assert!((s1.im + 0.5).abs() < 0.01);
+        // S-meter field is 1000 → 0.1 * 1000 - 127 = -27.0 dBm
+        assert_eq!(rssi.load(Ordering::Relaxed), -2700);
     }
 
     #[test]

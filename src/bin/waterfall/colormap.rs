@@ -39,4 +39,19 @@ mod tests {
         let c = db_to_colour(-100.0, -20.0, 80.0);
         assert!(c.r() < 30 && c.b() < 80);
     }
+
+    #[test]
+    fn ceiling_is_bright() {
+        let c = db_to_colour(0.0, -20.0, 80.0);
+        assert!(c.r() > 200 && c.g() > 200);
+    }
+
+    #[test]
+    fn mid_range_is_between_floor_and_ceiling() {
+        let floor = db_to_colour(-100.0, -20.0, 80.0);
+        let mid = db_to_colour(-60.0, -20.0, 80.0);
+        let ceiling = db_to_colour(0.0, -20.0, 80.0);
+        assert!(mid.r() > floor.r());
+        assert!(mid.r() < ceiling.r());
+    }
 }

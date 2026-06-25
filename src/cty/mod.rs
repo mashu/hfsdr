@@ -118,6 +118,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn continent_codes_are_two_letters() {
+        assert_eq!(Continent::NorthAmerica.code(), "NA");
+        assert_eq!(Continent::SouthAmerica.code(), "SA");
+        assert_eq!(Continent::Europe.code(), "EU");
+        assert_eq!(Continent::Africa.code(), "AF");
+        assert_eq!(Continent::Asia.code(), "AS");
+        assert_eq!(Continent::Oceania.code(), "OC");
+        assert_eq!(Continent::Antarctica.code(), "AN");
+        assert_eq!(Continent::ALL.len(), 7);
+        assert!(Continent::ALL.contains(&Continent::Antarctica));
+    }
+
+    #[test]
     fn resolves_common_prefixes() {
         let r = ContinentResolver::new();
         assert_eq!(r.continent_of("W1AW"), Some(Continent::NorthAmerica));
@@ -127,8 +140,46 @@ mod tests {
     }
 
     #[test]
+    fn resolves_asia_africa_and_europe_two_letter() {
+        let r = ContinentResolver::new();
+        assert_eq!(r.continent_of("JA1ABC"), Some(Continent::Asia));
+        assert_eq!(r.continent_of("VU2XYZ"), Some(Continent::Asia));
+        assert_eq!(r.continent_of("ZS6ABC"), Some(Continent::Africa));
+        assert_eq!(r.continent_of("UA3ABC"), Some(Continent::Europe));
+        assert_eq!(r.continent_of("LU7ABC"), Some(Continent::SouthAmerica));
+    }
+
+    #[test]
+    fn resolves_single_letter_prefix_fallback() {
+        let r = ContinentResolver::new();
+        assert_eq!(r.continent_of("K0ABC"), Some(Continent::NorthAmerica));
+        assert_eq!(r.continent_of("G4ABC"), Some(Continent::Europe));
+        assert_eq!(r.continent_of("JH1ABC"), Some(Continent::Asia));
+        assert_eq!(r.continent_of("VE3ABC"), Some(Continent::NorthAmerica));
+    }
+
+    #[test]
     fn handles_portable_calls() {
         let r = ContinentResolver::new();
         assert_eq!(r.continent_of("W1AW/3"), Some(Continent::NorthAmerica));
+        assert_eq!(r.continent_of("g0abc/m"), Some(Continent::Europe));
+        assert_eq!(r.continent_of("  w1aw  "), Some(Continent::NorthAmerica));
+    }
+
+    #[test]
+    fn unknown_or_empty_callsign() {
+        let r = ContinentResolver::new();
+        assert_eq!(r.continent_of(""), None);
+        assert_eq!(r.continent_of("   "), None);
+        assert_eq!(r.continent_of("Q9999"), None);
+    }
+
+    #[test]
+    fn load_cty_dat_falls_back_to_prefix_table() {
+        let mut r = ContinentResolver::new();
+        assert!(!r.uses_full_database());
+        assert!(!r.load_cty_dat("Country file contents"));
+        assert!(!r.uses_full_database());
+        assert_eq!(r.continent_of("W1AW"), Some(Continent::NorthAmerica));
     }
 }
