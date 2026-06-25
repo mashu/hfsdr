@@ -3,7 +3,7 @@
 //! A bridge thread drains the device ring and fans out to both rings so the
 //! engine pump no longer runs ingress FIR decimation on the hot path.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -11,9 +11,25 @@ use std::time::Duration;
 use hfsdr::{Complex32, DecimFilterKind, FirDecimator};
 use rtrb::{Consumer, RingBuffer};
 
+fn filter_from_atomic(v: u8) -> DecimFilterKind {
+    if v == 1 {
+        DecimFilterKind::Iir2Pole
+    } else {
+        DecimFilterKind::LinearFir
+    }
+}
+
+fn filter_to_atomic(kind: DecimFilterKind) -> u8 {
+    match kind {
+        DecimFilterKind::Iir2Pole => 1,
+        DecimFilterKind::LinearFir => 0,
+    }
+}
+
 /// Background tap: device IQ → raw ring + decimated ring.
 pub struct IqDualRingBridge {
     stop: Arc<AtomicBool>,
+    filter_ctl: Arc<AtomicU8>,
     join: Option<JoinHandle<()>>,
     raw_dropped: Arc<AtomicU64>,
     decim_dropped: Arc<AtomicU64>,
@@ -33,6 +49,8 @@ impl IqDualRingBridge {
         let (mut decim_prod, decim_cons) = RingBuffer::new(decim_cap);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = Arc::clone(&stop);
+        let filter_ctl = Arc::new(AtomicU8::new(filter_to_atomic(filter_kind)));
+        let filter_t = Arc::clone(&filter_ctl);
         let raw_dropped = Arc::new(AtomicU64::new(0));
         let decim_dropped = Arc::new(AtomicU64::new(0));
         let raw_dropped_t = Arc::clone(&raw_dropped);
@@ -41,10 +59,17 @@ impl IqDualRingBridge {
         let join = thread::Builder::new()
             .name("hfsdr-iq-bridge".into())
             .spawn(move || {
-                let mut decim = FirDecimator::with_factor(device_rate, factor, true, filter_kind);
+                let mut decim =
+                    FirDecimator::with_factor(device_rate, factor, true, filter_kind);
+                let mut active_filter = filter_kind;
                 loop {
                     if stop_t.load(Ordering::Relaxed) {
                         break;
+                    }
+                    let wanted = filter_from_atomic(filter_t.load(Ordering::Relaxed));
+                    if wanted != active_filter {
+                        decim.sync_filter(device_rate, wanted);
+                        active_filter = wanted;
                     }
                     match device.pop() {
                         Ok(sample) => {
@@ -68,6 +93,7 @@ impl IqDualRingBridge {
         (
             Self {
                 stop,
+                filter_ctl,
                 join: Some(join),
                 raw_dropped,
                 decim_dropped,
@@ -75,6 +101,11 @@ impl IqDualRingBridge {
             raw_cons,
             decim_cons,
         )
+    }
+
+    pub fn set_decim_filter(&self, kind: DecimFilterKind) {
+        self.filter_ctl
+            .store(filter_to_atomic(kind), Ordering::Relaxed);
     }
 
     pub fn raw_dropped(&self) -> u64 {
@@ -101,6 +132,7 @@ pub fn attach_dual_ring(
     ingress_decim: usize,
     device_rate: f32,
     ring_cap: usize,
+    filter_kind: DecimFilterKind,
 ) -> (
     Consumer<Complex32>,
     Option<Consumer<Complex32>>,
@@ -115,7 +147,7 @@ pub fn attach_dual_ring(
         device_iq,
         device_rate,
         ingress_decim,
-        DecimFilterKind::LinearFir,
+        filter_kind,
         ring_cap,
         decim_cap,
     );

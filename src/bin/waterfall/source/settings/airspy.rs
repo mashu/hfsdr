@@ -62,15 +62,7 @@ impl AirspySettings {
     }
 
     pub fn ingress_decimation(&self, device_rate: u32) -> (usize, f32) {
-        if self.iq_process_hz == 0 || self.iq_process_hz >= device_rate {
-            return (1, device_rate as f32);
-        }
-        if device_rate.is_multiple_of(self.iq_process_hz) {
-            let factor = (device_rate / self.iq_process_hz) as usize;
-            (factor.max(1), self.iq_process_hz as f32)
-        } else {
-            (1, device_rate as f32)
-        }
+        hfsdr::ingress_decimation_from_hz(self.iq_process_hz, device_rate)
     }
 }
 
@@ -106,6 +98,12 @@ mod tests {
         let mut s = AirspySettings::default();
         s.iq_process_hz = 192_000;
         assert_eq!(s.ingress_decimation(768_000), (4, 192_000.0));
+    }
+
+    #[test]
+    #[cfg(feature = "airspy")]
+    fn airspy_auto_process_at_768k_when_unset() {
+        assert_eq!(AirspySettings::default().ingress_decimation(768_000), (4, 192_000.0));
     }
 
     #[test]

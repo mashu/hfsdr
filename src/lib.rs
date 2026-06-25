@@ -74,5 +74,9 @@ pub use skimmer::{
     EnvelopeSettings, MasterScp, Peak, Skimmer, SkimmerConfig, SkimmerDecoderKind, Spot,
     SpotKind, SpotSort, SpotStore, MASTER_SCP_URL,
 };
+pub use source::ingress::{
+    effective_iq_process_hz, ingress_decimation_from_hz, DEFAULT_WIDEBAND_PROCESS_HZ,
+    WIDEBAND_PROCESS_THRESHOLD_HZ,
+};
 pub use source::controls::*;
 pub use source::{Complex32, Consumer, IqSource, Result, SourceError};

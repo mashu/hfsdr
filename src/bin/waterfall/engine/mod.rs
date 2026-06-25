@@ -20,6 +20,8 @@ mod policy;
 mod types;
 
 pub use handle::EngineHandle;
+pub(crate) use inner::Engine;
+pub(crate) use types::EngineShared;
 pub use types::{
     ConnState, EngineCommand, EngineParams, EnginePoll, EngineStats,
 };

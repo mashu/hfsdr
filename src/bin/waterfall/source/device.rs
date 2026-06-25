@@ -1,7 +1,6 @@
 //! Connected front end as a typed enum (IQ streaming + device-specific controls).
 
 use hfsdr::{KiwiControls, QmxControls, Complex32, Consumer, IqSource, KiwiSource, Result};
-#[cfg(test)]
 use rtrb::RingBuffer;
 #[cfg(feature = "airspy")]
 use hfsdr::AirspyHf;
@@ -116,7 +115,7 @@ pub struct Connection {
     /// Pre-decimated IQ for spectrum/skimmer when [`iq_ingress_decim`] > 1.
     pub iq_spectrum: Option<Consumer<Complex32>>,
     /// Keeps the ingress bridge thread alive.
-    pub(super) bridge: Option<IqDualRingBridge>,
+    pub(crate) bridge: Option<IqDualRingBridge>,
     pub iq_ring_capacity: usize,
     pub iq_spectrum_ring_capacity: usize,
     /// Native device IQ rate (full passband for demod and display).
@@ -140,6 +139,19 @@ impl Connection {
             .map(IqDualRingBridge::decim_dropped)
             .unwrap_or(0)
     }
+
+    pub fn bridge_raw_dropped(&self) -> u64 {
+        self.bridge
+            .as_ref()
+            .map(IqDualRingBridge::raw_dropped)
+            .unwrap_or(0)
+    }
+
+    pub fn sync_bridge_decim_filter(&self, kind: hfsdr::DecimFilterKind) {
+        if let Some(bridge) = &self.bridge {
+            bridge.set_decim_filter(kind);
+        }
+    }
 }
 
 impl Connection {
@@ -159,8 +171,7 @@ impl Connection {
             .unwrap_or(0.0)
     }
 
-    /// Ring buffer pre-filled with IQ for engine pump tests (no live hardware).
-    #[cfg(test)]
+    /// Ring buffer pre-filled with IQ for engine pump tests and benchmarks.
     pub(crate) fn mock_ring(samples: &[Complex32], center_hz: f64, is_kiwi: bool) -> Self {
         let (mut prod, cons) = RingBuffer::<Complex32>::new(65_536);
         for &s in samples {

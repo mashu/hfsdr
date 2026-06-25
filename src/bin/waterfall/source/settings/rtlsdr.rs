@@ -43,15 +43,7 @@ impl Default for RtlSdrSettings {
 #[cfg(feature = "rtlsdr")]
 impl RtlSdrSettings {
     pub fn ingress_decimation(&self, device_rate: u32) -> (usize, f32) {
-        if self.iq_process_hz == 0 || self.iq_process_hz >= device_rate {
-            return (1, device_rate as f32);
-        }
-        if device_rate.is_multiple_of(self.iq_process_hz) {
-            let factor = (device_rate / self.iq_process_hz) as usize;
-            (factor.max(1), self.iq_process_hz as f32)
-        } else {
-            (1, device_rate as f32)
-        }
+        hfsdr::ingress_decimation_from_hz(self.iq_process_hz, device_rate)
     }
 }
 
@@ -76,5 +68,14 @@ mod tests {
         let mut s = RtlSdrSettings::default();
         s.iq_process_hz = 48_000;
         assert_eq!(s.ingress_decimation(1_920_000), (40, 48_000.0));
+    }
+
+    #[test]
+    #[cfg(feature = "rtlsdr")]
+    fn rtlsdr_auto_process_at_1920k_when_unset() {
+        assert_eq!(
+            RtlSdrSettings::default().ingress_decimation(1_920_000),
+            (10, 192_000.0)
+        );
     }
 }

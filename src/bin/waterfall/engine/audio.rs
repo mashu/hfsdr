@@ -1,6 +1,7 @@
 //! AF scope ring buffer (engine thread only).
 
-use crate::meters::SCOPE_LEN;
+/// Samples retained for the AF scope strip (matches [`crate::meters::SCOPE_LEN`]).
+pub(crate) const SCOPE_LEN: usize = 320;
 
 pub(super) struct AudioScopeRing {
     buf: Vec<f32>,

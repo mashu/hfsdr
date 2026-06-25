@@ -16,6 +16,8 @@ pub struct PipelineMetrics {
     pub got_samples: usize,
     /// Engine catch-up pops on the raw IQ ring this pump.
     pub iq_dropped_catchup: u64,
+    /// Bridge thread drops on the raw ring (dual-ring path).
+    pub raw_ring_dropped: u64,
     /// Bridge thread drops on the decimated ring (dual-ring path).
     pub decim_ring_dropped: u64,
     pub fft_rows: usize,
@@ -52,6 +54,7 @@ impl PipelineMetrics {
         self.got_samples = ema_usize(self.got_samples, sample.got_samples, a, b);
         self.iq_dropped_catchup =
             ema_u64(self.iq_dropped_catchup, sample.iq_dropped_catchup, a, b);
+        self.raw_ring_dropped = ema_u64(self.raw_ring_dropped, sample.raw_ring_dropped, a, b);
         self.decim_ring_dropped =
             ema_u64(self.decim_ring_dropped, sample.decim_ring_dropped, a, b);
         self.fft_rows = ema_usize(self.fft_rows, sample.fft_rows, a, b);

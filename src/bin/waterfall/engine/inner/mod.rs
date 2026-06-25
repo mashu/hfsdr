@@ -29,13 +29,13 @@ use super::audio::AudioScopeRing;
 use super::types::{EngineCommand, EngineParams, EngineShared};
 
 /// Owned entirely by the engine thread.
-pub(super) struct Engine {
+pub(crate) struct Engine {
     cmd_rx: Receiver<EngineCommand>,
     shared: Arc<Mutex<EngineShared>>,
     params: Arc<Mutex<EngineParams>>,
     skimmer: SkimmerHandle,
 
-    conn: Option<Connection>,
+    pub(crate) conn: Option<Connection>,
     request: Option<ConnectRequest>,
     audio: Option<AudioOutput>,
     audio_device: Option<String>,
@@ -66,7 +66,7 @@ pub(super) struct Engine {
 
     last_data: Instant,
     connected_at: Instant,
-    first_iq_received: bool,
+    pub(crate) first_iq_received: bool,
     reconnect_attempt: u32,
     retry_at: Option<Instant>,
     rate_window_start: Instant,
@@ -77,7 +77,7 @@ pub(super) struct Engine {
 
     recorder: Option<IqRecorder>,
     recorder_samples: u64,
-    playback: Option<IqPlayback>,
+    pub(crate) playback: Option<IqPlayback>,
     iq_buffer_fill: f32,
     iq_buffer_secs: f32,
     iq_buffer_peak: f32,
