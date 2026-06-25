@@ -201,6 +201,8 @@ pub struct CwChannelSettings {
     pub agc_mode: AgcMode,
     /// Diagnostic bypass (flow diagram / A/B); not saved to disk.
     pub diagnostic: DiagnosticBypassSettings,
+    /// Use 2-pole IIR instead of linear FIR for lower CPU (may ring on fast CW).
+    pub economy_filter: bool,
 }
 
 impl Default for CwChannelSettings {
@@ -223,11 +225,21 @@ impl Default for CwChannelSettings {
             agc: AgcSettings::default(),
             agc_mode: AgcMode::Envelope,
             diagnostic: DiagnosticBypassSettings::default(),
+            economy_filter: false,
         }
     }
 }
 
 impl CwChannelSettings {
+    /// Channel filter after economy override.
+    pub fn effective_channel_filter(&self) -> ChannelFilterKind {
+        if self.economy_filter {
+            ChannelFilterKind::Iir2Pole
+        } else {
+            self.channel_filter
+        }
+    }
+
     pub fn channel_bandwidth_hz(&self) -> f32 {
         clamp_passband_hz(self.passband_hz)
     }

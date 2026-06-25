@@ -22,6 +22,15 @@ impl WaterfallApp {
                     .small()
                     .color(if slow { egui::Color32::from_rgb(255, 180, 80) } else { MUTED }),
                 );
+            } else if nominal <= 96_000.0 {
+                ui.label(
+                    egui::RichText::new(
+                        "Listen demod uses the last 2048 IQ samples per pump on catch-up \
+                         (recording uses the full drain).",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
             }
 
             popup_section(

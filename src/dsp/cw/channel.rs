@@ -9,7 +9,9 @@
 //! Manual notches and the channel filter run on complex IQ before demod.
 //! Auto-notch and NR are post-demod polish: auto-notch uses a BFO guard on audio;
 //! the IQ equivalent of NR is narrowing the channel filter.
-//! All stages are preallocated; the per-sample path never allocates.
+//! All stages are preallocated. IQ ingress (noise blanker → NCO → decimation) runs in
+//! block passes; the post-decimation chain (notches → FIR → AGC → BFO → polish) stays
+//! sample-sequential because IIR/AGC state must be ordered.
 
 use super::super::freq_offset::ListenOrigin;
 use crate::source::Complex32;
@@ -30,6 +32,46 @@ use super::settings::{
     ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
 };
 
+/// Per-call CPU breakdown for [`CwChannel::process_profiled`] / engine-bench.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CwStageMetrics {
+    pub iq_samples: usize,
+    pub audio_samples: usize,
+    pub noise_blanker_ns: u64,
+    pub nco_ns: u64,
+    pub decim_ns: u64,
+    /// Sum of post-decimation stages (notches → polish).
+    pub audio_chain_ns: u64,
+    pub notches_ns: u64,
+    pub channel_filter_ns: u64,
+    pub agc_ns: u64,
+    pub detector_ns: u64,
+    pub polish_ns: u64,
+}
+
+impl CwStageMetrics {
+    pub fn total_ns(&self) -> u64 {
+        self.noise_blanker_ns
+            .saturating_add(self.nco_ns)
+            .saturating_add(self.decim_ns)
+            .saturating_add(self.audio_chain_ns)
+    }
+
+    pub fn stage_rows(&self) -> [(&'static str, u64); 9] {
+        [
+            ("noise_blanker", self.noise_blanker_ns),
+            ("nco", self.nco_ns),
+            ("decim", self.decim_ns),
+            ("notches", self.notches_ns),
+            ("channel_fir", self.channel_filter_ns),
+            ("agc", self.agc_ns),
+            ("detector", self.detector_ns),
+            ("polish", self.polish_ns),
+            ("audio_chain", self.audio_chain_ns),
+        ]
+    }
+}
+
 /// Allocation-free CW receiver channel for one tuned signal.
 #[derive(Clone, Debug)]
 pub struct CwChannel {
@@ -48,6 +90,9 @@ pub struct CwChannel {
     snr_floor: f32,
     /// Pre-software-AGC level for S-meter only (independent AGC loop ballistics).
     rf_meter: f32,
+    work_iq: Vec<Complex32>,
+    work_mix: Vec<Complex32>,
+    work_decim: Vec<Complex32>,
     last_iq_rate: f32,
     last_decimation: u32,
     last_bandwidth: f32,
@@ -84,6 +129,9 @@ impl CwChannel {
             snr_peak: 1e-6,
             snr_floor: 1e-6,
             rf_meter: 1e-6,
+            work_iq: Vec::new(),
+            work_mix: Vec::new(),
+            work_decim: Vec::new(),
             last_iq_rate: iq_sample_rate,
             last_decimation: 0,
             last_bandwidth: DEFAULT_CHANNEL_PASSBAND_HZ,
@@ -125,9 +173,40 @@ impl CwChannel {
         origin: ListenOrigin,
         out: &mut Vec<f32>,
     ) {
+        self.process_inner(input, iq_rate, settings, origin, out, None);
+    }
+
+    /// Like [`Self::process`] but fills per-stage nanosecond timings (for profiling).
+    #[doc(hidden)]
+    pub fn process_profiled(
+        &mut self,
+        input: &[Complex32],
+        iq_rate: f32,
+        settings: &CwChannelSettings,
+        origin: ListenOrigin,
+        out: &mut Vec<f32>,
+        metrics: &mut CwStageMetrics,
+    ) {
+        *metrics = CwStageMetrics::default();
+        self.process_inner(input, iq_rate, settings, origin, out, Some(metrics));
+    }
+
+    fn process_inner(
+        &mut self,
+        input: &[Complex32],
+        iq_rate: f32,
+        settings: &CwChannelSettings,
+        origin: ListenOrigin,
+        out: &mut Vec<f32>,
+        mut metrics: Option<&mut CwStageMetrics>,
+    ) {
         out.clear();
         if input.is_empty() || iq_rate <= 0.0 {
             return;
+        }
+
+        if let Some(m) = metrics.as_mut() {
+            m.iq_samples = input.len();
         }
 
         self.sync_chain(iq_rate, settings);
@@ -139,46 +218,179 @@ impl CwChannel {
             origin
         };
 
-        for &sample in input {
-            let mut iq = sample;
-            if settings.noise_blanker.enabled {
-                iq = self.noise_blanker.process(
-                    iq,
-                    settings.noise_blanker.threshold,
-                    settings.noise_blanker.width,
+        let nb_used_scratch = if settings.noise_blanker.enabled {
+            let nb = &settings.noise_blanker;
+            if let Some(m) = metrics.as_mut() {
+                let t = std::time::Instant::now();
+                self.noise_blanker.process_block(
+                    input,
+                    &mut self.work_iq,
+                    nb.threshold,
+                    nb.width,
+                );
+                m.noise_blanker_ns = t.elapsed().as_nanos() as u64;
+            } else {
+                self.noise_blanker.process_block(
+                    input,
+                    &mut self.work_iq,
+                    nb.threshold,
+                    nb.width,
                 );
             }
+            true
+        } else {
+            false
+        };
+        let listen_offset = settings.listen_offset_hz.hz();
 
-            if !diag.listen_nco {
-                iq = self
-                    .shift_nco
-                    .mix_down(iq, settings.listen_offset_hz.hz(), iq_rate);
+        if diag.listen_nco {
+            if nb_used_scratch {
+                let front = std::mem::take(&mut self.work_iq);
+                if let Some(m) = metrics.as_mut() {
+                    let t = std::time::Instant::now();
+                    self.decimator
+                        .decimate_block(&front, &mut self.work_decim, diag.decim_fir);
+                    m.decim_ns = t.elapsed().as_nanos() as u64;
+                } else {
+                    self.decimator
+                        .decimate_block(&front, &mut self.work_decim, diag.decim_fir);
+                }
+            } else if let Some(m) = metrics.as_mut() {
+                let t = std::time::Instant::now();
+                self.decimator
+                    .decimate_block(input, &mut self.work_decim, diag.decim_fir);
+                m.decim_ns = t.elapsed().as_nanos() as u64;
+            } else {
+                self.decimator
+                    .decimate_block(input, &mut self.work_decim, diag.decim_fir);
             }
-
-            let Some(mut z) = self.decimator.push(iq, diag.decim_fir) else {
-                continue;
+        } else {
+            let nco_in: &[Complex32] = if nb_used_scratch {
+                &self.work_iq
+            } else {
+                input
             };
+            if let Some(m) = metrics.as_mut() {
+                let t_nco = std::time::Instant::now();
+                self.shift_nco.mix_down_block(
+                    nco_in,
+                    &mut self.work_mix,
+                    listen_offset,
+                    iq_rate,
+                );
+                m.nco_ns = t_nco.elapsed().as_nanos() as u64;
+                let mixed = std::mem::take(&mut self.work_mix);
+                let t_decim = std::time::Instant::now();
+                self.decimator
+                    .decimate_block(&mixed, &mut self.work_decim, diag.decim_fir);
+                m.decim_ns = t_decim.elapsed().as_nanos() as u64;
+            } else {
+                self.shift_nco.mix_down_block(
+                    nco_in,
+                    &mut self.work_mix,
+                    listen_offset,
+                    iq_rate,
+                );
+                let mixed = std::mem::take(&mut self.work_mix);
+                self.decimator
+                    .decimate_block(&mixed, &mut self.work_decim, diag.decim_fir);
+            }
+        }
 
+        for (notch, spec) in self.notches.iter_mut().zip(settings.notches.iter()) {
+            if spec.enabled {
+                notch.sync(audio_rate, spec.width_hz);
+            }
+        }
+
+        let decimated = std::mem::take(&mut self.work_decim);
+        out.reserve(decimated.len());
+        if let Some(m) = metrics.as_mut() {
+            m.audio_samples = decimated.len();
+            self.process_audio_chain(
+                &decimated,
+                audio_rate,
+                settings,
+                notch_origin,
+                diag,
+                out,
+                Some(m),
+            );
+        } else {
+            self.process_audio_chain(
+                &decimated,
+                audio_rate,
+                settings,
+                notch_origin,
+                diag,
+                out,
+                None,
+            );
+        }
+    }
+
+    fn process_audio_chain(
+        &mut self,
+        decimated: &[Complex32],
+        audio_rate: f32,
+        settings: &CwChannelSettings,
+        notch_origin: ListenOrigin,
+        diag: super::settings::DiagnosticBypassSettings,
+        out: &mut Vec<f32>,
+        mut metrics: Option<&mut CwStageMetrics>,
+    ) {
+        let channel_filter = settings.effective_channel_filter();
+
+        let t_notch = metrics.as_ref().map(|_| std::time::Instant::now());
+        self.work_mix.clear();
+        self.work_mix.reserve(decimated.len());
+        for &sample in decimated {
+            let mut z = sample;
             for (notch, spec) in self.notches.iter_mut().zip(settings.notches.iter()) {
                 if spec.enabled {
-                    notch.sync(audio_rate, spec.width_hz);
                     let rel = notch_origin.convert_for_notch(spec.offset_hz);
                     z = notch.process(z, rel, audio_rate);
                 }
             }
+            self.work_mix.push(z);
+        }
+        if let (Some(m), Some(t)) = (metrics.as_mut(), t_notch) {
+            m.notches_ns = t.elapsed().as_nanos() as u64;
+        }
 
-            let filtered = if diag.channel_fir {
-                z
-            } else {
-                match settings.channel_filter {
-                    ChannelFilterKind::LinearFir => self.channel_fir.process_complex(z),
-                    ChannelFilterKind::Iir2Pole => self.channel_iir.process_complex(z),
+        let t_fir = metrics.as_ref().map(|_| std::time::Instant::now());
+        if diag.channel_fir {
+            self.work_iq.clear();
+            self.work_iq.extend_from_slice(&self.work_mix);
+        } else {
+            match channel_filter {
+                ChannelFilterKind::LinearFir => {
+                    self.channel_fir
+                        .process_complex_block(&self.work_mix, &mut self.work_iq);
                 }
-            };
-            let level = filtered.norm().max(1e-7);
+                ChannelFilterKind::Iir2Pole => {
+                    self.work_iq.clear();
+                    self.work_iq.reserve(self.work_mix.len());
+                    for &z in &self.work_mix {
+                        self.work_iq.push(self.channel_iir.process_complex(z));
+                    }
+                }
+            }
+        }
+        for i in 0..self.work_iq.len() {
+            let level = self.work_iq[i].norm().max(1e-7);
             self.track_snr(level);
             self.track_rf_meter(level);
+        }
+        if let (Some(m), Some(t)) = (metrics.as_mut(), t_fir) {
+            m.channel_filter_ns = t.elapsed().as_nanos() as u64;
+        }
 
+        let t_agc = metrics.as_ref().map(|_| std::time::Instant::now());
+        self.work_mix.clear();
+        self.work_mix.reserve(self.work_iq.len());
+        for &filtered in &self.work_iq {
+            let level = filtered.norm().max(1e-7);
             let gain = if settings.agc.enabled {
                 self.agc.gain_for(
                     level,
@@ -198,20 +410,34 @@ impl CwChannel {
                 );
                 settings.agc.manual_gain
             };
-            let scaled = Complex32 {
+            self.work_mix.push(Complex32 {
                 re: filtered.re * gain,
                 im: filtered.im * gain,
-            };
+            });
+        }
+        if let (Some(m), Some(t)) = (metrics.as_mut(), t_agc) {
+            m.agc_ns = t.elapsed().as_nanos() as u64;
+        }
 
-            let mut audio = if diag.bfo {
+        let t_det = metrics.as_ref().map(|_| std::time::Instant::now());
+        out.reserve(out.len() + self.work_mix.len());
+        for &scaled in &self.work_mix {
+            out.push(if diag.bfo {
                 scaled.re
             } else {
                 self.detector.process(scaled, settings.bfo_hz, audio_rate)
-            };
+            });
+        }
+        if let (Some(m), Some(t)) = (metrics.as_mut(), t_det) {
+            m.detector_ns = t.elapsed().as_nanos() as u64;
+        }
 
+        let t_polish = metrics.as_ref().map(|_| std::time::Instant::now());
+        let polish_start = out.len().saturating_sub(self.work_iq.len());
+        for audio in &mut out[polish_start..] {
             if settings.apf.enabled {
-                audio = self.apf.process(
-                    audio,
+                *audio = self.apf.process(
+                    *audio,
                     audio_rate,
                     settings.bfo_hz,
                     settings.apf.width_hz,
@@ -219,8 +445,8 @@ impl CwChannel {
                 );
             }
             if settings.auto_notch.enabled {
-                audio = self.auto_notch.process(
-                    audio,
+                *audio = self.auto_notch.process(
+                    *audio,
                     audio_rate,
                     settings.bfo_hz,
                     settings.auto_notch.guard_hz,
@@ -228,12 +454,18 @@ impl CwChannel {
                 );
             }
             if settings.noise_reduction.enabled {
-                audio = self
+                *audio = self
                     .noise_reduction
-                    .process(audio, settings.noise_reduction.level);
+                    .process(*audio, settings.noise_reduction.level);
             }
-
-            out.push(audio);
+        }
+        if let (Some(m), Some(t)) = (metrics.as_mut(), t_polish) {
+            m.polish_ns = t.elapsed().as_nanos() as u64;
+            m.audio_chain_ns = m.notches_ns
+                + m.channel_filter_ns
+                + m.agc_ns
+                + m.detector_ns
+                + m.polish_ns;
         }
     }
 
@@ -286,11 +518,12 @@ impl CwChannel {
 
         let bandwidth = settings.channel_bandwidth_hz();
         let audio_rate = self.decimator.output_rate(iq_rate);
-        if settings.channel_filter != self.last_channel_filter {
+        let eff_filter = settings.effective_channel_filter();
+        if eff_filter != self.last_channel_filter {
             self.channel_iir.reset_state();
-            self.last_channel_filter = settings.channel_filter;
+            self.last_channel_filter = eff_filter;
         }
-        if settings.channel_filter == ChannelFilterKind::Iir2Pole {
+        if eff_filter == ChannelFilterKind::Iir2Pole {
             self.channel_iir.sync(audio_rate, bandwidth);
         }
         let design = LowpassDesign {
@@ -303,7 +536,7 @@ impl CwChannel {
             || settings.passband_flatten != self.last_passband_flatten
             || (settings.window == WindowKind::Kaiser
                 && (settings.kaiser_beta - self.last_kaiser_beta).abs() > 0.05);
-        if design_changed && settings.channel_filter == ChannelFilterKind::LinearFir {
+        if design_changed && eff_filter == ChannelFilterKind::LinearFir {
             self.channel_fir = design_lowpass_with(audio_rate, bandwidth, design);
             self.last_bandwidth = bandwidth;
             self.last_window = settings.window;
@@ -488,6 +721,7 @@ mod tests {
             window: WindowKind::Kaiser,
             kaiser_beta: 8.0,
             passband_flatten: true,
+            economy_filter: false,
             decimation: 2,
             noise_blanker: super::super::settings::NoiseBlankerSettings {
                 enabled: true,

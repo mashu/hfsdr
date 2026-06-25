@@ -11,6 +11,7 @@ impl WaterfallApp {
         self.radio.cw.window = window_from_u8(s.window);
         self.radio.cw.kaiser_beta = s.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
         self.radio.cw.passband_flatten = s.passband_flatten;
+        self.radio.cw.economy_filter = s.economy_filter;
         self.radio.cw.decimation = s.decimation;
         self.radio.cw.noise_blanker.enabled = s.nb_enabled;
         self.radio.cw.noise_blanker.threshold = s.nb_threshold;
@@ -122,6 +123,7 @@ impl WaterfallApp {
             window: window_to_u8(self.radio.cw.window),
             kaiser_beta: self.radio.cw.kaiser_beta,
             passband_flatten: self.radio.cw.passband_flatten,
+            economy_filter: self.radio.cw.economy_filter,
             decimation: self.radio.cw.decimation,
             nb_enabled: self.radio.cw.noise_blanker.enabled,
             nb_threshold: self.radio.cw.noise_blanker.threshold,

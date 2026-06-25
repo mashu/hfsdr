@@ -37,6 +37,21 @@ impl NoiseBlanker {
         self.gain = 1.0;
     }
 
+    /// Blank a block into `output` (state carries across calls).
+    pub fn process_block(
+        &mut self,
+        input: &[Complex32],
+        output: &mut Vec<Complex32>,
+        threshold: f32,
+        width: usize,
+    ) {
+        output.clear();
+        output.reserve(input.len());
+        for &sample in input {
+            output.push(self.process(sample, threshold, width));
+        }
+    }
+
     /// Attenuate `sample` if it (or a recent impulse) exceeds `threshold ×` the
     /// running average magnitude. `width` is the recovery tail in samples.
     pub fn process(&mut self, sample: Complex32, threshold: f32, width: usize) -> Complex32 {

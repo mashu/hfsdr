@@ -72,6 +72,26 @@ impl Decimator {
         self.counter = 0;
     }
 
+    /// Decimate a block into `output` (filter state carries across calls).
+    pub fn decimate_block(
+        &mut self,
+        input: &[Complex32],
+        output: &mut Vec<Complex32>,
+        bypass_fir: bool,
+    ) {
+        output.clear();
+        if self.factor == 1 {
+            output.extend_from_slice(input);
+            return;
+        }
+        output.reserve(input.len() / self.factor + 1);
+        for &sample in input {
+            if let Some(z) = self.push(sample, bypass_fir) {
+                output.push(z);
+            }
+        }
+    }
+
     /// Push one input sample; returns a decimated output when the factor divides.
     pub fn push(&mut self, sample: Complex32, bypass_fir: bool) -> Option<Complex32> {
         if self.factor == 1 {

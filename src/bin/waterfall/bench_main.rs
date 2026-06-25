@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run --release --features gui-core --bin engine-bench engine [seconds] [device_rate]
-//! cargo run --release --features gui-core --bin engine-bench demod [block_size] [iterations]
+//! cargo run --release --features gui-core --bin engine-bench demod [rate_hz] [block_size] [iterations]
 //! cargo run --release --features gui-core --bin engine-bench synthetic [seconds] [sample_rate]
 //! cargo run --release --features gui-core --bin engine-bench replay <capture.hfsdr> [seconds]
 //! cargo run --release --features gui-core --bin engine-bench live-kiwi [host] [port] [center_hz] [seconds]
@@ -21,10 +21,16 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hfsdr::{Complex32, CwChannelSettings, DecimFilterKind, IqAudioDemod, IqSource, KiwiSource};
+use hfsdr::{
+    ChannelOffsetHz, Complex32, CwChannel, CwChannelSettings, CwStageMetrics, DecimFilterKind,
+    IqAudioDemod, IqSource, KiwiSource, ListenOrigin, WidebandCwIngress,
+};
 use rtrb::RingBuffer;
 
-use engine::{ConnState, Engine, EngineParams, EngineShared, EngineStats};
+use engine::{
+    demod_tail_max, wideband_tail_len, ConnState, Engine, EngineParams, EngineShared, EngineStats,
+    MAX_AUDIO_SAMPLES_NARROW, MAX_AUDIO_SAMPLES_WB,
+};
 use source::{attach_dual_ring, Connection, DeviceSource};
 
 #[cfg(feature = "airspy")]
@@ -47,7 +53,7 @@ fn usage() -> ! {
     eprintln!(
         "Usage:\n  \
          engine-bench engine [seconds] [device_rate_hz]\n  \
-         engine-bench demod [block_size] [iterations]\n  \
+         engine-bench demod [rate_hz] [block_size] [iterations]\n  \
          engine-bench synthetic [seconds] [sample_rate_hz]\n  \
          engine-bench replay <capture.hfsdr> [seconds]\n  \
          engine-bench live-kiwi [host] [port] [center_hz] [seconds]\n  \
@@ -189,25 +195,182 @@ fn print_engine_report(stats: &EngineStats, elapsed: Duration, pumps: u64, nomin
     );
 }
 
-fn run_demod_microbench(args: &[String]) {
-    let block_size: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(8192);
-    let iterations: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2000);
-    let rate = 384_000f32;
+fn print_stage_metrics(label: &str, m: &CwStageMetrics, iterations: u32) {
+    let total = m.total_ns().max(1) as f64;
+    let div = iterations.max(1) as f64;
+    let per_us = total / div / 1000.0;
+    eprintln!("\n--- {label} ({per_us:.1} µs/call) ---");
+    eprintln!(
+        "  IQ in: {} → audio out: {}",
+        m.iq_samples, m.audio_samples
+    );
+    for (name, ns) in m.stage_rows() {
+        if ns == 0 || name == "audio_chain" {
+            continue;
+        }
+        let avg_ns = ns as f64 / div;
+        let pct = avg_ns / (total / div) * 100.0;
+        eprintln!(
+            "  {name:14} {pct:5.1}%  ({:.1} µs)",
+            avg_ns / 1000.0
+        );
+    }
+}
+
+fn accumulate_metrics(acc: &mut CwStageMetrics, m: &CwStageMetrics) {
+    acc.noise_blanker_ns += m.noise_blanker_ns;
+    acc.nco_ns += m.nco_ns;
+    acc.decim_ns += m.decim_ns;
+    acc.audio_chain_ns += m.audio_chain_ns;
+    acc.notches_ns += m.notches_ns;
+    acc.channel_filter_ns += m.channel_filter_ns;
+    acc.agc_ns += m.agc_ns;
+    acc.detector_ns += m.detector_ns;
+    acc.polish_ns += m.polish_ns;
+    acc.iq_samples = m.iq_samples;
+    acc.audio_samples = m.audio_samples;
+}
+
+fn demod_slice<'a>(samples: &'a [Complex32], rate: f32) -> &'a [Complex32] {
+    let max = demod_tail_max(rate);
+    let len = wideband_tail_len(samples.len(), rate, max);
+    if len >= samples.len() {
+        samples
+    } else {
+        &samples[samples.len() - len..]
+    }
+}
+
+fn bench_cw_channel(rate: f32, block_size: usize, iterations: u32, settings: &CwChannelSettings) {
     let iq = tone_iq(block_size, rate, 700.0, 0.2);
-    let mut demod = IqAudioDemod::new();
-    let cw = CwChannelSettings::default();
+    let demod_iq = demod_slice(&iq, rate);
+    let tail_max = demod_tail_max(rate);
+    let mut channel = CwChannel::new(rate);
     let mut audio = Vec::new();
+    let origin = ListenOrigin::from_settings(settings.listen_offset_hz);
+    let mut accum = CwStageMetrics::default();
+    for _ in 0..50 {
+        let mut m = CwStageMetrics::default();
+        channel.process_profiled(demod_iq, rate, settings, origin, &mut audio, &mut m);
+    }
+
+    accum = CwStageMetrics::default();
+    let t0 = Instant::now();
+    for _ in 0..iterations {
+        let mut m = CwStageMetrics::default();
+        channel.process_profiled(demod_iq, rate, settings, origin, &mut audio, &mut m);
+        accumulate_metrics(&mut accum, &m);
+    }
+    let elapsed = t0.elapsed();
+
+    let per_us = elapsed.as_nanos() as f64 / iterations as f64 / 1000.0;
+    eprintln!(
+        "\n=== CwChannel @ {rate} Hz (drain {block_size} → demod {} IQ, tail max {tail_max}, {iterations} iters, {per_us:.1} µs/call) ===",
+        demod_iq.len()
+    );
+    print_stage_metrics("CwChannel stages (avg)", &accum, iterations);
+}
+
+fn run_demod_microbench(args: &[String]) {
+    let rate: f32 = args.first().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let block_size: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8192);
+    let iterations: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2000);
+    let economy = args.iter().any(|s| s == "economy");
+
+    let rates: Vec<f32> = if rate > 0.0 {
+        vec![rate]
+    } else {
+        vec![12_000.0, 384_000.0]
+    };
+
+    let mut settings = CwChannelSettings::default();
+    settings.listen_offset_hz = ChannelOffsetHz::new(700.0);
+    settings.economy_filter = economy;
+    if economy {
+        eprintln!("=== economy filter (2-pole IIR override) ===");
+    }
+
+    for &r in &rates {
+        if r > 96_000.0 {
+            bench_wideband_demod(r, block_size, iterations, &settings);
+        }
+        bench_cw_channel(r, block_size, iterations, &settings);
+    }
+
+    eprintln!(
+        "\n=== policy: demod tail max narrow={MAX_AUDIO_SAMPLES_NARROW} wide={MAX_AUDIO_SAMPLES_WB} ==="
+    );
+}
+
+fn bench_wideband_demod(
+    rate: f32,
+    block_size: usize,
+    iterations: u32,
+    settings: &CwChannelSettings,
+) {
+    let iq = tone_iq(block_size, rate, 700.0, 0.2);
+    let demod_iq = demod_slice(&iq, rate);
+    let mut demod = IqAudioDemod::new();
+    let mut audio = Vec::new();
+
+    for _ in 0..50 {
+        demod.process(demod_iq, rate, settings, &mut audio);
+    }
 
     let t0 = Instant::now();
     for _ in 0..iterations {
-        demod.process(&iq, rate, &cw, &mut audio);
+        demod.process(demod_iq, rate, settings, &mut audio);
     }
-    let total = t0.elapsed();
-    let per_us = total.as_nanos() as f64 / iterations as f64 / 1000.0;
+    let total_us = t0.elapsed().as_nanos() as f64 / iterations as f64 / 1000.0;
+
+    let mut ingress = WidebandCwIngress::new(rate, settings.decimation, settings.decim_filter);
+    let mut channel = CwChannel::new(ingress.audio_rate());
+    let mut bb_settings = settings.clone();
+    bb_settings.listen_offset_hz = ChannelOffsetHz::ZERO;
+    bb_settings.decimation = 1;
+    let origin = ListenOrigin::after_upstream_mix(settings.listen_offset_hz);
+    let mut ingress_ns = 0u64;
+    let audio_rate = ingress.audio_rate();
+    let mut channel_metrics = CwStageMetrics::default();
+    for _ in 0..iterations {
+        let t = Instant::now();
+        let bb = ingress.to_baseband(
+            demod_iq,
+            rate,
+            settings.listen_offset_hz,
+            &settings.diagnostic,
+        );
+        ingress_ns += t.elapsed().as_nanos() as u64;
+        let mut m = CwStageMetrics::default();
+        channel.process_profiled(
+            bb,
+            audio_rate,
+            &bb_settings,
+            origin,
+            &mut audio,
+            &mut m,
+        );
+        accumulate_metrics(&mut channel_metrics, &m);
+    }
+
+    let ingress_us = ingress_ns as f64 / iterations as f64 / 1000.0;
+    let channel_us = channel_metrics.total_ns() as f64 / iterations as f64 / 1000.0;
+    let split_us = ingress_us + channel_us;
     eprintln!(
-        "demod microbench: {block_size} samples @ {rate} Hz, {iterations} iters, {per_us:.1} µs/call ({:.1} ms/s)",
-        block_size as f64 * iterations as f64 / total.as_secs_f64() / 1000.0
+        "\n=== IqAudioDemod wideband @ {rate} Hz (drain {block_size} → demod {} IQ, {iterations} iters) ===",
+        demod_iq.len()
     );
+    eprintln!("  total:        {total_us:.1} µs/call");
+    eprintln!(
+        "  ingress:      {ingress_us:.1} µs ({:.0}%)",
+        ingress_us / split_us.max(0.001) * 100.0
+    );
+    eprintln!(
+        "  CwChannel:    {channel_us:.1} µs ({:.0}%)",
+        channel_us / split_us.max(0.001) * 100.0
+    );
+    eprintln!("  split sum:    {split_us:.1} µs (sanity vs total)");
+    print_stage_metrics("CwChannel inside wideband", &channel_metrics, iterations);
 }
 
 fn run_synthetic_legacy(args: &[String]) {

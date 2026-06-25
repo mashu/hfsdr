@@ -81,6 +81,22 @@ impl WaterfallApp {
                 ],
             );
         }
+        let economy = ui.checkbox(
+            &mut self.radio.cw.economy_filter,
+            "Economy filter (2-pole IIR)",
+        );
+        attach_rich_tooltip(
+            &economy,
+            Some("Economy filter"),
+            &[
+                ("Lower CPU", ACCENT),
+                (
+                    "Overrides architecture with a 2-pole IIR channel filter. \
+                     Steeper skirts but may ring on fast CW.",
+                    MUTED,
+                ),
+            ],
+        );
     }
 
     pub(crate) fn cw_demod_card(&mut self, ui: &mut egui::Ui) {
@@ -186,6 +202,7 @@ impl WaterfallApp {
                         ui.label(egui::RichText::new(delay_note).small().color(MUTED));
 
                         let filter_advanced = self.radio.cw.channel_filter != ChannelFilterKind::LinearFir
+                            || self.radio.cw.economy_filter
                             || self.radio.cw.window != WindowKind::RaisedCosine
                             || self.radio.cw.passband_flatten
                             || self.radio.cw.window == WindowKind::Kaiser;
