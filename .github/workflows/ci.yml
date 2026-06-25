@@ -22,7 +22,15 @@ jobs:
             features: airspy,rtlsdr
             install: |
               sudo apt-get update
-              sudo apt-get install -y libairspyhf-dev librtlsdr-dev
+              sudo apt-get install -y \
+                libairspyhf-dev \
+                librtlsdr-dev \
+                libasound2-dev \
+                libxkbcommon-dev \
+                libwayland-dev \
+                libxcb-render0-dev \
+                libxcb-shape0-dev \
+                libxcb-xfixes0-dev
           - os: macos-latest
             features: airspy
             install: |
@@ -45,7 +53,9 @@ jobs:
 
       - name: cargo test
         run: |
-          if [ -n "${{ matrix.features }}" ]; then
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cargo test --features gui
+          elif [ -n "${{ matrix.features }}" ]; then
             cargo test --features "${{ matrix.features }}"
           else
             cargo test --no-default-features
@@ -65,13 +75,21 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libairspyhf-dev librtlsdr-dev
+          sudo apt-get install -y \
+            libairspyhf-dev \
+            librtlsdr-dev \
+            libasound2-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage
-        run: cargo llvm-cov --features airspy,rtlsdr --lcov --output-path lcov.info
+        run: cargo llvm-cov --features gui --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
