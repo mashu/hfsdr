@@ -213,6 +213,7 @@ mod tests {
     #[test]
     fn kiwi_full_passband_half_width() {
         assert_eq!(kiwi_iq_half_hz(12_000), 5_980);
+        assert_eq!(kiwi_iq_half_hz(12_001), 5_980);
     }
 }
 

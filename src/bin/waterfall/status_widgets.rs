@@ -384,3 +384,51 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
         (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_middle_short_string_unchanged() {
+        assert_eq!(truncate_middle("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_middle_long_string_uses_ellipsis() {
+        let s = truncate_middle("abcdefghijklmnopqrstuvwxyz", 10);
+        assert!(s.contains('…'));
+        assert!(s.chars().count() <= 10);
+    }
+
+    #[test]
+    fn buffer_color_interpolates_low_to_high() {
+        let low = buffer_color(0.0);
+        let mid = buffer_color(0.5);
+        let high = buffer_color(1.0);
+        assert_ne!(low, high);
+        assert_ne!(low, mid);
+    }
+
+    #[test]
+    fn status_chips_render_in_ui() {
+        use eframe::egui::Vec2;
+        use egui_kittest::Harness;
+
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(640.0, 40.0))
+            .build_ui_state(|ui, ()| {
+                ui.horizontal(|ui| {
+                    let _ = engine_pipeline_chip(ui, false, true);
+                    let _ = iq_buffer_control(ui, 0.55, 1.2, false);
+                    let _ = iq_record_toggle(ui, false, true, 0.0);
+                    let _ = iq_playback_chip(ui, false, true);
+                    let _ = connection_alias_chip(ui, "rx.test:8073");
+                    let _ = cursor_freq_slot(ui, "14010.000 kHz", true);
+                    let _ = quick_connect_chip(ui, true);
+                    let _ = disconnect_chip(ui);
+                });
+            }, ());
+        harness.run_steps(2);
+    }
+}

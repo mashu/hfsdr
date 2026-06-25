@@ -863,6 +863,7 @@ mod tests {
     fn decim_factor_auto_uses_library_heuristic() {
         assert!(decim_factor(0, 384_000.0) > 1);
         assert_eq!(decim_factor(8, 384_000.0), 8);
+        assert_eq!(decim_factor(0, 12_000.0), 1);
     }
 
     #[test]

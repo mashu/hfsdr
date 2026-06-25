@@ -112,3 +112,35 @@ pub(crate) fn draw_notch_marker(
         NOTCH_LINE,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{self, Vec2};
+    use egui_kittest::Harness;
+
+    #[test]
+    fn draw_filter_band_and_notch_do_not_panic() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(400.0, 120.0))
+            .build_ui_state(|ui, ()| {
+                let rect = ui.max_rect();
+                let painter = ui.painter_at(rect);
+                draw_filter_band(&painter, rect, 12_000.0, 0.0, 0.0, 500.0, true);
+                draw_notch_marker(&painter, rect, 12_000.0, 0.0, 0, 200.0, 80.0, true);
+            }, ());
+        harness.run_steps(2);
+    }
+
+    #[test]
+    fn draw_filter_band_skips_degenerate_width() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(400.0, 120.0))
+            .build_ui_state(|ui, ()| {
+                let rect = ui.max_rect();
+                let painter = ui.painter_at(rect);
+                draw_filter_band(&painter, rect, 12_000.0, 0.0, 0.0, 0.0, true);
+            }, ());
+        harness.run_steps(2);
+    }
+}

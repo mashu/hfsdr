@@ -192,4 +192,13 @@ mod tests {
         store.clear();
         assert_eq!(store.len(), 0);
     }
+
+    #[test]
+    fn lower_rank_call_does_not_replace_higher() {
+        let mut store = SpotStore::new();
+        store.observe(7_030_000.0, Some("BB2B".into()), 50, SpotKind::Heard, 20.0, 28.0, "rx1");
+        store.observe(7_030_000.0, Some("AA1A".into()), 10, SpotKind::Heard, 20.0, 28.0, "rx1");
+        let spot = &store.sorted(SpotSort::SnrDesc)[0];
+        assert_eq!(spot.callsign.as_deref(), Some("BB2B"));
+    }
 }

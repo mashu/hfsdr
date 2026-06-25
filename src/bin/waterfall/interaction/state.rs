@@ -391,4 +391,12 @@ mod tests {
         view.zoom_to_full_span();
         assert_eq!(view.zoom, 1.0);
     }
+
+    #[test]
+    fn plot_interaction_dragging_flag() {
+        let mut interaction = PlotInteraction::new();
+        assert!(!interaction.is_dragging());
+        interaction.drag_mode = DragMode::PanView;
+        assert!(interaction.is_dragging());
+    }
 }

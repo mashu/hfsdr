@@ -90,6 +90,7 @@ mod tests {
     fn format_freq_hz_compact_axis() {
         assert_eq!(format_freq_hz(14_030_000.0), "14.030");
         assert_eq!(format_freq_hz(703_000.0), "703.0k");
+        assert_eq!(format_freq_hz(9_500.0), "9500");
     }
 
     #[test]

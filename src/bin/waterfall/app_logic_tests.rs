@@ -8,10 +8,12 @@ use hfsdr::{Spot, SpotKind};
 use crate::app::WaterfallApp;
 use crate::audio;
 use crate::engine::{ConnState, EnginePoll, EngineStats, FFT_SIZE};
-use crate::interaction::{CW_PASSBAND_MAX_HZ, CW_PASSBAND_NARROW_MAX_HZ};
+use crate::interaction::{PlotAction, RIT_MAX_HZ, CW_PASSBAND_MAX_HZ, CW_PASSBAND_NARROW_MAX_HZ};
 use crate::source::{
     AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind,
 };
+use crate::iq_panel::IqPanelCmd;
+use crate::settings::AppSettings;
 
 fn test_app() -> WaterfallApp {
     audio::set_test_output_devices(Some(vec!["Test Output".into()]));
@@ -342,4 +344,475 @@ fn local_rtlsdr_connects_without_host() {
         ..ConnectRequest::default()
     };
     assert!(WaterfallApp::can_connect_request(&req));
+}
+
+#[test]
+fn invalidate_waterfall_history_clears_rows() {
+    let mut app = test_app();
+    app.plot.rows.push_back(vec![-90.0; FFT_SIZE]);
+    app.invalidate_waterfall_history();
+    assert!(app.plot.rows.is_empty());
+    assert!(app.plot.waterfall.textures_dirty);
+}
+
+#[test]
+fn pump_engine_ingests_skimmer_spots() {
+    let mut app = test_app();
+    let spot = spot("G0XYZ", 18.0, SpotKind::Heard);
+    app.inject_engine_poll(EnginePoll {
+        state: ConnState::Streaming,
+        stats: EngineStats::default(),
+        spots: vec![spot],
+        rows: Vec::new(),
+        latest: vec![-90.0; FFT_SIZE],
+        last_error: None,
+        audio_scope: Vec::new(),
+    });
+    app.pump_engine();
+    assert_eq!(app.skimmer_ui.skimmer_spots.len(), 1);
+    assert_eq!(
+        app.skimmer_ui.skimmer_spots[0].callsign.as_deref(),
+        Some("G0XYZ")
+    );
+}
+
+#[test]
+fn clear_spots_wipes_local_state() {
+    let mut app = test_app();
+    app.skimmer_ui.skimmer_spots = vec![spot("G0ABC", 20.0, SpotKind::CallingCq)];
+    app.annotate_new_spots(14_010_000.0);
+    assert!(!app.history_labels().is_empty());
+    app.clear_spots();
+    assert!(app.skimmer_ui.skimmer_spots.is_empty());
+    assert!(app.skimmer_ui.frame_visible_spots.is_empty());
+}
+
+#[test]
+fn plot_full_span_uses_spectrum_rate_from_stats() {
+    let mut app = test_app();
+    app.engine_ui.stats.spectrum_rate = 48_000.0;
+    app.engine_ui.stats.iq_passband_hz = 96_000.0;
+    assert_eq!(app.plot_full_span_hz(), 48_000.0);
+}
+
+#[test]
+fn fft_size_change_on_poll_resets_row_buffer() {
+    let mut app = test_app();
+    app.plot.rows.push_back(vec![-90.0; FFT_SIZE]);
+    app.inject_engine_poll(EnginePoll {
+        state: ConnState::Streaming,
+        stats: EngineStats::default(),
+        spots: Vec::new(),
+        rows: Vec::new(),
+        latest: vec![-90.0; 1024],
+        last_error: None,
+        audio_scope: Vec::new(),
+    });
+    app.pump_engine();
+    assert_eq!(app.plot.latest.len(), 1024);
+    assert!(app.plot.rows.is_empty());
+}
+
+#[test]
+fn skimmer_runtime_disabled_when_span_too_wide() {
+    let mut app = test_app();
+    app.skimmer_ui.skimmer_enabled = true;
+    app.radio.is_kiwi = false;
+    app.engine_ui.stats.spectrum_rate = 200_000.0;
+    app.engine_ui.stats.iq_passband_hz = 200_000.0;
+    assert!(!app.skimmer_spectrum_ok());
+    assert!(!app.skimmer_runtime_enabled());
+}
+
+#[test]
+fn skimmer_runtime_enabled_on_kiwi_despite_wide_span() {
+    let mut app = test_app();
+    app.skimmer_ui.skimmer_enabled = true;
+    app.radio.is_kiwi = true;
+    app.engine_ui.stats.spectrum_rate = 200_000.0;
+    assert!(app.skimmer_spectrum_ok());
+    assert!(app.skimmer_runtime_enabled());
+}
+
+#[test]
+fn effective_skimmer_caps_channels_on_wideband() {
+    let mut app = test_app();
+    app.skimmer_ui.skimmer.max_channels = 32;
+    app.radio.is_kiwi = false;
+    app.engine_ui.stats.iq_passband_hz = 384_000.0;
+    app.engine_ui.stats.sample_rate = 384_000.0;
+    let cfg = app.effective_skimmer();
+    assert!(cfg.max_channels <= 8);
+}
+
+#[test]
+fn effective_skimmer_uses_connection_alias_when_streaming() {
+    let mut app = test_app();
+    app.connection.form.host = "rx.test".into();
+    app.engine_ui.conn_state = ConnState::Streaming;
+    let cfg = app.effective_skimmer();
+    assert_eq!(cfg.source_label, "rx.test:8073");
+}
+
+#[test]
+fn effective_target_fps_caps_wideband() {
+    let mut app = test_app();
+    app.display.target_fps = 60;
+    app.radio.is_kiwi = false;
+    app.engine_ui.stats.iq_passband_hz = 384_000.0;
+    assert_eq!(app.effective_target_fps(), 15);
+}
+
+#[test]
+fn connection_session_live_during_connect_and_stream() {
+    let mut app = test_app();
+    assert!(!app.connection_session_live());
+    app.engine_ui.conn_state = ConnState::Connecting {
+        label: "rx".into(),
+    };
+    assert!(app.connection_session_live());
+    app.engine_ui.conn_state = ConnState::Streaming;
+    assert!(app.connection_session_live());
+    app.engine_ui.conn_state = ConnState::Reconnecting {
+        attempt: 1,
+        retry_in_s: 2.0,
+    };
+    assert!(app.connection_session_live());
+}
+
+#[test]
+fn connection_alias_defaults_for_empty_kiwi_host() {
+    let mut app = test_app();
+    app.connection.form.host.clear();
+    assert_eq!(app.connection_alias(), "KiwiSDR");
+    app.connection.form.host = "rx.test".into();
+    app.connection.form.port = 8073;
+    assert_eq!(app.connection_alias(), "rx.test:8073");
+}
+
+#[test]
+fn apply_settings_restores_bfo_and_passband() {
+    let mut app = test_app();
+    let mut saved = AppSettings::default();
+    saved.bfo_hz = 550.0;
+    saved.passband_hz = 300.0;
+    app.apply_settings(&saved);
+    assert!((app.radio.cw.bfo_hz - 550.0).abs() < 1e-6);
+    assert!((app.radio.cw.passband_hz - 300.0).abs() < 1e-6);
+}
+
+#[test]
+fn toggle_pipeline_stage_flips_noise_blanker() {
+    let mut app = test_app();
+    let before = app.radio.cw.noise_blanker.enabled;
+    app.toggle_pipeline_stage(crate::pipeline_flow::PipelineStage::NoiseBlanker);
+    assert_ne!(app.radio.cw.noise_blanker.enabled, before);
+}
+
+#[test]
+fn toggle_notch_bypass_stashes_and_restores() {
+    let mut app = test_app();
+    app.radio.cw.notches[0].enabled = true;
+    app.toggle_notch_bypass();
+    assert!(!app.radio.cw.notches[0].enabled);
+    assert!(app.chrome.notch_bypass_stash.is_some());
+    app.toggle_notch_bypass();
+    assert!(app.radio.cw.notches[0].enabled);
+}
+
+#[test]
+fn arm_manual_notch_sets_offset() {
+    let mut app = test_app();
+    app.arm_manual_notch(0, None);
+    assert!(app.radio.cw.notches[0].enabled);
+    assert!(app.radio.cw.notches[0].width_hz >= 50.0);
+}
+
+#[test]
+fn enabled_notches_lists_active_slots() {
+    let mut app = test_app();
+    app.arm_manual_notch(1, Some(hfsdr::ChannelOffsetHz::new(120.0)));
+    let markers = app.enabled_notches();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].slot, 1);
+}
+
+#[test]
+fn pipeline_ingress_decim_kiwi_default() {
+    let mut app = test_app();
+    app.connection.form.kind = SourceKind::Kiwi;
+    app.connection.form.sample_rate = 12_000;
+    assert!(app.pipeline_ingress_decim() >= 1);
+}
+
+#[test]
+fn apply_connect_form_syncs_kiwi_agc() {
+    let mut app = test_app();
+    let mut req = kiwi_request("rx.test");
+    req.kiwi.rf_agc_on = false;
+    app.apply_connect_form(&req);
+    assert!(!app.radio.agc_rf_on);
+}
+
+#[test]
+fn sync_kiwi_rf_sends_when_streaming() {
+    let mut app = test_app();
+    app.connection.form.kind = SourceKind::Kiwi;
+    app.engine_ui.conn_state = ConnState::Streaming;
+    app.radio.agc_rf_on = false;
+    app.radio.last_agc_rf_on = true;
+    app.sync_kiwi_rf_now();
+    assert_eq!(app.radio.last_agc_rf_on, false);
+}
+
+#[test]
+fn apply_radio_settings_tunes_on_center_change() {
+    let mut app = test_app();
+    app.radio.center_khz = 14_020.0;
+    app.radio.last_center_khz = 14_010.0;
+    app.apply_radio_settings();
+    assert_eq!(app.radio.last_center_khz, 14_020.0);
+}
+
+#[test]
+fn apply_plot_actions_tune_delta_hz() {
+    let mut app = test_app();
+    app.radio.center_khz = 14_010.0;
+    app.apply_plot_actions(vec![PlotAction::TuneDeltaHz(500.0)]);
+    assert!((app.radio.center_khz - 14_010.5).abs() < 1e-6);
+}
+
+#[test]
+fn apply_plot_actions_center_on_offset_clears_rit() {
+    let mut app = test_app();
+    app.radio.lock_ham_bands = false;
+    app.radio.center_khz = 14_010.0;
+    app.radio.rit_hz = 80.0;
+    app.apply_plot_actions(vec![PlotAction::CenterOnOffsetHz(200.0)]);
+    assert_eq!(app.radio.rit_hz, 0.0);
+    assert!((app.radio.center_khz - 14_010.2).abs() < 1e-3);
+}
+
+#[test]
+fn apply_plot_actions_iq_playback_pans_view() {
+    let mut app = test_app();
+    app.engine_ui.stats.iq_playback = true;
+    app.engine_ui.stats.sample_rate = 12_000.0;
+    app.engine_ui.stats.iq_passband_hz = 12_000.0;
+    app.plot.plot_view.zoom = 0.25;
+    let before = app.plot.plot_view.pan_offset_hz;
+    app.apply_plot_actions(vec![PlotAction::PanViewDeltaHz(100.0)]);
+    assert!((app.plot.plot_view.pan_offset_hz - before - 100.0).abs() < 1e-3);
+}
+
+#[test]
+fn apply_plot_actions_commit_tune_preview() {
+    let mut app = test_app();
+    app.radio.lock_ham_bands = false;
+    app.radio.center_khz = 14_010.0;
+    app.plot.tune_preview_offset_hz = Some(150.0);
+    app.apply_plot_actions(vec![PlotAction::CommitTunePreview]);
+    assert!(app.plot.tune_preview_offset_hz.is_none());
+    assert!((app.radio.center_khz - 14_010.15).abs() < 1e-3);
+}
+
+#[test]
+fn apply_plot_actions_zoom_and_pan() {
+    let mut app = test_app();
+    app.engine_ui.stats.sample_rate = 12_000.0;
+    app.engine_ui.stats.iq_passband_hz = 12_000.0;
+    app.apply_plot_actions(vec![
+        PlotAction::ZoomView(0.5),
+        PlotAction::PanViewDeltaHz(50.0),
+        PlotAction::SetViewPanHz(25.0),
+    ]);
+    assert!(app.plot.plot_view.zoom < 1.0);
+}
+
+#[test]
+fn apply_plot_actions_passband_and_rit_clamp() {
+    let mut app = test_app();
+    app.apply_plot_actions(vec![
+        PlotAction::SetPassbandHz(10_000.0),
+        PlotAction::SetRitHz(RIT_MAX_HZ + 500.0),
+    ]);
+    assert!(app.radio.cw.passband_hz <= CW_PASSBAND_MAX_HZ);
+    assert_eq!(app.radio.rit_hz, RIT_MAX_HZ);
+}
+
+#[test]
+fn apply_plot_actions_notch_edits() {
+    let mut app = test_app();
+    app.arm_manual_notch(0, Some(hfsdr::ChannelOffsetHz::new(100.0)));
+    app.apply_plot_actions(vec![
+        PlotAction::SetNotchOffset {
+            slot: 0,
+            offset_hz: hfsdr::ChannelOffsetHz::new(200.0),
+        },
+        PlotAction::SetNotchWidth {
+            slot: 0,
+            width_hz: 120.0,
+        },
+    ]);
+    assert_eq!(app.radio.cw.notches[0].offset_hz.hz(), 200.0);
+    assert_eq!(app.radio.cw.notches[0].width_hz, 120.0);
+}
+
+#[test]
+fn estimate_display_levels_from_rows() {
+    let mut app = test_app();
+    app.engine_ui.stats.sample_rate = 12_000.0;
+    app.engine_ui.stats.spectrum_rate = 12_000.0;
+    app.plot.latest = vec![-80.0; FFT_SIZE];
+    for _ in 0..12 {
+        app.plot.rows.push_back(vec![-75.0; FFT_SIZE]);
+    }
+    app.display.display_auto_track = true;
+    app.update_display_levels();
+    assert!(app.display.display_levels_initialized);
+    assert!(app.display.ref_db.is_finite());
+}
+
+#[test]
+fn passband_max_respects_skimmer_filter_wide() {
+    let mut app = test_app();
+    app.skimmer_ui.filter_wide = false;
+    assert_eq!(app.passband_max_hz(), CW_PASSBAND_NARROW_MAX_HZ);
+    app.skimmer_ui.filter_wide = true;
+    assert_eq!(app.passband_max_hz(), CW_PASSBAND_MAX_HZ);
+}
+
+#[test]
+fn spectrum_and_waterfall_views_finite() {
+    let mut app = test_app();
+    app.engine_ui.stats.sample_rate = 96_000.0;
+    app.engine_ui.stats.iq_passband_hz = 96_000.0;
+    app.engine_ui.stats.spectrum_rate = 96_000.0;
+    let view = app.spectrum_view();
+    assert!(view.view_span_hz.is_finite() && view.view_span_hz > 0.0);
+    let storage = app.waterfall_storage_view();
+    assert!(storage.data_span_hz.is_finite());
+}
+
+#[test]
+fn connect_now_builds_request() {
+    let mut app = test_app();
+    app.connection.form.host = "rx.test".into();
+    app.connection.form.recent_hosts.clear();
+    app.connect_now();
+    assert_eq!(app.radio.last_center_khz, app.radio.center_khz);
+}
+
+#[test]
+fn cancel_connection_does_not_panic() {
+    let mut app = test_app();
+    app.cancel_connection();
+}
+
+#[test]
+fn quick_connect_uses_recent_host() {
+    let mut app = test_app();
+    app.connection.form.recent_hosts.clear();
+    app.remember_host(&kiwi_request("recent.test"));
+    app.quick_connect_last();
+    assert_eq!(app.connection.form.host, "recent.test");
+}
+
+#[test]
+fn toggle_all_pipeline_stages() {
+    let mut app = test_app();
+    use crate::pipeline_flow::PipelineStage;
+    for stage in [
+        PipelineStage::NoiseBlanker,
+        PipelineStage::ManualNotches,
+        PipelineStage::ListenNco,
+        PipelineStage::DecimatorFir,
+        PipelineStage::ChannelFir,
+        PipelineStage::Bfo,
+        PipelineStage::Agc,
+        PipelineStage::Apf,
+        PipelineStage::AutoNotch,
+        PipelineStage::NoiseReduction,
+        PipelineStage::Skimmer,
+        PipelineStage::AudioOutput,
+    ] {
+        app.toggle_pipeline_stage(stage);
+    }
+}
+
+#[test]
+fn pump_engine_ingests_injected_poll() {
+    let mut app = test_app();
+    app.inject_engine_poll(EnginePoll {
+        state: ConnState::Streaming,
+        stats: {
+            let mut s = EngineStats::default();
+            s.sample_rate = 12_000.0;
+            s.iq_passband_hz = 12_000.0;
+            s.spectrum_rate = 12_000.0;
+            s.spectrum_fft = FFT_SIZE;
+            s.is_kiwi = true;
+            s.snr_db = 10.0;
+            s
+        },
+        spots: Vec::new(),
+        rows: vec![vec![-90.0; FFT_SIZE]],
+        latest: vec![-90.0; FFT_SIZE],
+        last_error: None,
+        audio_scope: vec![0.0; 64],
+    });
+    app.pump_engine();
+    assert_eq!(app.radio.sample_rate, 12_000.0);
+    assert!(app.plot.latest_frame_tick);
+}
+
+#[test]
+fn poll_kiwi_directory_applies_fetch_result() {
+    let mut app = test_app();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let geo = crate::kiwi_directory::GeoLocation {
+        country: "Test".into(),
+        country_code: "TS".into(),
+        lat: 51.0,
+        lon: 0.0,
+    };
+    tx.send(Ok((Some(geo.clone()), Vec::new()))).unwrap();
+    app.connection.kiwi.fetch_rx = Some(rx);
+    app.poll_kiwi_directory();
+    assert!(app.connection.kiwi.fetch_rx.is_none());
+    assert_eq!(app.connection.kiwi.geo.as_ref().map(|g| g.country.as_str()), Some("Test"));
+}
+
+#[test]
+fn connection_unstable_during_reconnect() {
+    let mut app = test_app();
+    app.engine_ui.conn_state = ConnState::Reconnecting {
+        attempt: 1,
+        retry_in_s: 2.0,
+    };
+    assert!(app.connection_unstable());
+}
+
+#[test]
+fn skimmer_runtime_disabled_when_spectrum_too_wide() {
+    let mut app = test_app();
+    app.skimmer_ui.skimmer_enabled = true;
+    app.radio.is_kiwi = false;
+    app.engine_ui.stats.iq_passband_hz = 384_000.0;
+    app.engine_ui.stats.sample_rate = 384_000.0;
+    app.engine_ui.stats.spectrum_rate = 384_000.0;
+    assert!(!app.skimmer_runtime_enabled());
+}
+
+#[test]
+fn process_iq_cmds_stop_playback() {
+    let mut app = test_app();
+    app.process_iq_cmds(vec![IqPanelCmd::StopPlayback, IqPanelCmd::StopRecord]);
+}
+
+#[test]
+fn start_kiwi_directory_fetch_sets_receiver() {
+    let mut app = test_app();
+    app.start_kiwi_directory_fetch(false);
+    assert!(app.connection.kiwi.fetch_rx.is_some());
 }

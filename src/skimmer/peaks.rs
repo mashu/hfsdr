@@ -218,4 +218,25 @@ mod tests {
         let b = detect_peaks_with_floor(&row, sr, 20.0, 4, floor);
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn strongest_returns_none_when_peak_too_weak() {
+        let n = 2048;
+        let sr = 12_000.0;
+        let row = vec![-90.0f32; n];
+        assert!(strongest_offset_hz(&row, sr, 0.0, 500.0).is_none());
+    }
+
+    #[test]
+    fn strongest_with_floor_matches_allocating_path() {
+        let n = 2048;
+        let sr = 12_000.0;
+        let mut row = vec![-90.0f32; n];
+        let bin = offset_hz_to_bin(150.0, n, sr);
+        row[bin] = -40.0;
+        let floor = noise_floor_db(&row);
+        let a = strongest_offset_hz(&row, sr, 140.0, 200.0);
+        let b = strongest_offset_hz_with_floor(&row, sr, 140.0, 200.0, floor);
+        assert_eq!(a, b);
+    }
 }

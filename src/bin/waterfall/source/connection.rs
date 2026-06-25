@@ -368,4 +368,87 @@ mod tests {
         let err = connect(&req, &cancel).err().expect("empty host");
         assert!(err.contains("empty"));
     }
+
+    #[test]
+    fn connect_request_default_is_kiwi() {
+        let req = ConnectRequest::default();
+        assert_eq!(req.kind, SourceKind::Kiwi);
+        assert_eq!(req.port, 8073);
+    }
+
+    #[test]
+    fn source_kind_serde_roundtrip() {
+        let mut kinds = vec![SourceKind::Kiwi];
+        #[cfg(feature = "airspy")]
+        kinds.push(SourceKind::Airspy);
+        #[cfg(feature = "rtlsdr")]
+        kinds.push(SourceKind::RtlSdr);
+        #[cfg(feature = "qmx")]
+        kinds.push(SourceKind::Qmx);
+        for kind in kinds {
+            let req = ConnectRequest {
+                kind,
+                ..ConnectRequest::default()
+            };
+            let json = serde_json::to_string(&req).expect("serialize");
+            let back: ConnectRequest = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back.kind, kind);
+        }
+    }
+
+    #[test]
+    fn source_kind_deserialize_unknown_falls_back_to_kiwi() {
+        let json = r#"{"kind":"UnknownDevice","host":"x","port":1,"center_hz":1.0,"sample_rate":0,"kiwi":{},"airspy":{},"rtlsdr":{},"qmx":{}}"#;
+        let req: ConnectRequest = serde_json::from_str(json).expect("parse");
+        assert_eq!(req.kind, SourceKind::Kiwi);
+    }
+
+    #[cfg(feature = "airspy")]
+    #[test]
+    fn airspy_label_includes_frequency() {
+        let req = ConnectRequest {
+            kind: SourceKind::Airspy,
+            center_hz: 14_010_000.0,
+            ..ConnectRequest::default()
+        };
+        assert!(req.label().contains("Airspy"));
+        assert!(req.label().contains("14.010"));
+    }
+
+    #[cfg(feature = "rtlsdr")]
+    #[test]
+    fn rtlsdr_label_includes_device_index() {
+        let req = ConnectRequest {
+            kind: SourceKind::RtlSdr,
+            center_hz: 7_100_000.0,
+            rtlsdr: RtlSdrSettings {
+                device_index: 2,
+                ..RtlSdrSettings::default()
+            },
+            ..ConnectRequest::default()
+        };
+        assert!(req.label().contains("RTL-SDR #2"));
+    }
+
+    #[cfg(feature = "qmx")]
+    #[test]
+    fn qmx_label_includes_frequency() {
+        let req = ConnectRequest {
+            kind: SourceKind::Qmx,
+            center_hz: 14_200_000.0,
+            ..ConnectRequest::default()
+        };
+        assert!(req.label().contains("QMX"));
+    }
+
+    #[test]
+    fn source_kind_display_strings() {
+        assert!(SourceKind::Kiwi.to_string().contains("Kiwi"));
+        #[cfg(feature = "airspy")]
+        assert!(SourceKind::Airspy.to_string().contains("Airspy"));
+        #[cfg(feature = "rtlsdr")]
+        assert!(SourceKind::RtlSdr.to_string().contains("RTL"));
+        #[cfg(feature = "qmx")]
+        assert!(SourceKind::Qmx.to_string().contains("QMX"));
+    }
 }

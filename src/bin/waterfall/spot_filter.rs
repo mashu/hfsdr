@@ -339,4 +339,20 @@ mod tests {
         assert_eq!(continent_index(Continent::NorthAmerica), 0);
         assert_eq!(continent_index(Continent::Antarctica), 6);
     }
+
+    #[test]
+    fn answering_spot_label_uses_callsign_text() {
+        let labels = build_spot_labels(
+            &[spot("G0ABC", 20.0, SpotKind::Answering)],
+            7_030_000.0,
+            &SpotLabelConfig {
+                hide_heard: false,
+                bucket_hz: 80.0,
+                label_limit: 10,
+            },
+        );
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].text, "G0ABC");
+        assert!(!labels[0].cq);
+    }
 }

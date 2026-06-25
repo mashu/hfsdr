@@ -34,7 +34,16 @@ mod widgets;
 mod ui_smoke;
 
 #[cfg(test)]
+mod ui_panels;
+
+#[cfg(test)]
 mod app_logic_tests;
+
+#[cfg(test)]
+mod ui_shortcuts;
+
+#[cfg(test)]
+mod ui_direct;
 
 use app::WaterfallApp;
 use eframe::egui;

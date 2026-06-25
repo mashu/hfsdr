@@ -113,4 +113,16 @@ mod tests {
         // Steady tone is largely predicted away in the error path.
         assert!(residual_pow < input_pow * 0.2, "residual too high");
     }
+
+    #[test]
+    fn reset_state_clears_filter() {
+        let mut lms = LmsPredictor::new(8, 1);
+        for _ in 0..200 {
+            lms.step(1.0, 1.0);
+        }
+        lms.reset_state();
+        let step = lms.step(0.5, 1.0);
+        assert!(step.prediction.abs() < 1e-3);
+        assert!((step.error - 0.5).abs() < 1e-3);
+    }
 }
