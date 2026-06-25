@@ -1,0 +1,71 @@
+[package]
+name = "hfsdr"
+version = "0.5.0"
+edition = "2021"
+description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR, QMX)"
+license = "MIT"
+authors = ["Mateusz Kaduk (SO5KM)"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[dependencies]
+num-complex = "0.4"
+rtrb = "0.3"
+rustfft = { version = "6", features = ["avx", "sse"] }
+rayon = "1.10"
+tungstenite = "0.29"
+cpal = { version = "0.15", optional = true }
+serialport = { version = "4", default-features = false, optional = true }
+eframe = { version = "0.34", optional = true, default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui_extras = { version = "0.34", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+dirs = "5"
+flate2 = "1.0"
+rfd = { version = "0.15", optional = true }
+ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
+
+[features]
+default = ["airspy"]
+# Links libairspyhf (system package). Disable with --no-default-features when the
+# library is unavailable (e.g. Kiwi/QMX-only builds via gui-core).
+airspy = []
+# Links librtlsdr (system package). Included in `gui`; use `gui-core` without it.
+rtlsdr = []
+# QRP Labs QMX/QMX+ via USB CAT + audio IQ (pure Rust).
+qmx = ["dep:serialport", "dep:cpal"]
+# GUI without librtlsdr (Kiwi/QMX-only builds without local USB SDR libraries).
+gui-core = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd", "qmx"]
+gui = ["gui-core", "rtlsdr"]
+
+[[bin]]
+name = "hfsdr"
+path = "src/bin/waterfall/main.rs"
+required-features = ["gui-core"]
+
+[[bin]]
+name = "airspy-probe"
+path = "src/bin/airspy_probe.rs"
+required-features = ["airspy"]
+
+[[bin]]
+name = "pipeline-bench"
+path = "src/bin/pipeline_bench.rs"
+required-features = ["airspy"]
+
+[[bin]]
+name = "skimmer-bench"
+path = "src/bin/skimmer_bench.rs"
+
+[[bin]]
+name = "kiwi-pipeline-bench"
+path = "src/bin/kiwi_pipeline_bench.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

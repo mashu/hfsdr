@@ -1,0 +1,19 @@
+use hfsdr::CwChannelSettings;
+
+#[derive(Clone, Debug)]
+pub struct RadioState {
+    pub sample_rate: f32,
+    pub center_khz: f64,
+    pub last_center_khz: f64,
+    pub is_kiwi: bool,
+    pub cw: CwChannelSettings,
+    pub rit_hz: f32,
+    pub pitch_lock: bool,
+    pub lock_ham_bands: bool,
+    pub agc_rf_on: bool,
+    pub last_agc_rf_on: bool,
+    pub last_kiwi_man_gain: u8,
+    pub last_kiwi_rf_attn_db: f32,
+    pub last_kiwi_has_rf_attn: bool,
+    pub last_snr_db: f32,
+}

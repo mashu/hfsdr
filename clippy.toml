@@ -1,0 +1,6 @@
+# Frequency frames: UI/plot uses ChannelOffsetHz; IQ DSP converts via
+# ListenOrigin::convert_for_notch in src/dsp/freq_offset.rs — never subtract
+# listen_offset_hz by hand in the receive chain (see freq_offset unit test
+# dsp_sources_use_convert_for_notch_not_raw_subtract).
+
+doc-valid-idents = ["Hz", "IQ", "NCO", "BFO", "FIR", "AGC", "APF", "LMS", "RIT"]

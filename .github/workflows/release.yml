@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create release with notes
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+  build:
+    name: ${{ matrix.artifact_name }}
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: hfsdr-linux-x86_64
+            archive: tar.gz
+            features: gui
+            airspy: true
+            install: |
+              sudo apt-get update
+              sudo apt-get install -y \
+                libairspyhf-dev \
+                librtlsdr-dev \
+                libasound2-dev \
+                libxkbcommon-dev \
+                libwayland-dev \
+                libxcb-render0-dev \
+                libxcb-shape0-dev \
+                libxcb-xfixes0-dev
+          - os: macos-latest
+            artifact_name: hfsdr-macos-aarch64
+            archive: tar.gz
+            features: gui
+            airspy: true
+            install: |
+              brew install airspyhf librtlsdr pkg-config
+              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          - os: windows-latest
+            artifact_name: hfsdr-windows-x86_64
+            archive: zip
+            features: gui
+            airspy: true
+            install: pwsh -File scripts/install-windows-sdr-deps.ps1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: ${{ matrix.install }}
+        shell: bash
+
+      - name: Build release binary
+        run: |
+          if [ "${{ matrix.airspy }}" = "true" ]; then
+            cargo build --release --features "${{ matrix.features }}"
+          else
+            cargo build --release --no-default-features --features "${{ matrix.features }}"
+          fi
+        shell: bash
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          cp target/release/hfsdr dist/
+          cp README.md dist/
+          tar -czf "${{ matrix.artifact_name }}.tar.gz" -C dist .
+        shell: bash
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/hfsdr.exe dist/
+          Copy-Item README.md dist/
+          $binDirs = @(
+            "$env:HFSDR_DEPS_PREFIX/bin",
+            "$env:VCPKG_ROOT/installed/x64-windows/bin"
+          )
+          foreach ($dir in $binDirs) {
+            if (Test-Path $dir) {
+              Copy-Item (Join-Path $dir "*.dll") dist/ -ErrorAction SilentlyContinue
+            }
+          }
+          Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_name }}.${{ matrix.archive }}
+
+  build-airspy-probe-linux:
+    name: airspy-probe-linux-x86_64
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libairspyhf
+        run: sudo apt-get update && sudo apt-get install -y libairspyhf-dev
+      - name: Build
+        run: cargo build --release --bin airspy-probe
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/airspy-probe dist/
+          cp README.md dist/
+          tar -czf airspy-probe-linux-x86_64.tar.gz -C dist .
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: airspy-probe-linux-x86_64.tar.gz

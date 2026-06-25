@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-lib:
+    name: Test library (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            features: airspy,rtlsdr
+            install: |
+              sudo apt-get update
+              sudo apt-get install -y libairspyhf-dev librtlsdr-dev
+          - os: macos-latest
+            features: airspy
+            install: |
+              brew install airspyhf pkg-config
+              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          - os: windows-latest
+            features: airspy,rtlsdr
+            install: pwsh -File scripts/install-windows-sdr-deps.ps1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: ${{ matrix.install }}
+        shell: bash
+
+      - name: cargo test
+        run: |
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo test --features "${{ matrix.features }}"
+          else
+            cargo test --no-default-features
+          fi
+        shell: bash
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libairspyhf-dev librtlsdr-dev
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: cargo llvm-cov --features airspy,rtlsdr --lcov --output-path lcov.info
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: mashu/hfsdr
+          files: lcov.info
+          fail_ci_if_error: false
+
+  build-gui:
+    name: Build hfsdr GUI (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+            features: gui
+            install: |
+              sudo apt-get update
+              sudo apt-get install -y \
+                libairspyhf-dev \
+                librtlsdr-dev \
+                libasound2-dev \
+                libxkbcommon-dev \
+                libwayland-dev \
+                libxcb-render0-dev \
+                libxcb-shape0-dev \
+                libxcb-xfixes0-dev
+          - os: macos-latest
+            label: macos-universal
+            features: gui
+            install: |
+              brew install airspyhf librtlsdr pkg-config
+              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          - os: windows-latest
+            label: windows-x86_64
+            features: gui
+            install: pwsh -File scripts/install-windows-sdr-deps.ps1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: ${{ matrix.install }}
+        shell: bash
+
+      - name: cargo build --release
+        run: cargo build --release --features "${{ matrix.features }}"
+        shell: bash
+
+      - name: Smoke-check binary exists
+        run: |
+          case "${{ matrix.label }}" in
+            windows-*)
+              test -f target/release/hfsdr.exe
+              ;;
+            *)
+              test -f target/release/hfsdr
+              ;;
+          esac
+        shell: bash
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install mdBook
+        run: cargo install mdbook --locked --version 0.4.40
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libairspyhf-dev \
+            librtlsdr-dev \
+            libasound2-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
+
+      - name: Build documentation
+        run: ./scripts/build-docs.sh
+
+      - name: Upload book artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hfsdr-book
+          path: docs/book/
+
+      - name: Upload API docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hfsdr-api-docs
+          path: target/doc/
