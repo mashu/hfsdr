@@ -1,45 +1,48 @@
-// `pipeline` — `WaterfallApp` methods.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn toggle_pipeline_stage(&mut self, stage: PipelineStage) {
+impl WaterfallApp {
+
+    pub(crate) fn toggle_pipeline_stage(&mut self, stage: PipelineStage) {
         match stage {
             PipelineStage::NoiseBlanker => {
-                self.cw.noise_blanker.enabled = !self.cw.noise_blanker.enabled;
+                self.radio.cw.noise_blanker.enabled = !self.radio.cw.noise_blanker.enabled;
             }
             PipelineStage::ManualNotches => self.toggle_notch_bypass(),
             PipelineStage::ListenNco => {
-                self.cw.diagnostic.listen_nco = !self.cw.diagnostic.listen_nco;
+                self.radio.cw.diagnostic.listen_nco = !self.radio.cw.diagnostic.listen_nco;
             }
             PipelineStage::DecimatorFir => {
-                self.cw.diagnostic.decim_fir = !self.cw.diagnostic.decim_fir;
+                self.radio.cw.diagnostic.decim_fir = !self.radio.cw.diagnostic.decim_fir;
             }
             PipelineStage::ChannelFir => {
-                self.cw.diagnostic.channel_fir = !self.cw.diagnostic.channel_fir;
+                self.radio.cw.diagnostic.channel_fir = !self.radio.cw.diagnostic.channel_fir;
             }
             PipelineStage::Bfo => {
-                self.cw.diagnostic.bfo = !self.cw.diagnostic.bfo;
+                self.radio.cw.diagnostic.bfo = !self.radio.cw.diagnostic.bfo;
             }
-            PipelineStage::Agc => self.cw.agc.enabled = !self.cw.agc.enabled,
-            PipelineStage::Apf => self.cw.apf.enabled = !self.cw.apf.enabled,
-            PipelineStage::AutoNotch => self.cw.auto_notch.enabled = !self.cw.auto_notch.enabled,
+            PipelineStage::Agc => self.radio.cw.agc.enabled = !self.radio.cw.agc.enabled,
+            PipelineStage::Apf => self.radio.cw.apf.enabled = !self.radio.cw.apf.enabled,
+            PipelineStage::AutoNotch => self.radio.cw.auto_notch.enabled = !self.radio.cw.auto_notch.enabled,
             PipelineStage::NoiseReduction => {
-                self.cw.noise_reduction.enabled = !self.cw.noise_reduction.enabled;
+                self.radio.cw.noise_reduction.enabled = !self.radio.cw.noise_reduction.enabled;
             }
-            PipelineStage::Skimmer => self.skimmer_enabled = !self.skimmer_enabled,
-            PipelineStage::AudioOutput => self.audio_enabled = !self.audio_enabled,
+            PipelineStage::Skimmer => self.skimmer_ui.skimmer_enabled = !self.skimmer_ui.skimmer_enabled,
+            PipelineStage::AudioOutput => self.audio.audio_enabled = !self.audio.audio_enabled,
         }
         let on = match stage {
-            PipelineStage::NoiseBlanker => self.cw.noise_blanker.enabled,
-            PipelineStage::ManualNotches => self.cw.notches.iter().any(|n| n.enabled),
-            PipelineStage::ListenNco => !self.cw.diagnostic.listen_nco,
-            PipelineStage::DecimatorFir => !self.cw.diagnostic.decim_fir,
-            PipelineStage::ChannelFir => !self.cw.diagnostic.channel_fir,
-            PipelineStage::Bfo => !self.cw.diagnostic.bfo,
-            PipelineStage::Agc => self.cw.agc.enabled,
-            PipelineStage::Apf => self.cw.apf.enabled,
-            PipelineStage::AutoNotch => self.cw.auto_notch.enabled,
-            PipelineStage::NoiseReduction => self.cw.noise_reduction.enabled,
-            PipelineStage::Skimmer => self.skimmer_enabled,
-            PipelineStage::AudioOutput => self.audio_enabled,
+            PipelineStage::NoiseBlanker => self.radio.cw.noise_blanker.enabled,
+            PipelineStage::ManualNotches => self.radio.cw.notches.iter().any(|n| n.enabled),
+            PipelineStage::ListenNco => !self.radio.cw.diagnostic.listen_nco,
+            PipelineStage::DecimatorFir => !self.radio.cw.diagnostic.decim_fir,
+            PipelineStage::ChannelFir => !self.radio.cw.diagnostic.channel_fir,
+            PipelineStage::Bfo => !self.radio.cw.diagnostic.bfo,
+            PipelineStage::Agc => self.radio.cw.agc.enabled,
+            PipelineStage::Apf => self.radio.cw.apf.enabled,
+            PipelineStage::AutoNotch => self.radio.cw.auto_notch.enabled,
+            PipelineStage::NoiseReduction => self.radio.cw.noise_reduction.enabled,
+            PipelineStage::Skimmer => self.skimmer_ui.skimmer_enabled,
+            PipelineStage::AudioOutput => self.audio.audio_enabled,
         };
         let tag = if stage.is_diagnostic() { "diag" } else { "pipeline" };
         log::info(&format!(
@@ -54,19 +57,19 @@
 
 
 
-    fn toggle_notch_bypass(&mut self) {
-        let any = self.cw.notches.iter().any(|n| n.enabled);
+    pub(crate) fn toggle_notch_bypass(&mut self) {
+        let any = self.radio.cw.notches.iter().any(|n| n.enabled);
         if any {
             let mut stash = [false; MAX_NOTCHES];
-            for (slot, n) in self.cw.notches.iter_mut().enumerate() {
+            for (slot, n) in self.radio.cw.notches.iter_mut().enumerate() {
                 stash[slot] = n.enabled;
                 n.enabled = false;
             }
-            self.notch_bypass_stash = Some(stash);
+            self.chrome.notch_bypass_stash = Some(stash);
             return;
         }
-        if let Some(stash) = self.notch_bypass_stash.take() {
-            for (n, was) in self.cw.notches.iter_mut().zip(stash.iter()) {
+        if let Some(stash) = self.chrome.notch_bypass_stash.take() {
+            for (n, was) in self.radio.cw.notches.iter_mut().zip(stash.iter()) {
                 n.enabled = *was;
             }
         }
@@ -74,10 +77,10 @@
 
 
 
-    fn arm_manual_notch(&mut self, slot: usize, offset_hz: Option<ChannelOffsetHz>) {
+    pub(crate) fn arm_manual_notch(&mut self, slot: usize, offset_hz: Option<ChannelOffsetHz>) {
         let listen = ChannelOffsetHz::new(self.listen_offset_hz() as f32);
         let other: Vec<ChannelOffsetHz> = self
-            .cw
+            .radio.cw
             .notches
             .iter()
             .enumerate()
@@ -85,7 +88,7 @@
             .map(|(_, n)| n.offset_hz)
             .collect();
         let offset = offset_hz.unwrap_or_else(|| suggest_notch_offset_hz(listen, &other));
-        let Some(notch) = self.cw.notches.get_mut(slot) else {
+        let Some(notch) = self.radio.cw.notches.get_mut(slot) else {
             return;
         };
         notch.enabled = true;
@@ -93,13 +96,13 @@
         if notch.width_hz < NOTCH_WIDTH_MIN_HZ {
             notch.width_hz = 50.0;
         }
-        self.notch_bypass_stash = None;
+        self.chrome.notch_bypass_stash = None;
     }
 
 
 
-    fn enabled_notches(&self) -> Vec<crate::interaction::NotchMarker> {
-        self.cw
+    pub(crate) fn enabled_notches(&self) -> Vec<crate::interaction::NotchMarker> {
+        self.radio.cw
             .notches
             .iter()
             .enumerate()
@@ -114,12 +117,12 @@
 
 
 
-    fn toggle_manual_notch(&mut self, slot: usize) {
+    pub(crate) fn toggle_manual_notch(&mut self, slot: usize) {
         if slot >= MAX_NOTCHES {
             return;
         }
-        if self.cw.notches[slot].enabled {
-            self.cw.notches[slot].enabled = false;
+        if self.radio.cw.notches[slot].enabled {
+            self.radio.cw.notches[slot].enabled = false;
         } else {
             self.arm_manual_notch(slot, None);
         }
@@ -127,26 +130,26 @@
 
 
 
-    fn pipeline_ingress_decim(&self) -> usize {
+    pub(crate) fn pipeline_ingress_decim(&self) -> usize {
         let device_rate = if self.stats.sample_rate > 0.0 {
             self.stats.sample_rate.round() as u32
         } else {
-            self.form_sample_rate
+            self.connection.form_sample_rate
         };
-        match self.form_kind {
+        match self.connection.form_kind {
             #[cfg(feature = "airspy")]
-            SourceKind::Airspy => self.form_airspy.ingress_decimation(device_rate).0,
-            SourceKind::Kiwi => self.form_kiwi.ingress_decimation(device_rate).0,
+            SourceKind::Airspy => self.connection.form_airspy.ingress_decimation(device_rate).0,
+            SourceKind::Kiwi => self.connection.form_kiwi.ingress_decimation(device_rate).0,
             #[cfg(feature = "rtlsdr")]
-            SourceKind::RtlSdr => self.form_rtlsdr.ingress_decimation(device_rate).0,
+            SourceKind::RtlSdr => self.connection.form_rtlsdr.ingress_decimation(device_rate).0,
             #[cfg(feature = "qmx")]
-            SourceKind::Qmx => self.form_qmx.ingress_decimation(device_rate).0,
+            SourceKind::Qmx => self.connection.form_qmx.ingress_decimation(device_rate).0,
         }
     }
 
 
 
-    fn process_iq_cmds(&mut self, cmds: Vec<IqPanelCmd>) {
+    pub(crate) fn process_iq_cmds(&mut self, cmds: Vec<IqPanelCmd>) {
         for cmd in cmds {
             match cmd {
                 IqPanelCmd::StartRecord(path) => {
@@ -157,8 +160,8 @@
                 }
                 IqPanelCmd::Play(path) => {
                     if let Ok(meta) = hfsdr::read_meta(&path) {
-                        self.center_khz = meta.center_hz / 1000.0;
-                        self.plot_view.pan_offset_hz = 0.0;
+                        self.radio.center_khz = meta.center_hz / 1000.0;
+                        self.plot.plot_view.pan_offset_hz = 0.0;
                         self.clear_rit();
                     }
                     self.engine.send(EngineCommand::PlayIqFile(path));
@@ -170,3 +173,5 @@
         }
     }
 
+
+}

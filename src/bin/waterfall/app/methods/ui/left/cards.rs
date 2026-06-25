@@ -1,6 +1,9 @@
-// `ui/left/cards` — `WaterfallApp` methods.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn smeter_card(&mut self, ui: &mut egui::Ui) {
+impl WaterfallApp {
+
+    pub(crate) fn smeter_card(&mut self, ui: &mut egui::Ui) {
         let live = matches!(self.conn_state, ConnState::Streaming);
         section_frame()
             .inner_margin(egui::Margin::symmetric(8, 6))
@@ -44,7 +47,7 @@
                     } else {
                         1.0
                     },
-                    agc_enabled: live && self.cw.agc.enabled,
+                    agc_enabled: live && self.radio.cw.agc.enabled,
                     audio_peak: if live {
                         self.stats.audio_peak
                     } else {
@@ -58,7 +61,7 @@
 
 
 
-    fn frequency_card(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn frequency_card(&mut self, ui: &mut egui::Ui) {
         section_card(ui, |ui| {
             section_heading(ui, "Operator");
             ui.label(egui::RichText::new("HF — all amateur bands 160m–10m").small().color(MUTED));
@@ -68,13 +71,13 @@
             ui.horizontal(|ui| {
                 let mut vfo_changed = false;
                 ui.vertical(|ui| {
-                    vfo_changed = vfo_wheel_khz(ui, &mut self.center_khz);
+                    vfo_changed = vfo_wheel_khz(ui, &mut self.radio.center_khz);
                 });
                 ui.with_layout(
                     egui::Layout::bottom_up(egui::Align::Min),
                     |ui| {
-                        if band_lock_toggle(ui, &mut self.lock_ham_bands) {
-                            if self.lock_ham_bands {
+                        if band_lock_toggle(ui, &mut self.radio.lock_ham_bands) {
+                            if self.radio.lock_ham_bands {
                                 self.clamp_center_to_ham_bands();
                                 vfo_changed = true;
                             }
@@ -88,8 +91,8 @@
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                scroll_slider_f32_step(ui, &mut self.rit_hz, -800.0..=800.0, "RIT", 1.0);
-                let rit_on = self.rit_hz.abs() > 0.5;
+                scroll_slider_f32_step(ui, &mut self.radio.rit_hz, -800.0..=800.0, "RIT", 1.0);
+                let rit_on = self.radio.rit_hz.abs() > 0.5;
                 if ui
                     .add_enabled(
                         rit_on,
@@ -106,7 +109,7 @@
 
 
 
-    fn rf_front_end_card(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn rf_front_end_card(&mut self, ui: &mut egui::Ui) {
         let live = matches!(self.conn_state, ConnState::Streaming);
         section_card(ui, |ui| {
             section_heading_with_tip(
@@ -142,7 +145,7 @@
 
 
 
-    fn receive_chain_card(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn receive_chain_card(&mut self, ui: &mut egui::Ui) {
         collapsible_section(
             ui,
             "pipeline",
@@ -165,7 +168,7 @@
             ui.label(egui::RichText::new("① IQ — before demod").small().color(MUTED));
             stage_toggle(
                 ui,
-                &mut self.cw.noise_blanker.enabled,
+                &mut self.radio.cw.noise_blanker.enabled,
                 "Noise blanker",
                 Some("Wideband IQ impulse blanker"),
                 Some("B"),
@@ -177,11 +180,11 @@
                     ),
                 ]),
             );
-            if self.cw.noise_blanker.enabled {
-                scroll_slider_f32(ui, &mut self.cw.noise_blanker.threshold, 2.0..=12.0, "NB threshold");
-                let mut width = self.cw.noise_blanker.width as f32;
+            if self.radio.cw.noise_blanker.enabled {
+                scroll_slider_f32(ui, &mut self.radio.cw.noise_blanker.threshold, 2.0..=12.0, "NB threshold");
+                let mut width = self.radio.cw.noise_blanker.width as f32;
                 scroll_slider_f32(ui, &mut width, 1.0..=30.0, "NB recovery");
-                self.cw.noise_blanker.width = width.round() as usize;
+                self.radio.cw.noise_blanker.width = width.round() as usize;
             }
 
             ui.separator();
@@ -191,20 +194,20 @@
             ui.label(egui::RichText::new("⑤ Audio — after BFO demod (optional)").small().color(MUTED));
             stage_toggle(
                 ui,
-                &mut self.cw.apf.enabled,
+                &mut self.radio.cw.apf.enabled,
                 "Audio peak filter",
                 Some("Resonant boost at BFO pitch"),
                 Some("P"),
                 None,
             );
-            if self.cw.apf.enabled {
-                scroll_slider_f32(ui, &mut self.cw.apf.width_hz, 40.0..=300.0, "APF width");
-                scroll_slider_f32(ui, &mut self.cw.apf.gain, 0.2..=4.0, "APF gain");
+            if self.radio.cw.apf.enabled {
+                scroll_slider_f32(ui, &mut self.radio.cw.apf.width_hz, 40.0..=300.0, "APF width");
+                scroll_slider_f32(ui, &mut self.radio.cw.apf.gain, 0.2..=4.0, "APF gain");
             }
 
             stage_toggle(
                 ui,
-                &mut self.cw.auto_notch.enabled,
+                &mut self.radio.cw.auto_notch.enabled,
                 "Auto-notch",
                 Some("Audio LMS with BFO guard"),
                 Some("N"),
@@ -220,14 +223,14 @@
                     ),
                 ]),
             );
-            if self.cw.auto_notch.enabled {
-                scroll_slider_f32(ui, &mut self.cw.auto_notch.guard_hz, 60.0..=300.0, "Guard ±Hz");
-                scroll_slider_f32(ui, &mut self.cw.auto_notch.rate, 0.002..=0.1, "Adapt rate");
+            if self.radio.cw.auto_notch.enabled {
+                scroll_slider_f32(ui, &mut self.radio.cw.auto_notch.guard_hz, 60.0..=300.0, "Guard ±Hz");
+                scroll_slider_f32(ui, &mut self.radio.cw.auto_notch.rate, 0.002..=0.1, "Adapt rate");
             }
 
             stage_toggle(
                 ui,
-                &mut self.cw.noise_reduction.enabled,
+                &mut self.radio.cw.noise_reduction.enabled,
                 "Noise reduction",
                 Some("Light audio LMS polish"),
                 Some("R"),
@@ -239,15 +242,15 @@
                     ),
                 ]),
             );
-            if self.cw.noise_reduction.enabled {
-                scroll_slider_f32(ui, &mut self.cw.noise_reduction.level, 0.0..=0.5, "NR level");
+            if self.radio.cw.noise_reduction.enabled {
+                scroll_slider_f32(ui, &mut self.radio.cw.noise_reduction.level, 0.0..=0.5, "NR level");
             }
         });
     }
 
 
 
-    fn manual_notches_body(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn manual_notches_body(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let label = ui.label(
@@ -269,7 +272,7 @@
             attach_rich_tooltip(&hint, Some("Manual notches"), tip);
         });
         for idx in 0..MAX_NOTCHES {
-            let was_enabled = self.cw.notches[idx].enabled;
+            let was_enabled = self.radio.cw.notches[idx].enabled;
             let key = match idx {
                 0 => "1",
                 1 => "2",
@@ -278,17 +281,17 @@
             };
             stage_toggle(
                 ui,
-                &mut self.cw.notches[idx].enabled,
+                &mut self.radio.cw.notches[idx].enabled,
                 &format!("Manual notch #{}", idx + 1),
                 Some("Complex IQ — drag on spectrum"),
                 Some(key),
                 None,
             );
-            if self.cw.notches[idx].enabled && !was_enabled {
+            if self.radio.cw.notches[idx].enabled && !was_enabled {
                 self.arm_manual_notch(idx, None);
             }
-            if self.cw.notches[idx].enabled {
-                let notch = &mut self.cw.notches[idx];
+            if self.radio.cw.notches[idx].enabled {
+                let notch = &mut self.radio.cw.notches[idx];
                 let mut offset_hz = notch.offset_hz.hz();
                 scroll_slider_f32_step(
                     ui,
@@ -303,3 +306,5 @@
         }
     }
 
+
+}

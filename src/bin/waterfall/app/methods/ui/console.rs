@@ -1,6 +1,9 @@
-// `ui/console` — `WaterfallApp` methods.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn console_panel(&mut self, ui: &mut egui::Ui) {
+impl WaterfallApp {
+
+    pub(crate) fn console_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Log").strong());
             if ui.button("Clear").clicked() {
@@ -22,3 +25,5 @@
             });
     }
 
+
+}

@@ -376,6 +376,8 @@ fn paint_y_labels(painter: &eframe::egui::Painter, outer: Rect, plot: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meters::agc_loop::if_agc_fill;
+    use crate::meters::level::{classify_level, dbm_to_needle_t, dbm_to_s_reading, rf_level_dbm};
 
     #[test]
     fn quiet_when_peak_low() {

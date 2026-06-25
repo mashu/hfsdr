@@ -4,6 +4,8 @@
 //! centered on `frequency()`, by pushing into a single-producer/single-consumer
 //! ring. The caller drains the [`Consumer`] returned by [`IqSource::start`].
 
+pub mod controls;
+
 use std::fmt;
 
 pub use num_complex::Complex32;

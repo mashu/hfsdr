@@ -63,4 +63,5 @@ pub use skimmer::{
     EnvelopeSettings, MasterScp, Peak, Skimmer, SkimmerConfig, SkimmerDecoderKind, Spot,
     SpotKind, SpotSort, SpotStore, MASTER_SCP_URL,
 };
+pub use source::controls::*;
 pub use source::{Complex32, Consumer, IqSource, Result, SourceError};

@@ -13,7 +13,7 @@ const LOOP_METER_BAR_H: f32 = 7.0;
 const LOOP_METER_ROW_H: f32 = LOOP_METER_LABEL_H + LOOP_METER_LABEL_GAP + LOOP_METER_BAR_H;
 const LOOP_METER_ROW_GAP: f32 = 5.0;
 /// IF AGC bar: high = boosting weak RF, low = pulling back hot RF (classic dual-loop).
-fn if_agc_fill(agc_gain: f32, agc_enabled: bool) -> f32 {
+pub(crate) fn if_agc_fill(agc_gain: f32, agc_enabled: bool) -> f32 {
     if !agc_enabled {
         return 0.5;
     }

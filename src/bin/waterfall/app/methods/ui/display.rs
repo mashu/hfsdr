@@ -1,6 +1,9 @@
-// `ui/display` — panadapter / waterfall display controls.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn display_section(&mut self, ui: &mut egui::Ui) {
+impl WaterfallApp {
+
+    pub(crate) fn display_section(&mut self, ui: &mut egui::Ui) {
         collapsible_section(
             ui,
             "display",
@@ -20,8 +23,8 @@
             true,
             |ui| {
             let max_zoom = self.plot_max_zoom_out();
-            scroll_slider_f32(ui, &mut self.plot_view.zoom, 0.04..=max_zoom, "View zoom");
-            self.plot_view.clamp_pan(self.plot_full_span_hz(), max_zoom);
+            scroll_slider_f32(ui, &mut self.plot.plot_view.zoom, 0.04..=max_zoom, "View zoom");
+            self.plot.plot_view.clamp_pan(self.plot_full_span_hz(), max_zoom);
             let view = self.spectrum_view();
             let view_khz = view.view_span_hz / 1000.0;
             ui.label(
@@ -33,40 +36,40 @@
             );
             ui.horizontal(|ui| {
                 if ui.small_button("Full IQ (F)").clicked() {
-                    self.plot_view.zoom_to_full_span();
+                    self.plot.plot_view.zoom_to_full_span();
                 }
-                if self.is_kiwi {
+                if self.radio.is_kiwi {
                     if ui.small_button("CW band view").clicked() {
                         let full_span = self.plot_full_span_hz();
                         let max_zoom = self.plot_max_zoom_out();
                         let segment = self.default_cw_segment_hz();
-                        self.plot_view
+                        self.plot.plot_view
                             .zoom_to_cw_segment(segment, full_span, max_zoom);
                     }
                 }
             });
             ui.add_space(4.0);
-            scroll_slider_f32_step(ui, &mut self.pan_step_hz, 50.0..=5000.0, "Pan step (Hz)", 50.0);
+            scroll_slider_f32_step(ui, &mut self.display.pan_step_hz, 50.0..=5000.0, "Pan step (Hz)", 50.0);
             scroll_slider_f32_step(
                 ui,
-                &mut self.pan_step_fast_hz,
+                &mut self.display.pan_step_fast_hz,
                 500.0..=50_000.0,
                 "Fast pan step (Hz)",
                 500.0,
             );
-            self.pan_step_fast_hz = self.pan_step_fast_hz.max(self.pan_step_hz);
-            if self.is_kiwi {
+            self.display.pan_step_fast_hz = self.display.pan_step_fast_hz.max(self.display.pan_step_hz);
+            if self.radio.is_kiwi {
                 toggle(
                     ui,
-                    &mut self.show_band_overview,
+                    &mut self.display.show_band_overview,
                     "Band overview minimap (M)",
                 );
             }
-            let floor_db = self.ref_db - self.range_db;
+            let floor_db = self.display.ref_db - self.display.range_db;
             ui.label(
                 egui::RichText::new(format!(
                     "Floor {:.0} dB · Ref {:.0} dB · Range {:.0} dB",
-                    floor_db, self.ref_db, self.range_db
+                    floor_db, self.display.ref_db, self.display.range_db
                 ))
                 .small()
                 .color(MUTED),
@@ -77,11 +80,11 @@
                     .on_hover_text("Set Ref/Range once from the live spectrum")
                     .clicked()
                 {
-                    self.display_levels_initialized = false;
+                    self.display.display_levels_initialized = false;
                     self.update_display_levels();
                 }
                 ui.toggle_value(
-                    &mut self.display_auto_track,
+                    &mut self.display.display_auto_track,
                     "Track continuously",
                 )
                 .on_hover_text(
@@ -89,30 +92,30 @@
                      waterfall brightness while this is on",
                 );
             });
-            if scroll_slider_f32(ui, &mut self.ref_db, -120.0..=20.0, "Ref dB").changed() {
-                self.display_levels_initialized = true;
-                self.display_auto_track = false;
-                self.force_texture_full = true;
-                self.textures_dirty = true;
+            if scroll_slider_f32(ui, &mut self.display.ref_db, -120.0..=20.0, "Ref dB").changed() {
+                self.display.display_levels_initialized = true;
+                self.display.display_auto_track = false;
+                self.plot.force_texture_full = true;
+                self.plot.textures_dirty = true;
             }
-            if scroll_slider_f32(ui, &mut self.range_db, 12.0..=80.0, "Range dB").changed() {
-                self.display_levels_initialized = true;
-                self.display_auto_track = false;
-                self.force_texture_full = true;
-                self.textures_dirty = true;
+            if scroll_slider_f32(ui, &mut self.display.range_db, 12.0..=80.0, "Range dB").changed() {
+                self.display.display_levels_initialized = true;
+                self.display.display_auto_track = false;
+                self.plot.force_texture_full = true;
+                self.plot.textures_dirty = true;
             }
-            scroll_slider_f32(ui, &mut self.smooth_alpha, 0.05..=0.45, "Spectrum smooth");
+            scroll_slider_f32(ui, &mut self.display.smooth_alpha, 0.05..=0.45, "Spectrum smooth");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Waterfall avg").small().color(MUTED));
                 for (label, n) in [("None", 1_u8), ("2×", 2), ("4×", 4)] {
                     if ui
-                        .selectable_label(self.waterfall_avg == n, label)
+                        .selectable_label(self.display.waterfall_avg == n, label)
                         .on_hover_text("Time-average consecutive FFT rows in the waterfall")
                         .clicked()
                     {
-                        self.waterfall_avg = n;
-                        self.force_texture_full = true;
-                        self.textures_dirty = true;
+                        self.display.waterfall_avg = n;
+                        self.plot.force_texture_full = true;
+                        self.plot.textures_dirty = true;
                     }
                 }
             });
@@ -120,3 +123,5 @@
     }
 
 
+
+}

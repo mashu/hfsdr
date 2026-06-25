@@ -1,6 +1,9 @@
-// `ui/status` — `WaterfallApp` methods.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn connection_status_pill(&self) -> (String, Color32) {
+impl WaterfallApp {
+
+    pub(crate) fn connection_status_pill(&self) -> (String, Color32) {
         match &self.conn_state {
             ConnState::Streaming if self.connection_unstable() => ("UNSTABLE".to_string(), WARN),
             ConnState::Streaming => ("STREAMING".to_string(), OK),
@@ -14,7 +17,7 @@
 
 
 
-    fn connection_session_live(&self) -> bool {
+    pub(crate) fn connection_session_live(&self) -> bool {
         matches!(
             self.conn_state,
             ConnState::Streaming | ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
@@ -23,26 +26,26 @@
 
 
 
-    fn connection_alias(&self) -> String {
-        match self.form_kind {
+    pub(crate) fn connection_alias(&self) -> String {
+        match self.connection.form_kind {
             #[cfg(feature = "airspy")]
             SourceKind::Airspy => "Airspy HF+".to_string(),
             #[cfg(feature = "rtlsdr")]
-            SourceKind::RtlSdr => format!("RTL-SDR #{}", self.form_rtlsdr.device_index),
+            SourceKind::RtlSdr => format!("RTL-SDR #{}", self.connection.form_rtlsdr.device_index),
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => {
-                if self.form_qmx.serial_port.is_empty() {
+                if self.connection.form_qmx.serial_port.is_empty() {
                     "QMX".to_string()
                 } else {
-                    format!("QMX ({})", self.form_qmx.serial_port)
+                    format!("QMX ({})", self.connection.form_qmx.serial_port)
                 }
             }
             SourceKind::Kiwi => {
-                let host = self.form_host.trim();
+                let host = self.connection.form_host.trim();
                 if host.is_empty() {
                     "KiwiSDR".to_string()
                 } else {
-                    format!("{host}:{}", self.form_port)
+                    format!("{host}:{}", self.connection.form_port)
                 }
             }
         }
@@ -50,7 +53,7 @@
 
 
 
-    fn status_banner(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn status_banner(&mut self, ui: &mut egui::Ui) {
         let conn_label = match &self.conn_state {
             ConnState::Streaming if self.connection_unstable() => "UNSTABLE".to_string(),
             ConnState::Streaming => "STREAMING".to_string(),
@@ -72,13 +75,13 @@
             let badge_resp = clickable_badge(ui, &conn_label, conn_color)
                 .on_hover_text("Click to open connection settings");
             if badge_resp.clicked() {
-                self.show_connection_drawer = !self.show_connection_drawer;
+                self.connection.show_connection_drawer = !self.connection.show_connection_drawer;
             }
             if self.connection_session_live() {
                 let alias_resp =
                     crate::status_widgets::connection_alias_chip(ui, &self.connection_alias());
                 if alias_resp.clicked() {
-                    self.show_connection_drawer = !self.show_connection_drawer;
+                    self.connection.show_connection_drawer = !self.connection.show_connection_drawer;
                 }
                 if crate::status_widgets::disconnect_chip(ui).clicked() {
                     self.cancel_connection();
@@ -99,7 +102,7 @@
 
             ui.separator();
             ui.label(
-                egui::RichText::new(format!("RX {:.6} MHz", self.center_khz / 1000.0))
+                egui::RichText::new(format!("RX {:.6} MHz", self.radio.center_khz / 1000.0))
                     .strong()
                     .monospace()
                     .color(rx_color),
@@ -112,11 +115,11 @@
 
             ui.separator();
             ui.label(
-                egui::RichText::new(format!("SNR {:.0} dB", self.last_snr_db))
+                egui::RichText::new(format!("SNR {:.0} dB", self.radio.last_snr_db))
                     .small()
                     .color(MUTED),
             );
-            let (cursor_label, cursor_active) = if let Some(offset) = self.hover_offset_hz {
+            let (cursor_label, cursor_active) = if let Some(offset) = self.plot.hover_offset_hz {
                 let cursor_hz = self.center_hz() + offset;
                 (
                     format!(
@@ -131,20 +134,20 @@
             crate::status_widgets::cursor_freq_slot(ui, &cursor_label, cursor_active);
             let engine_resp = crate::status_widgets::engine_pipeline_chip(
                 ui,
-                self.show_pipeline_drawer,
+                self.chrome.show_pipeline_drawer,
                 streaming,
             );
             if engine_resp.clicked() {
-                self.show_pipeline_drawer = !self.show_pipeline_drawer;
+                self.chrome.show_pipeline_drawer = !self.chrome.show_pipeline_drawer;
             }
             let gauge_resp = crate::status_widgets::iq_buffer_control(
                 ui,
                 self.stats.iq_buffer_fill,
                 self.stats.iq_buffer_secs,
-                self.show_iq_drawer,
+                self.chrome.show_iq_drawer,
             );
             if gauge_resp.clicked() {
-                self.show_iq_drawer = !self.show_iq_drawer;
+                self.chrome.show_iq_drawer = !self.chrome.show_iq_drawer;
             }
             let rec_secs = self.stats.iq_capture_samples as f32 / self.stats.sample_rate.max(1.0);
             let rec_resp = crate::status_widgets::iq_record_toggle(
@@ -154,19 +157,19 @@
                 rec_secs,
             );
             if rec_resp.clicked() {
-                if let Some(cmd) = self.iq.toggle_recording(self.stats.iq_recording, streaming) {
+                if let Some(cmd) = self.chrome.iq.toggle_recording(self.stats.iq_recording, streaming) {
                     self.settings_dirty_at = Some(Instant::now());
                     self.process_iq_cmds(vec![cmd]);
                 }
             }
-            let has_iq_file = !self.iq.playback_path.trim().is_empty();
+            let has_iq_file = !self.chrome.iq.playback_path.trim().is_empty();
             let play_resp = crate::status_widgets::iq_playback_chip(
                 ui,
                 self.stats.iq_playback,
                 has_iq_file,
             );
             if play_resp.clicked() {
-                if let Some(cmd) = self.iq.replay_playback() {
+                if let Some(cmd) = self.chrome.iq.replay_playback() {
                     self.process_iq_cmds(vec![cmd]);
                 }
             }
@@ -175,7 +178,7 @@
                     .small()
                     .color(MUTED),
             );
-            if !self.is_kiwi
+            if !self.radio.is_kiwi
                 && self.stats.sample_rate > 0.0
                 && (self.stats.effective_sps / self.stats.sample_rate) < 0.85
             {
@@ -194,7 +197,7 @@
             if self.stats.dropped > 0 {
                 ui.colored_label(WARN, format!("drops {}", self.stats.dropped));
             }
-            if streaming && !(self.show_left && self.show_smeter) {
+            if streaming && !(self.chrome.show_left && self.chrome.show_smeter) {
                 show_status_rf_meter(
                     ui,
                     self.rf_meter_dbm(),
@@ -211,7 +214,7 @@
                     .on_hover_text("Keyboard shortcuts")
                     .clicked()
                 {
-                    self.show_shortcuts = !self.show_shortcuts;
+                    self.chrome.show_shortcuts = !self.chrome.show_shortcuts;
                 }
                 if ui
                     .button("F11")
@@ -223,11 +226,11 @@
                         .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
                 }
                 ui.separator();
-                panel_toggle(ui, &mut self.show_console, "Log", "Application log (`)");
-                panel_toggle(ui, &mut self.show_history, "Spots", "Decoded callsign history");
+                panel_toggle(ui, &mut self.chrome.show_console, "Log", "Application log (`)");
+                panel_toggle(ui, &mut self.chrome.show_history, "Spots", "Decoded callsign history");
                 if panel_toggle(
                     ui,
-                    &mut self.show_af_scope,
+                    &mut self.chrome.show_af_scope,
                     "Scope",
                     "AF scope for RF gain tuning (G)",
                 ) {
@@ -235,12 +238,12 @@
                 }
                 panel_toggle(
                     ui,
-                    &mut self.show_smeter,
+                    &mut self.chrome.show_smeter,
                     "Meter",
                     "S-meter and IF/AF AGC levels",
                 );
-                panel_toggle(ui, &mut self.show_right, "DSP", "CW demod, skimmer, audio, display");
-                panel_toggle(ui, &mut self.show_left, "RX", "VFO, RF gains, IQ chain");
+                panel_toggle(ui, &mut self.chrome.show_right, "DSP", "CW demod, skimmer, audio, display");
+                panel_toggle(ui, &mut self.chrome.show_left, "RX", "VFO, RF gains, IQ chain");
             });
         });
 
@@ -251,3 +254,5 @@
         }
     }
 
+
+}

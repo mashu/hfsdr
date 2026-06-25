@@ -1,6 +1,9 @@
-// `ui/layout` — `WaterfallApp` methods.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn side_panel_scroll(&mut self, ui: &mut egui::Ui, mut body: impl FnMut(&mut Self, &mut egui::Ui)) {
+impl WaterfallApp {
+
+    pub(crate) fn side_panel_scroll(&mut self, ui: &mut egui::Ui, mut body: impl FnMut(&mut Self, &mut egui::Ui)) {
         let panel_w = ui.max_rect().width();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -12,12 +15,12 @@
 
 
 
-    fn left_panel(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn left_panel(&mut self, ui: &mut egui::Ui) {
         self.side_panel_scroll(ui, |this, ui| {
-            if this.show_smeter {
+            if this.chrome.show_smeter {
                 this.smeter_card(ui);
             }
-            if !this.show_left {
+            if !this.chrome.show_left {
                 return;
             }
             this.frequency_card(ui);
@@ -28,7 +31,7 @@
 
 
 
-    fn right_panel(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn right_panel(&mut self, ui: &mut egui::Ui) {
         self.side_panel_scroll(ui, |this, ui| {
             this.af_tuning_card(ui);
             this.cw_demod_card(ui);
@@ -44,3 +47,5 @@
         });
     }
 
+
+}

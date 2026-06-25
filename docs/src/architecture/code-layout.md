@@ -51,15 +51,22 @@ Adding a stage:
 
 | Module | Role |
 |--------|------|
-| `app.rs` | Panels, shortcuts, state |
-| `engine.rs` | Background thread, connection |
-| `widgets.rs` | Spectrum/waterfall draw |
-| `interaction.rs` | Mouse → tune/BW actions |
+| `app/mod.rs` | `WaterfallApp` shell, panel layout |
+| `app/methods/` | `impl WaterfallApp` per feature (plot, tuning, connection, …) |
+| `app/state/` | Grouped UI state (`ConnectionState`, `PlotState`, …) |
+| `engine/` | Background thread, pump, connection lifecycle |
+| `engine/policy.rs` | Pure wideband / pump policy (unit-tested) |
+| `widgets/` | Spectrum/waterfall draw layers |
+| `interaction/` | Plot state, geometry, freq formatting |
+| `source/` | Connect requests, per-device settings, `connect()` |
 | `spot_filter.rs` | Pure spot filter/sort |
 | `settings.rs` | JSON persistence |
 | `log.rs` | Ring log |
 
 **Rule:** business logic out of `show()` closures — keep widgets dumb.
+
+Largest real-time hotspot: `engine/pump.rs` (`pump_stream`). Policy thresholds
+live in `engine/policy.rs`.
 
 ---
 

@@ -15,7 +15,7 @@ Required capabilities:
 4. **Stop** and release resources.
 5. Report **dropped** sample count on overload.
 
-Contract details in `source.rs` module documentation.
+Contract details in `src/source.rs` module documentation.
 
 ---
 
@@ -33,7 +33,7 @@ Violating this causes USB dropouts or Kiwi disconnects.
 
 ## Wire into the GUI
 
-Add variant to connection UI in `bin/waterfall/source.rs` (`ConnectRequest`).
+Add variant to connection UI in `bin/waterfall/source/connection.rs` (`ConnectRequest`).
 
 Engine creates the source inside **engine thread** on `Connect` command — device
 handles need not be `Send`.

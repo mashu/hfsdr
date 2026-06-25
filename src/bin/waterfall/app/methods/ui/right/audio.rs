@@ -1,32 +1,35 @@
-// `ui/right/audio` — audio output device and volume.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn audio_card_body(&mut self, ui: &mut egui::Ui) {
-        if self.audio_devices.is_empty() {
+impl WaterfallApp {
+
+    pub(crate) fn audio_card_body(&mut self, ui: &mut egui::Ui) {
+        if self.audio.audio_devices.is_empty() {
                 ui.colored_label(WARN, "No output devices found");
             } else {
                 let selected = self
-                    .audio_devices
-                    .get(self.selected_audio_device)
+                    .audio.audio_devices
+                    .get(self.audio.selected_audio_device)
                     .map(String::as_str)
                     .unwrap_or("");
                 egui::ComboBox::from_label("Output device")
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
-                        for (idx, name) in self.audio_devices.iter().enumerate() {
-                            ui.selectable_value(&mut self.selected_audio_device, idx, name);
+                        for (idx, name) in self.audio.audio_devices.iter().enumerate() {
+                            ui.selectable_value(&mut self.audio.selected_audio_device, idx, name);
                         }
                     });
                 if ui.small_button("Refresh devices").clicked() {
-                    self.audio_devices = AudioOutput::list_output_devices();
-                    if self.selected_audio_device >= self.audio_devices.len() {
-                        self.selected_audio_device = 0;
+                    self.audio.audio_devices = AudioOutput::list_output_devices();
+                    if self.audio.selected_audio_device >= self.audio.audio_devices.len() {
+                        self.audio.selected_audio_device = 0;
                     }
-                    self.last_audio_device = usize::MAX;
+                    self.audio.last_audio_device = usize::MAX;
                 }
             }
             stage_toggle(
                 ui,
-                &mut self.audio_enabled,
+                &mut self.audio.audio_enabled,
                 "Speakers",
                 Some("Spectrum/waterfall keep running when off"),
                 Some("Space"),
@@ -38,7 +41,7 @@
                     ),
                 ]),
             );
-            scroll_slider_f32(ui, &mut self.volume, 0.0..=4.0, "Volume (- / +)");
+            scroll_slider_f32(ui, &mut self.audio.volume, 0.0..=4.0, "Volume (- / +)");
             if let Some(name) = &self.stats.audio_device {
                 stat_row(ui, "Active", name.clone());
                 stat_row(ui, "Rate", format!("{} Hz", self.stats.audio_rate));
@@ -48,3 +51,5 @@
     }
 
 
+
+}

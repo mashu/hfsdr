@@ -1,6 +1,9 @@
-// `ui/connection/card` — connection drawer orchestration.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn connection_card(&mut self, ui: &mut egui::Ui) {
+impl WaterfallApp {
+
+    pub(crate) fn connection_card(&mut self, ui: &mut egui::Ui) {
         let connecting = matches!(
             self.conn_state,
             ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
@@ -15,21 +18,21 @@
         self.connection_form_section(ui);
 
         #[cfg(feature = "airspy")]
-        if self.form_kind == SourceKind::Airspy {
+        if self.connection.form_kind == SourceKind::Airspy {
             self.connection_airspy_section(ui);
         }
 
         #[cfg(feature = "rtlsdr")]
-        if self.form_kind == SourceKind::RtlSdr {
+        if self.connection.form_kind == SourceKind::RtlSdr {
             self.connection_rtlsdr_section(ui);
         }
 
         #[cfg(feature = "qmx")]
-        if self.form_kind == SourceKind::Qmx {
+        if self.connection.form_kind == SourceKind::Qmx {
             self.connection_qmx_section(ui);
         }
 
-        if self.form_kind == SourceKind::Kiwi {
+        if self.connection.form_kind == SourceKind::Kiwi {
             self.connection_kiwi_iq_section(ui);
             self.connection_kiwi_browser_section(ui);
         }
@@ -37,3 +40,5 @@
         self.connection_recent_section(ui);
         self.connection_status_footer(ui, connecting);
     }
+
+}

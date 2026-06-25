@@ -2,7 +2,7 @@
 //!
 //! Stored as JSON at `dirs::config_dir()/hfsdr/settings.json`. Every field is
 //! `#[serde(default)]` so older/newer files load gracefully. The conversions to
-//! and from live app/DSP state live in `app.rs` (which owns the private fields).
+//! conversions to and from live app/DSP state live in `app/methods/settings.rs`.
 
 use serde::{Deserialize, Serialize};
 

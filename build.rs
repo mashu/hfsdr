@@ -11,7 +11,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
 
     if std::env::var_os("CARGO_FEATURE_GUI_CORE").is_some() {
-        generate_waterfall_impl_methods();
+        let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+        let methods = manifest_dir.join("src/bin/waterfall/app/methods");
+        println!("cargo:rerun-if-changed={}", methods.display());
     }
 
     if std::env::var_os("CARGO_FEATURE_AIRSPY").is_some() {
@@ -80,6 +82,7 @@ fn link_windows_lib(pkg: &str) -> bool {
     for lib_dir in windows_lib_dirs() {
         if find_lib_in_dir(&lib_dir, lib_name).is_some() {
             println!("cargo:rustc-link-search=native={}", lib_dir.display());
+            println!("cargo:rustc-link-lib=dylib={lib_name}");
             return true;
         }
     }
@@ -90,13 +93,19 @@ fn link_windows_lib(pkg: &str) -> bool {
 fn windows_lib_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(deps) = std::env::var("HFSDR_DEPS_PREFIX") {
-        dirs.push(PathBuf::from(deps).join("lib"));
+        let prefix = PathBuf::from(&deps);
+        dirs.push(prefix.join("lib"));
+        dirs.push(prefix.join("bin"));
     }
     if let Ok(vcpkg) = std::env::var("VCPKG_ROOT") {
-        dirs.push(PathBuf::from(vcpkg).join("installed/x64-windows/lib"));
+        let installed = PathBuf::from(vcpkg).join("installed/x64-windows");
+        dirs.push(installed.join("lib"));
+        dirs.push(installed.join("bin"));
     }
     if let Ok(installed) = std::env::var("VCPKG_INSTALLED_DIR") {
-        dirs.push(PathBuf::from(installed).join("lib"));
+        let root = PathBuf::from(installed);
+        dirs.push(root.join("lib"));
+        dirs.push(root.join("bin"));
     }
     dirs
 }
@@ -233,47 +242,6 @@ fn has_symbol_dumpbin(lib: &Path, sym: &str) -> bool {
         return false;
     }
     String::from_utf8_lossy(&output.stdout).contains(sym)
-}
-
-fn generate_waterfall_impl_methods() {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
-    let script = manifest_dir.join("scripts/split_app_rs.py");
-    let methods_dir = manifest_dir.join("src/bin/waterfall/app/methods");
-    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default())
-        .join("waterfall_impl_methods.inc");
-
-    println!("cargo:rerun-if-changed={}", script.display());
-    println!("cargo:rerun-if-changed={}", methods_dir.display());
-
-    let python = python_command();
-    let status = Command::new(python)
-        .arg(&script)
-        .arg("--regenerate-impl")
-        .arg("--out")
-        .arg(&out)
-        .status()
-        .unwrap_or_else(|e| panic!("failed to run {} with {python}: {e}", script.display()));
-
-    if !status.success() {
-        panic!(
-            "waterfall impl_methods generation failed (exit {status}); \
-             run: {python} scripts/split_app_rs.py --regenerate-impl"
-        );
-    }
-}
-
-fn python_command() -> &'static str {
-    for cmd in ["python3", "python"] {
-        if Command::new(cmd)
-            .arg("--version")
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            return cmd;
-        }
-    }
-    "python3"
 }
 
 #[cfg(target_os = "macos")]

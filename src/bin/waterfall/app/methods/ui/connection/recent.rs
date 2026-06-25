@@ -1,12 +1,15 @@
-// `ui/connection/recent` — recent hosts and connection status footer.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn connection_recent_section(&mut self, ui: &mut egui::Ui) {
-        if self.recent_hosts.is_empty() {
+impl WaterfallApp {
+
+    pub(crate) fn connection_recent_section(&mut self, ui: &mut egui::Ui) {
+        if self.connection.recent_hosts.is_empty() {
             return;
         }
         popup_section(ui, "Recent", None, |ui| {
-            let labels: Vec<String> = self.recent_hosts.iter().map(|r| r.label()).collect();
-            let recents = self.recent_hosts.clone();
+            let labels: Vec<String> = self.connection.recent_hosts.iter().map(|r| r.label()).collect();
+            let recents = self.connection.recent_hosts.clone();
             if let Some(i) = chip_row(ui, &labels) {
                 let req = &recents[i];
                 self.apply_connect_form(req);
@@ -15,7 +18,7 @@
         });
     }
 
-    fn connection_status_footer(&mut self, ui: &mut egui::Ui, connecting: bool) {
+    pub(crate) fn connection_status_footer(&mut self, ui: &mut egui::Ui, connecting: bool) {
         if let Some(err) = &self.last_error {
             if connecting {
                 alert_banner(ui, err, None);
@@ -34,3 +37,5 @@
         }
         inline_stats(ui, &stats);
     }
+
+}

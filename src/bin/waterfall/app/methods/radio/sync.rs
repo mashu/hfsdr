@@ -1,33 +1,36 @@
-// `radio/sync` — push live tuning and RF parameters to the engine.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn apply_audio_device(&mut self) {
-        if self.selected_audio_device == self.last_audio_device {
+impl WaterfallApp {
+
+    pub(crate) fn apply_audio_device(&mut self) {
+        if self.audio.selected_audio_device == self.audio.last_audio_device {
             return;
         }
-        let name = self.audio_devices.get(self.selected_audio_device).cloned();
+        let name = self.audio.audio_devices.get(self.audio.selected_audio_device).cloned();
         self.engine.send(EngineCommand::SetAudioDevice(name));
-        self.last_audio_device = self.selected_audio_device;
+        self.audio.last_audio_device = self.audio.selected_audio_device;
     }
 
-    fn kiwi_rf_live(&self) -> bool {
-        self.form_kind == SourceKind::Kiwi && matches!(self.conn_state, ConnState::Streaming)
+    pub(crate) fn kiwi_rf_live(&self) -> bool {
+        self.connection.form_kind == SourceKind::Kiwi && matches!(self.conn_state, ConnState::Streaming)
     }
 
-    fn sync_kiwi_rf_now(&mut self) {
+    pub(crate) fn sync_kiwi_rf_now(&mut self) {
         if !self.kiwi_rf_live() {
             return;
         }
         let mut rf_changed = false;
-        if self.agc_rf_on != self.last_agc_rf_on {
-            self.engine.send(EngineCommand::SetRfAgc(self.agc_rf_on));
-            self.last_agc_rf_on = self.agc_rf_on;
-            self.form_kiwi.rf_agc_on = self.agc_rf_on;
+        if self.radio.agc_rf_on != self.radio.last_agc_rf_on {
+            self.engine.send(EngineCommand::SetRfAgc(self.radio.agc_rf_on));
+            self.radio.last_agc_rf_on = self.radio.agc_rf_on;
+            self.connection.form_kiwi.rf_agc_on = self.radio.agc_rf_on;
             rf_changed = true;
         }
-        if self.form_kiwi.man_gain != self.last_kiwi_man_gain {
+        if self.connection.form_kiwi.man_gain != self.radio.last_kiwi_man_gain {
             self.engine
-                .send(EngineCommand::SetKiwiManGain(self.form_kiwi.man_gain));
-            self.last_kiwi_man_gain = self.form_kiwi.man_gain;
+                .send(EngineCommand::SetKiwiManGain(self.connection.form_kiwi.man_gain));
+            self.radio.last_kiwi_man_gain = self.connection.form_kiwi.man_gain;
             rf_changed = true;
         }
         if rf_changed {
@@ -35,15 +38,15 @@
         }
     }
 
-    fn rf_meter_dbm(&self) -> f32 {
+    pub(crate) fn rf_meter_dbm(&self) -> f32 {
         rf_level_dbm(self.stats.rssi_dbm, self.stats.iq_rf_level)
     }
 
-    fn apply_radio_settings(&mut self) {
-        if (self.center_khz - self.last_center_khz).abs() > f64::EPSILON {
+    pub(crate) fn apply_radio_settings(&mut self) {
+        if (self.radio.center_khz - self.radio.last_center_khz).abs() > f64::EPSILON {
             self.invalidate_waterfall_history();
-            self.engine.send(EngineCommand::Tune(self.center_khz * 1000.0));
-            self.last_center_khz = self.center_khz;
+            self.engine.send(EngineCommand::Tune(self.radio.center_khz * 1000.0));
+            self.radio.last_center_khz = self.radio.center_khz;
         }
         self.sync_kiwi_rf_now();
         self.apply_kiwi_rf_attn_settings();
@@ -53,28 +56,28 @@
         self.apply_audio_device();
     }
 
-    fn apply_kiwi_rf_attn_settings(&mut self) {
+    pub(crate) fn apply_kiwi_rf_attn_settings(&mut self) {
         if !self.kiwi_rf_live() {
             return;
         }
-        if self.stats.kiwi_has_rf_attn && !self.last_kiwi_has_rf_attn {
+        if self.stats.kiwi_has_rf_attn && !self.radio.last_kiwi_has_rf_attn {
             self.engine
-                .send(EngineCommand::SetKiwiRfAttn(self.form_kiwi.rf_attn_db));
-            self.last_kiwi_rf_attn_db = self.form_kiwi.rf_attn_db;
+                .send(EngineCommand::SetKiwiRfAttn(self.connection.form_kiwi.rf_attn_db));
+            self.radio.last_kiwi_rf_attn_db = self.connection.form_kiwi.rf_attn_db;
         }
-        self.last_kiwi_has_rf_attn = self.stats.kiwi_has_rf_attn;
+        self.radio.last_kiwi_has_rf_attn = self.stats.kiwi_has_rf_attn;
         if !self.stats.kiwi_has_rf_attn {
             return;
         }
-        let db = self.form_kiwi.rf_attn_db;
-        if (db - self.last_kiwi_rf_attn_db).abs() > 0.05 {
+        let db = self.connection.form_kiwi.rf_attn_db;
+        if (db - self.radio.last_kiwi_rf_attn_db).abs() > 0.05 {
             self.engine.send(EngineCommand::SetKiwiRfAttn(db));
-            self.last_kiwi_rf_attn_db = db;
+            self.radio.last_kiwi_rf_attn_db = db;
             self.lock_display_levels_for_rf_tuning();
         }
     }
 
-    fn apply_qmx_live_settings(&mut self) {
+    pub(crate) fn apply_qmx_live_settings(&mut self) {
         #[cfg(not(feature = "qmx"))]
         {
             let _ = self;
@@ -82,22 +85,22 @@
         }
         #[cfg(feature = "qmx")]
         {
-            if self.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
+            if self.radio.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
                 return;
             }
-            if self.form_kind != SourceKind::Qmx {
+            if self.connection.form_kind != SourceKind::Qmx {
                 return;
             }
-            if self.form_qmx.rf_gain_db != self.last_qmx_rf.rf_gain_db {
+            if self.connection.form_qmx.rf_gain_db != self.connection.last_qmx_rf.rf_gain_db {
                 self.engine
-                    .send(EngineCommand::SetQmxRfGain(self.form_qmx.rf_gain_db));
-                self.last_qmx_rf.rf_gain_db = self.form_qmx.rf_gain_db;
+                    .send(EngineCommand::SetQmxRfGain(self.connection.form_qmx.rf_gain_db));
+                self.connection.last_qmx_rf.rf_gain_db = self.connection.form_qmx.rf_gain_db;
                 self.lock_display_levels_for_rf_tuning();
             }
         }
     }
 
-    fn apply_rtlsdr_live_settings(&mut self) {
+    pub(crate) fn apply_rtlsdr_live_settings(&mut self) {
         #[cfg(not(feature = "rtlsdr"))]
         {
             let _ = self;
@@ -105,47 +108,47 @@
         }
         #[cfg(feature = "rtlsdr")]
         {
-            if self.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
+            if self.radio.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
                 return;
             }
-            if self.form_kind != SourceKind::RtlSdr {
+            if self.connection.form_kind != SourceKind::RtlSdr {
                 return;
             }
-            if self.form_rtlsdr.rtl_agc != self.last_rtlsdr_rf.rtl_agc {
+            if self.connection.form_rtlsdr.rtl_agc != self.connection.last_rtlsdr_rf.rtl_agc {
                 self.engine
-                    .send(EngineCommand::SetRtlSdrRtlAgc(self.form_rtlsdr.rtl_agc));
-                self.last_rtlsdr_rf.rtl_agc = self.form_rtlsdr.rtl_agc;
+                    .send(EngineCommand::SetRtlSdrRtlAgc(self.connection.form_rtlsdr.rtl_agc));
+                self.connection.last_rtlsdr_rf.rtl_agc = self.connection.form_rtlsdr.rtl_agc;
                 self.lock_display_levels_for_rf_tuning();
             }
-            if self.form_rtlsdr.manual_gain != self.last_rtlsdr_rf.manual_gain {
+            if self.connection.form_rtlsdr.manual_gain != self.connection.last_rtlsdr_rf.manual_gain {
                 self.engine
-                    .send(EngineCommand::SetRtlSdrManualGain(self.form_rtlsdr.manual_gain));
-                self.last_rtlsdr_rf.manual_gain = self.form_rtlsdr.manual_gain;
+                    .send(EngineCommand::SetRtlSdrManualGain(self.connection.form_rtlsdr.manual_gain));
+                self.connection.last_rtlsdr_rf.manual_gain = self.connection.form_rtlsdr.manual_gain;
                 self.lock_display_levels_for_rf_tuning();
             }
-            if self.form_rtlsdr.manual_gain
-                && self.form_rtlsdr.tuner_gain_db10 != self.last_rtlsdr_rf.tuner_gain_db10
+            if self.connection.form_rtlsdr.manual_gain
+                && self.connection.form_rtlsdr.tuner_gain_db10 != self.connection.last_rtlsdr_rf.tuner_gain_db10
             {
                 self.engine.send(EngineCommand::SetRtlSdrTunerGain(
-                    self.form_rtlsdr.tuner_gain_db10,
+                    self.connection.form_rtlsdr.tuner_gain_db10,
                 ));
-                self.last_rtlsdr_rf.tuner_gain_db10 = self.form_rtlsdr.tuner_gain_db10;
+                self.connection.last_rtlsdr_rf.tuner_gain_db10 = self.connection.form_rtlsdr.tuner_gain_db10;
                 self.lock_display_levels_for_rf_tuning();
             }
-            if self.form_rtlsdr.bias_tee != self.last_rtlsdr_rf.bias_tee {
+            if self.connection.form_rtlsdr.bias_tee != self.connection.last_rtlsdr_rf.bias_tee {
                 self.engine
-                    .send(EngineCommand::SetRtlSdrBiasTee(self.form_rtlsdr.bias_tee));
-                self.last_rtlsdr_rf.bias_tee = self.form_rtlsdr.bias_tee;
+                    .send(EngineCommand::SetRtlSdrBiasTee(self.connection.form_rtlsdr.bias_tee));
+                self.connection.last_rtlsdr_rf.bias_tee = self.connection.form_rtlsdr.bias_tee;
             }
-            if self.form_rtlsdr.ppm != self.last_rtlsdr_rf.ppm {
+            if self.connection.form_rtlsdr.ppm != self.connection.last_rtlsdr_rf.ppm {
                 self.engine
-                    .send(EngineCommand::SetRtlSdrPpm(self.form_rtlsdr.ppm));
-                self.last_rtlsdr_rf.ppm = self.form_rtlsdr.ppm;
+                    .send(EngineCommand::SetRtlSdrPpm(self.connection.form_rtlsdr.ppm));
+                self.connection.last_rtlsdr_rf.ppm = self.connection.form_rtlsdr.ppm;
             }
         }
     }
 
-    fn apply_airspy_live_settings(&mut self) {
+    pub(crate) fn apply_airspy_live_settings(&mut self) {
         #[cfg(not(feature = "airspy"))]
         {
             let _ = self;
@@ -153,49 +156,51 @@
         }
         #[cfg(feature = "airspy")]
         {
-            if self.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
+            if self.radio.is_kiwi || !matches!(self.conn_state, ConnState::Streaming) {
                 return;
             }
-            if self.form_kind != SourceKind::Airspy {
+            if self.connection.form_kind != SourceKind::Airspy {
                 return;
             }
-            if self.form_airspy.hf_agc != self.last_airspy_rf.hf_agc {
+            if self.connection.form_airspy.hf_agc != self.connection.last_airspy_rf.hf_agc {
                 self.engine
-                    .send(EngineCommand::SetRfAgc(self.form_airspy.hf_agc));
-                self.last_airspy_rf.hf_agc = self.form_airspy.hf_agc;
+                    .send(EngineCommand::SetRfAgc(self.connection.form_airspy.hf_agc));
+                self.connection.last_airspy_rf.hf_agc = self.connection.form_airspy.hf_agc;
                 self.lock_display_levels_for_rf_tuning();
             }
-            if self.form_airspy.hf_agc_threshold_high != self.last_airspy_rf.hf_agc_threshold_high {
+            if self.connection.form_airspy.hf_agc_threshold_high != self.connection.last_airspy_rf.hf_agc_threshold_high {
                 self.engine.send(EngineCommand::SetAirspyAgcThreshold(
-                    self.form_airspy.hf_agc_threshold_high,
+                    self.connection.form_airspy.hf_agc_threshold_high,
                 ));
-                self.last_airspy_rf.hf_agc_threshold_high = self.form_airspy.hf_agc_threshold_high;
+                self.connection.last_airspy_rf.hf_agc_threshold_high = self.connection.form_airspy.hf_agc_threshold_high;
             }
-            if self.form_airspy.hf_att != self.last_airspy_rf.hf_att {
+            if self.connection.form_airspy.hf_att != self.connection.last_airspy_rf.hf_att {
                 self.engine
-                    .send(EngineCommand::SetAirspyAtt(self.form_airspy.hf_att));
-                self.last_airspy_rf.hf_att = self.form_airspy.hf_att;
+                    .send(EngineCommand::SetAirspyAtt(self.connection.form_airspy.hf_att));
+                self.connection.last_airspy_rf.hf_att = self.connection.form_airspy.hf_att;
                 self.lock_display_levels_for_rf_tuning();
             }
-            if self.form_airspy.hf_lna != self.last_airspy_rf.hf_lna {
+            if self.connection.form_airspy.hf_lna != self.connection.last_airspy_rf.hf_lna {
                 self.engine
-                    .send(EngineCommand::SetAirspyLna(self.form_airspy.hf_lna));
-                self.last_airspy_rf.hf_lna = self.form_airspy.hf_lna;
+                    .send(EngineCommand::SetAirspyLna(self.connection.form_airspy.hf_lna));
+                self.connection.last_airspy_rf.hf_lna = self.connection.form_airspy.hf_lna;
                 self.lock_display_levels_for_rf_tuning();
             }
-            let frontend = self.form_airspy.frontend_flags();
-            if frontend != self.last_airspy_rf.frontend_flags() {
+            let frontend = self.connection.form_airspy.frontend_flags();
+            if frontend != self.connection.last_airspy_rf.frontend_flags() {
                 self.engine
                     .send(EngineCommand::SetAirspyFrontendOptions(frontend));
-                self.last_airspy_rf.frontend_optimize_band_iii =
-                    self.form_airspy.frontend_optimize_band_iii;
-                self.last_airspy_rf.frontend_optimize_pll_boundary =
-                    self.form_airspy.frontend_optimize_pll_boundary;
+                self.connection.last_airspy_rf.frontend_optimize_band_iii =
+                    self.connection.form_airspy.frontend_optimize_band_iii;
+                self.connection.last_airspy_rf.frontend_optimize_pll_boundary =
+                    self.connection.form_airspy.frontend_optimize_pll_boundary;
             }
-            if self.form_airspy.bias_tee != self.last_airspy_rf.bias_tee {
+            if self.connection.form_airspy.bias_tee != self.connection.last_airspy_rf.bias_tee {
                 self.engine
-                    .send(EngineCommand::SetAirspyBiasTee(self.form_airspy.bias_tee));
-                self.last_airspy_rf.bias_tee = self.form_airspy.bias_tee;
+                    .send(EngineCommand::SetAirspyBiasTee(self.connection.form_airspy.bias_tee));
+                self.connection.last_airspy_rf.bias_tee = self.connection.form_airspy.bias_tee;
             }
         }
     }
+
+}

@@ -23,7 +23,21 @@ cargo clippy --features gui -- -D warnings
 | `src/kiwi`, `src/airspyhf` | `source` | dsp, gui |
 | `src/bin/waterfall` | `hfsdr`, egui | — |
 
-Extract pure functions when UI logic grows — see `spot_filter.rs`.
+Extract pure functions when UI logic grows — see `spot_filter.rs` and
+`engine/policy.rs`.
+
+### Where to put new code
+
+| Change | Location |
+|--------|----------|
+| CW DSP stage | `src/dsp/cw/` |
+| Skimmer | `src/skimmer/` |
+| IQ source | `src/<device>/` + `src/source/controls.rs` |
+| Pump / wideband tuning | `src/bin/waterfall/engine/policy.rs` |
+| UI panel | `src/bin/waterfall/app/methods/ui/...` |
+| Connect / CLI | `src/bin/waterfall/source/` |
+
+See [Refactor roadmap](./architecture/refactor-roadmap.md) for the full map.
 
 ---
 

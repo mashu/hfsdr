@@ -1,13 +1,16 @@
-// `ui/popups` — `WaterfallApp` methods.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn connection_popup(&mut self, ctx: &egui::Context) {
-        if !self.show_connection_drawer {
+impl WaterfallApp {
+
+    pub(crate) fn connection_popup(&mut self, ctx: &egui::Context) {
+        if !self.connection.show_connection_drawer {
             return;
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(320.0);
         let win_h = (screen.height() * 0.86).clamp(420.0, max_h);
-        let mut open = self.show_connection_drawer;
+        let mut open = self.connection.show_connection_drawer;
         let (status_label, status_color) = self.connection_status_pill();
         configure_popup_window(
             "connection_popup",
@@ -31,19 +34,19 @@
                 self.connection_card(ui);
             });
         });
-        self.show_connection_drawer = open;
+        self.connection.show_connection_drawer = open;
     }
 
 
 
-    fn iq_popup(&mut self, ctx: &egui::Context) {
-        if !self.show_iq_drawer {
+    pub(crate) fn iq_popup(&mut self, ctx: &egui::Context) {
+        if !self.chrome.show_iq_drawer {
             return;
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(200.0);
         let win_h = 300.0_f32.clamp(200.0, max_h);
-        let mut open = self.show_iq_drawer;
+        let mut open = self.chrome.show_iq_drawer;
         let subtitle = format!(
             "{:.0}% · {:.2}s queued",
             self.stats.iq_buffer_fill * 100.0,
@@ -78,7 +81,7 @@
             );
             popup_scroll_body(ui, |ui| {
                 let streaming = matches!(self.conn_state, ConnState::Streaming);
-                let (cmds, dirty) = self.iq.show(
+                let (cmds, dirty) = self.chrome.iq.show(
                     ui,
                     IqPanelView {
                         stats: &self.stats,
@@ -91,19 +94,19 @@
                 self.process_iq_cmds(cmds);
             });
         });
-        self.show_iq_drawer = open;
+        self.chrome.show_iq_drawer = open;
     }
 
 
 
-    fn pipeline_popup(&mut self, ctx: &egui::Context) {
-        if !self.show_pipeline_drawer {
+    pub(crate) fn pipeline_popup(&mut self, ctx: &egui::Context) {
+        if !self.chrome.show_pipeline_drawer {
             return;
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(320.0);
         let win_h = 640.0_f32.clamp(420.0, max_h);
-        let mut open = self.show_pipeline_drawer;
+        let mut open = self.chrome.show_pipeline_drawer;
         let streaming = matches!(self.conn_state, ConnState::Streaming);
         let subtitle = format!(
             "{:.0} kS/s · {} IQ",
@@ -142,29 +145,29 @@
                 let snap = PipelineSnapshot {
                     source_label: &self.connection_alias(),
                     streaming,
-                    device_rate_hz: self.stats.sample_rate.max(self.form_sample_rate as f32),
+                    device_rate_hz: self.stats.sample_rate.max(self.connection.form_sample_rate as f32),
                     ingress_decim: self.pipeline_ingress_decim(),
-                    cw: &self.cw,
-                    skimmer_enabled: self.skimmer_enabled,
-                    audio_enabled: self.audio_enabled,
+                    cw: &self.radio.cw,
+                    skimmer_enabled: self.skimmer_ui.skimmer_enabled,
+                    audio_enabled: self.audio.audio_enabled,
                     stats: &self.stats,
                 };
-                let toggled = self.pipeline_flow.show(ui, &snap);
+                let toggled = self.chrome.pipeline_flow.show(ui, &snap);
                 for stage in toggled {
                     self.toggle_pipeline_stage(stage);
                 }
             });
         });
-        self.show_pipeline_drawer = open;
+        self.chrome.show_pipeline_drawer = open;
     }
 
 
 
-    fn shortcuts_popup(&mut self, ctx: &egui::Context) {
-        if !self.show_shortcuts {
+    pub(crate) fn shortcuts_popup(&mut self, ctx: &egui::Context) {
+        if !self.chrome.show_shortcuts {
             return;
         }
-        let mut open = self.show_shortcuts;
+        let mut open = self.chrome.show_shortcuts;
         egui::Window::new("Keyboard shortcuts")
             .collapsible(false)
             .resizable(false)
@@ -209,6 +212,8 @@
                     open = false;
                 }
             });
-        self.show_shortcuts = open;
+        self.chrome.show_shortcuts = open;
     }
 
+
+}

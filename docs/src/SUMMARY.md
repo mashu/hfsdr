@@ -42,6 +42,7 @@
 
 - [Why the UI never freezes](./architecture/responsiveness.md)
 - [How the code is organized](./architecture/code-layout.md)
+- [Refactor roadmap](./architecture/refactor-roadmap.md)
 - [Adding another radio front end](./architecture/extending-sources.md)
 - [Contributing](./contributing.md)
 - [Building hfsdr](./building.md)

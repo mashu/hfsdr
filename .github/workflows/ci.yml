@@ -41,6 +41,7 @@ jobs:
 
       - name: Install native dependencies
         run: ${{ matrix.install }}
+        shell: bash
 
       - name: cargo test
         run: |

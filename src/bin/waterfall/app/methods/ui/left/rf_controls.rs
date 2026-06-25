@@ -1,7 +1,10 @@
-// `ui/left/rf_controls` — live RF front-end sliders (left operator panel).
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn hardware_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
-        match self.form_kind {
+impl WaterfallApp {
+
+    pub(crate) fn hardware_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+        match self.connection.form_kind {
             SourceKind::Kiwi => self.kiwi_rf_controls(ui, live),
             #[cfg(feature = "airspy")]
             SourceKind::Airspy => self.airspy_rf_controls(ui, live),
@@ -12,10 +15,10 @@
         }
     }
 
-    fn kiwi_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+    pub(crate) fn kiwi_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
         if stage_toggle(
             ui,
-            &mut self.agc_rf_on,
+            &mut self.radio.agc_rf_on,
             "Kiwi RF AGC",
             Some("Hardware RF AGC on the Kiwi (CAT agc=)"),
             None,
@@ -32,22 +35,22 @@
                 ),
             ]),
         ) {
-            self.form_kiwi.rf_agc_on = self.agc_rf_on;
+            self.connection.form_kiwi.rf_agc_on = self.radio.agc_rf_on;
             self.sync_kiwi_rf_now();
         }
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("RF gain").small().color(MUTED));
-            let mut gain_db = man_gain_db_below_max(self.form_kiwi.man_gain);
+            let mut gain_db = man_gain_db_below_max(self.connection.form_kiwi.man_gain);
             let resp = ui.add(
                 egui::Slider::new(&mut gain_db, -100..=0)
                     .suffix(" dB")
                     .clamping(egui::SliderClamping::Always),
             );
             if resp.changed() {
-                self.form_kiwi.man_gain = man_gain_from_db_below_max(gain_db);
+                self.connection.form_kiwi.man_gain = man_gain_from_db_below_max(gain_db);
                 self.sync_kiwi_rf_now();
             }
-            if !self.agc_rf_on {
+            if !self.radio.agc_rf_on {
                 ui.label(
                     egui::RichText::new("max")
                         .small()
@@ -56,7 +59,7 @@
             }
             if live {
                 if let Some(hw) = self.stats.hw_rf_gain {
-                    if hw == self.form_kiwi.man_gain {
+                    if hw == self.connection.form_kiwi.man_gain {
                         ui.label(
                             egui::RichText::new("sent")
                                 .small()
@@ -93,7 +96,7 @@
                 let attn_live = live && self.stats.kiwi_has_rf_attn;
                 ui.add_enabled_ui(attn_live || !live, |ui| {
                     ui.add(
-                        egui::Slider::new(&mut self.form_kiwi.rf_attn_db, 0.0..=31.5)
+                        egui::Slider::new(&mut self.connection.form_kiwi.rf_attn_db, 0.0..=31.5)
                             .suffix(" dB")
                             .fixed_decimals(1),
                     );
@@ -119,12 +122,12 @@
     }
 
     #[cfg(feature = "qmx")]
-    fn qmx_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+    pub(crate) fn qmx_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
         let _ = live;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("RF gain").small().color(MUTED));
             ui.add(
-                egui::Slider::new(&mut self.form_qmx.rf_gain_db, 0..=99)
+                egui::Slider::new(&mut self.connection.form_qmx.rf_gain_db, 0..=99)
                     .suffix(" dB")
                     .logarithmic(false),
             );
@@ -139,11 +142,11 @@
     }
 
     #[cfg(feature = "rtlsdr")]
-    fn rtlsdr_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+    pub(crate) fn rtlsdr_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
         let _ = live;
         stage_toggle(
             ui,
-            &mut self.form_rtlsdr.rtl_agc,
+            &mut self.connection.form_rtlsdr.rtl_agc,
             "RTL2832 AGC",
             Some("Internal digital AGC in the RTL2832"),
             None,
@@ -151,17 +154,17 @@
         );
         stage_toggle(
             ui,
-            &mut self.form_rtlsdr.manual_gain,
+            &mut self.connection.form_rtlsdr.manual_gain,
             "Manual tuner gain",
             Some("Fixed RF gain from the tuner IC"),
             None,
             None,
         );
-        if self.form_rtlsdr.manual_gain {
+        if self.connection.form_rtlsdr.manual_gain {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Gain").small().color(MUTED));
                 ui.add(
-                    egui::DragValue::new(&mut self.form_rtlsdr.tuner_gain_db10)
+                    egui::DragValue::new(&mut self.connection.form_rtlsdr.tuner_gain_db10)
                         .range(0..=500)
                         .speed(0.5)
                         .suffix(" ×0.1 dB"),
@@ -171,14 +174,14 @@
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("PPM").small().color(MUTED));
             ui.add(
-                egui::DragValue::new(&mut self.form_rtlsdr.ppm)
+                egui::DragValue::new(&mut self.connection.form_rtlsdr.ppm)
                     .range(-200..=200)
                     .speed(0.1),
             );
         });
         stage_toggle(
             ui,
-            &mut self.form_rtlsdr.bias_tee,
+            &mut self.connection.form_rtlsdr.bias_tee,
             "Bias tee",
             Some("GPIO bias for active antennas / upconverters"),
             None,
@@ -187,11 +190,11 @@
     }
 
     #[cfg(feature = "airspy")]
-    fn airspy_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+    pub(crate) fn airspy_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
         let _ = live;
         stage_toggle(
             ui,
-            &mut self.form_airspy.hf_lna,
+            &mut self.connection.form_airspy.hf_lna,
             "Preamp (+6 dB LNA)",
             Some("Enable for passive loop/wire antennas; off for max dynamic range"),
             None,
@@ -199,7 +202,7 @@
         );
         stage_toggle(
             ui,
-            &mut self.form_airspy.hf_agc,
+            &mut self.connection.form_airspy.hf_agc,
             "HF AGC",
             Some("Hardware AGC on the Airspy front end"),
             None,
@@ -211,16 +214,16 @@
                 ),
             ]),
         );
-        if self.form_airspy.hf_agc {
+        if self.connection.form_airspy.hf_agc {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("AGC threshold").small().color(MUTED));
                 ui.selectable_value(
-                    &mut self.form_airspy.hf_agc_threshold_high,
+                    &mut self.connection.form_airspy.hf_agc_threshold_high,
                     false,
                     "Low",
                 );
                 ui.selectable_value(
-                    &mut self.form_airspy.hf_agc_threshold_high,
+                    &mut self.connection.form_airspy.hf_agc_threshold_high,
                     true,
                     "High",
                 );
@@ -229,14 +232,14 @@
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
             ui.add_enabled(
-                !self.form_airspy.hf_agc,
-                egui::Slider::new(&mut self.form_airspy.hf_att, 0..=8)
+                !self.connection.form_airspy.hf_agc,
+                egui::Slider::new(&mut self.connection.form_airspy.hf_att, 0..=8)
                     .suffix(" ×6 dB"),
             );
         });
         stage_toggle(
             ui,
-            &mut self.form_airspy.bias_tee,
+            &mut self.connection.form_airspy.bias_tee,
             "Bias tee",
             Some("DC on antenna port for active preamps/upconverters"),
             None,
@@ -244,12 +247,14 @@
         );
         ui.collapsing("Frontend options (Discovery / Ranger)", |ui| {
             ui.toggle_value(
-                &mut self.form_airspy.frontend_optimize_band_iii,
+                &mut self.connection.form_airspy.frontend_optimize_band_iii,
                 "Optimize VHF Band III",
             );
             ui.toggle_value(
-                &mut self.form_airspy.frontend_optimize_pll_boundary,
+                &mut self.connection.form_airspy.frontend_optimize_pll_boundary,
                 "Optimize PLL integer boundary",
             );
         });
     }
+
+}

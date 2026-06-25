@@ -1,8 +1,11 @@
-// `ui/history` — `WaterfallApp` methods.
+use crate::app::WaterfallApp;
+use crate::app::prelude::*;
 
-    fn history_panel(&mut self, ui: &mut egui::Ui) {
+impl WaterfallApp {
+
+    pub(crate) fn history_panel(&mut self, ui: &mut egui::Ui) {
         section_heading(ui, "Callsign log (10 min)");
-        let center_hz = self.center_khz * 1000.0;
+        let center_hz = self.radio.center_khz * 1000.0;
         let annotations: Vec<_> = self.slow.annotations().iter().cloned().collect();
         if annotations.is_empty() {
             ui.label(
@@ -59,3 +62,5 @@
             });
     }
 
+
+}
