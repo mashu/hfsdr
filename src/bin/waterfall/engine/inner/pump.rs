@@ -19,6 +19,7 @@ use crate::source::Connection;
 impl Engine {
 /// Drain and process available IQ; returns sample count processed.
     pub(super) fn pump_stream(&mut self) -> usize {
+        self.last_iq_dropped = 0;
         let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
         let dt = self
             .last_pump_at
@@ -43,12 +44,14 @@ impl Engine {
             }
         } else if let Some(conn) = &mut self.conn {
             // Never discard ring samples while recording — every sample must reach the file.
+            let mut iq_dropped = 0u64;
             if self.recorder.is_none() {
                 let cap = conn.iq_ring_capacity.max(1);
                 let slots = conn.iq.slots();
                 if let Some(target) = ring_catchup_target_slots(slots, cap, false) {
                     while conn.iq.slots() > target {
                         let _ = conn.iq.pop();
+                        iq_dropped += 1;
                     }
                 }
             }
@@ -58,6 +61,7 @@ impl Engine {
                     Err(_) => break,
                 }
             }
+            self.last_iq_dropped = iq_dropped;
         }
         let (device_rate, center_hz, _is_kiwi) = if let Some(pb) = &self.playback {
             let m = pb.meta();
@@ -188,7 +192,9 @@ impl Engine {
                 };
                 let fft_base = self.spectrum_fft_slice(
                     ingress_base,
+                    batch.len(),
                     device_rate,
+                    ingress_decim,
                     params.full_drain_spectrum,
                 );
                 let batch_demod = Arc::clone(&batch);
@@ -217,7 +223,9 @@ impl Engine {
         };
         let fft_base = self.spectrum_fft_slice(
             ingress_base,
+            batch.len(),
             device_rate,
+            ingress_decim,
             params.full_drain_spectrum,
         );
         if self.spectrum_decim > 1 {
@@ -238,6 +246,13 @@ impl Engine {
                 let audio_rate = hfsdr::audio_sample_rate(device_rate, params.cw.decimation);
                 audio.push(&self.audio_scratch, audio_rate as u32, params.volume);
             }
+        }
+        if self.last_iq_dropped > 0 {
+            if let Some(audio) = &mut self.audio {
+                let skip_secs = self.last_iq_dropped as f32 / device_rate.max(1.0);
+                audio.skip_seconds(skip_secs);
+            }
+            self.last_iq_dropped = 0;
         }
         if !self.audio_scratch.is_empty() {
             self.audio_scope.push_block(&self.audio_scratch);

@@ -6,10 +6,21 @@
 
 use serde::{Deserialize, Serialize};
 
+use hfsdr::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW, DEFAULT_KAISER_BETA, WindowKind};
+
 use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings};
 
 const APP_DIR: &str = "hfsdr";
 const FILE: &str = "settings.json";
+
+const fn window_to_persisted(w: WindowKind) -> u8 {
+    match w {
+        WindowKind::RaisedCosine => 1,
+        WindowKind::Blackman => 2,
+        WindowKind::Kaiser => 3,
+        WindowKind::Gaussian => 0,
+    }
+}
 
 fn default_pan_step_hz() -> f32 {
     500.0
@@ -172,11 +183,11 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             bfo_hz: 500.0,
-            passband_hz: 200.0,
+            passband_hz: DEFAULT_CHANNEL_PASSBAND_HZ,
             channel_filter: 0,
             decim_filter: 0,
-            window: 0,
-            kaiser_beta: 6.0,
+            window: window_to_persisted(DEFAULT_CHANNEL_WINDOW),
+            kaiser_beta: DEFAULT_KAISER_BETA,
             passband_flatten: false,
             decimation: 0,
             nb_enabled: false,

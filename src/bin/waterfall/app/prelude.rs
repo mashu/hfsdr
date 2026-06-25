@@ -13,7 +13,7 @@ pub(crate) use hfsdr::{
     strongest_offset_hz, Continent,
     ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, WindowKind,
-    MAX_NOTCHES,
+    MAX_KAISER_BETA, MAX_NOTCHES, MIN_KAISER_BETA,
 };
 pub(crate) use hfsdr::kiwi::protocol::{man_gain_db_below_max, man_gain_from_db_below_max};
 

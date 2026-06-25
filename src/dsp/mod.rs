@@ -21,12 +21,16 @@ mod wideband_cw;
 
 pub use audio::{iq_to_audio, IqAudioDemod};
 pub use cw::{
-    channel_group_delay_ms, decimation_factor, design_gaussian_lowpass, design_lowpass,
+    channel_group_delay_ms, clamp_passband_hz, decimation_factor, design_gaussian_lowpass,
+    design_lowpass,
     design_lowpass_with, effective_decimation, audio_sample_rate, AgcMode, AgcSettings, ApfSettings,
     AudioPeakFilter, AutoNotch, AutoNotchSettings, ChannelFilterKind, ComplexNco, CwAgc,
-    CwChannel, CwChannelSettings, DecimFilterKind, Decimator, FirFilter, LowpassDesign, IqNotch, LmsPredictor,
+    CwChannel, CwChannelSettings, DecimFilterKind, Decimator, FirFilter, LowpassDesign, IqNotch,
+    LmsPredictor,
     LmsStep, NoiseBlanker, NoiseBlankerSettings, NoiseReduction, NoiseReductionSettings, NotchSpec,
-    ProductDetector, WindowKind, MAX_NOTCHES,
+    ProductDetector, WindowKind, MAX_NOTCHES, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
+    CHANNEL_PASSBAND_NARROW_MAX_HZ, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW,
+    DEFAULT_KAISER_BETA, MAX_KAISER_BETA, MIN_KAISER_BETA, PASSBAND_STEP_HZ,
 };
 pub use spectrum::SpectrumAnalyzer;
 pub use spectrum_front::SpectrumFrontEnd;

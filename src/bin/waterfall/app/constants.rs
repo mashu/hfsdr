@@ -1,8 +1,6 @@
 //! Layout presets, band plans, and waterfall texture cache keys.
 
-use hfsdr::SpectrumViewMapping;
-
-pub(crate) const SMOOTH_ALPHA: f32 = 0.09;
+use hfsdr::{CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ, SpectrumViewMapping};
 
 /// Minimum RX panel width (VFO digit wheels + section margins).
 pub(crate) const LEFT_PANEL_MIN_W: f32 = 288.0;
@@ -40,13 +38,17 @@ pub(crate) const DEFAULT_CENTER_HZ: f64 = 14_010_000.0;
 
 pub(crate) const BFO_PRESETS: [(&str, f32); 5] =
     [("400", 400.0), ("450", 450.0), ("500", 500.0), ("600", 600.0), ("700", 700.0)];
-pub(crate) const FILTER_PRESETS: [(&str, f32); 6] = [
+
+pub(crate) const SMOOTH_ALPHA: f32 = 0.09;
+
+pub(crate) const FILTER_PRESETS: [(&str, f32); 7] = [
+    ("25", CHANNEL_PASSBAND_MIN_HZ),
     ("50", 50.0),
     ("100", 100.0),
     ("250", 250.0),
     ("500", 500.0),
     ("1k", 1_000.0),
-    ("2k", 2_000.0),
+    ("2k", CHANNEL_PASSBAND_MAX_HZ),
 ];
 
 pub(crate) const KIWI_IQ_RATE_PRESETS: &[(&str, u32)] = &[

@@ -9,10 +9,12 @@ use super::geometry::{
 
 const MIN_ZOOM: f32 = 0.04;
 
-pub const CW_PASSBAND_MIN_HZ: f32 = 50.0;
-/// CW contest filters top out around 500 Hz; wide mode allows RTTY-adjacent widths.
-pub const CW_PASSBAND_MAX_HZ: f32 = 2_000.0;
-pub const CW_PASSBAND_NARROW_MAX_HZ: f32 = 500.0;
+pub use hfsdr::{
+    CHANNEL_PASSBAND_MAX_HZ as CW_PASSBAND_MAX_HZ,
+    CHANNEL_PASSBAND_MIN_HZ as CW_PASSBAND_MIN_HZ,
+    CHANNEL_PASSBAND_NARROW_MAX_HZ as CW_PASSBAND_NARROW_MAX_HZ,
+    PASSBAND_STEP_HZ,
+};
 
 pub const NOTCH_WIDTH_MIN_HZ: f32 = 10.0;
 pub const NOTCH_WIDTH_MAX_HZ: f32 = 500.0;

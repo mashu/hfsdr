@@ -1162,9 +1162,13 @@ checksum = "5cb65436bc6f214ecc8ef4d9056a9344f92e70e22c162dbc3d515913df0fd3c5"
 dependencies = [
  "eframe",
  "egui",
+ "egui-wgpu",
+ "image",
  "kittest",
+ "pollster",
  "serde",
  "toml",
+ "wgpu",
 ]
 
 [[package]]
@@ -1708,7 +1712,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hfsdr"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "cpal",
  "dirs",

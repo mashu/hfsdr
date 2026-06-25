@@ -91,7 +91,7 @@ pub fn demod_wideband(
 mod tests {
     use super::*;
     use crate::ChannelOffsetHz;
-    use crate::dsp::cw::DiagnosticBypassSettings;
+    use crate::dsp::cw::{DiagnosticBypassSettings, WindowKind};
     use std::f32::consts::TAU;
 
     fn tone_iq(sample_rate: f32, offset_hz: f32, n: usize) -> Vec<Complex32> {
@@ -119,7 +119,8 @@ mod tests {
         let mut settings = CwChannelSettings {
             listen_offset_hz: listen,
             bfo_hz: 650.0,
-            passband_hz: 500.0,
+            passband_hz: 900.0,
+            window: WindowKind::Gaussian,
             ..CwChannelSettings::default()
         };
         settings.agc.enabled = false;

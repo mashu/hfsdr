@@ -1,5 +1,6 @@
 use crate::app::WaterfallApp;
 use crate::app::prelude::*;
+use hfsdr::PASSBAND_STEP_HZ;
 
 impl WaterfallApp {
 
@@ -177,12 +178,12 @@ impl WaterfallApp {
             self.radio.cw.apf.enabled = !self.radio.cw.apf.enabled;
         }
         if narrow {
-            self.radio.cw.passband_hz =
-                (self.radio.cw.passband_hz - 25.0).clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
+            self.radio.cw.passband_hz = (self.radio.cw.passband_hz - PASSBAND_STEP_HZ)
+                .clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
         }
         if widen {
-            self.radio.cw.passband_hz =
-                (self.radio.cw.passband_hz + 25.0).clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
+            self.radio.cw.passband_hz = (self.radio.cw.passband_hz + PASSBAND_STEP_HZ)
+                .clamp(CW_PASSBAND_MIN_HZ, self.passband_max_hz());
         }
         if rit_dn {
             self.radio.rit_hz = (self.radio.rit_hz - 10.0).clamp(-800.0, 800.0);

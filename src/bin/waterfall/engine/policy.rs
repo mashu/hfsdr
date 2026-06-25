@@ -72,6 +72,22 @@ pub fn demod_tail_max(rate: f32) -> usize {
     }
 }
 
+/// Decimated ingress length that covers the same time span as [`demod_tail_max`].
+pub fn spectrum_aligned_len(
+    device_batch_len: usize,
+    ingress_len: usize,
+    device_rate: f32,
+    ingress_decim: usize,
+) -> usize {
+    let demod_len = wideband_tail_len(device_batch_len, device_rate, demod_tail_max(device_rate));
+    let aligned = if ingress_decim > 1 {
+        (demod_len / ingress_decim).max(1)
+    } else {
+        demod_len
+    };
+    aligned.min(ingress_len)
+}
+
 pub fn adaptive_spectrum_rows(
     device_rate: f32,
     cached_rate: f32,
@@ -257,6 +273,16 @@ mod tests {
     fn demod_tail_max_wideband_only() {
         assert_eq!(demod_tail_max(384_000.0), MAX_AUDIO_SAMPLES_WB);
         assert_eq!(demod_tail_max(12_000.0), usize::MAX);
+    }
+
+    #[test]
+    fn spectrum_aligned_len_matches_demod_window() {
+        assert_eq!(
+            spectrum_aligned_len(65_536, 16_384, 384_000.0, 4),
+            MAX_AUDIO_SAMPLES_WB / 4
+        );
+        assert_eq!(spectrum_aligned_len(4_096, 4_096, 12_000.0, 1), 4_096);
+        assert_eq!(spectrum_aligned_len(65_536, 8_192, 384_000.0, 1), MAX_AUDIO_SAMPLES_WB);
     }
 
     #[test]

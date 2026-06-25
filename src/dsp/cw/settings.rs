@@ -5,8 +5,15 @@
 //! node-graph compositor can reorder/connect these same stages without changing
 //! the DSP structs themselves.
 
+use super::filter_plan::{
+    clamp_passband_hz, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
+    DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA,
+};
 use super::fir::WindowKind;
 use super::super::freq_offset::ChannelOffsetHz;
+
+/// Default channel FIR window for new sessions.
+pub const DEFAULT_CHANNEL_WINDOW: WindowKind = WindowKind::Blackman;
 
 /// Fixed number of independent manual notches (pileups have several hets).
 pub const MAX_NOTCHES: usize = 4;
@@ -201,11 +208,11 @@ impl Default for CwChannelSettings {
         Self {
             listen_offset_hz: ChannelOffsetHz::ZERO,
             bfo_hz: 500.0,
-            passband_hz: 200.0,
+            passband_hz: DEFAULT_CHANNEL_PASSBAND_HZ,
             channel_filter: ChannelFilterKind::LinearFir,
             decim_filter: DecimFilterKind::LinearFir,
-            window: WindowKind::Gaussian,
-            kaiser_beta: 6.0,
+            window: DEFAULT_CHANNEL_WINDOW,
+            kaiser_beta: DEFAULT_KAISER_BETA,
             passband_flatten: false,
             decimation: 0,
             noise_blanker: NoiseBlankerSettings::default(),
@@ -222,7 +229,7 @@ impl Default for CwChannelSettings {
 
 impl CwChannelSettings {
     pub fn channel_bandwidth_hz(&self) -> f32 {
-        self.passband_hz.clamp(50.0, 2_000.0)
+        clamp_passband_hz(self.passband_hz)
     }
 }
 
@@ -234,6 +241,7 @@ mod tests {
     fn defaults_match_contest_cw_profile() {
         let s = CwChannelSettings::default();
         assert_eq!(s.bfo_hz, 500.0);
+        assert_eq!(s.window, DEFAULT_CHANNEL_WINDOW);
         assert_eq!(s.channel_filter, ChannelFilterKind::LinearFir);
         assert_eq!(s.agc_mode, AgcMode::Envelope);
         assert!(s.agc.enabled);
@@ -258,14 +266,14 @@ mod tests {
     #[test]
     fn channel_bandwidth_clamps() {
         let narrow = CwChannelSettings {
-            passband_hz: 25.0,
+            passband_hz: CHANNEL_PASSBAND_MIN_HZ,
             ..Default::default()
         };
-        assert_eq!(narrow.channel_bandwidth_hz(), 50.0);
+        assert_eq!(narrow.channel_bandwidth_hz(), CHANNEL_PASSBAND_MIN_HZ);
         let wide = CwChannelSettings {
             passband_hz: 5_000.0,
             ..Default::default()
         };
-        assert_eq!(wide.channel_bandwidth_hz(), 2_000.0);
+        assert_eq!(wide.channel_bandwidth_hz(), CHANNEL_PASSBAND_MAX_HZ);
     }
 }

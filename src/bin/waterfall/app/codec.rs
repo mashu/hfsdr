@@ -15,7 +15,7 @@ pub(crate) fn plot_action_changes_view(action: &PlotAction) -> bool {
     )
 }
 
-pub(crate) fn window_to_u8(w: WindowKind) -> u8 {
+pub(crate) const fn window_to_u8(w: WindowKind) -> u8 {
     match w {
         WindowKind::Gaussian => 0,
         WindowKind::RaisedCosine => 1,

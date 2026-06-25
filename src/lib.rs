@@ -57,7 +57,9 @@ pub use dsp::{
     IngressWorker, IqAudioDemod,
     NoiseBlankerSettings, NoiseReductionSettings, NotchSpec, SpectrumAnalyzer, SpectrumFrontEnd,
     SpectrumViewMapping, WindowKind, MAX_FFT_SIZE, MAX_NOTCHES, TARGET_BIN_HZ,
-    ZOOM_DECIM_THRESHOLD, spectrum_hop,
+    ZOOM_DECIM_THRESHOLD, spectrum_hop, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
+    CHANNEL_PASSBAND_NARROW_MAX_HZ, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW,
+    DEFAULT_KAISER_BETA, MAX_KAISER_BETA, MIN_KAISER_BETA, PASSBAND_STEP_HZ,
 };
 pub use kiwi::protocol::{kiwi_iq_half_hz, KIWI_IQ_HALF_HZ, KIWI_IQ_RATE};
 pub use kiwi::KiwiSource;
