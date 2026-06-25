@@ -116,6 +116,9 @@ pub struct AppSettings {
     /// Feed every drained IQ sample to the spectrum FFT (wideband); uses more CPU.
     #[serde(default)]
     pub full_drain_spectrum: bool,
+    /// Per-pump pipeline timings in the Performance panel.
+    #[serde(default)]
+    pub perf_trace: bool,
 
     // Audio.
     pub audio_enabled: bool,
@@ -226,6 +229,7 @@ impl Default for AppSettings {
             fft_size: 2048,
             fft_auto: true,
             full_drain_spectrum: false,
+            perf_trace: false,
             audio_enabled: true,
             volume: 1.0,
             skimmer_enabled: true,

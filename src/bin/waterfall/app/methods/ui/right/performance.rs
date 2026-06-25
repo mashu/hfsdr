@@ -15,6 +15,10 @@ impl WaterfallApp {
                     "FFT every drained IQ sample instead of the recent tail only. \
                      Row budget still adapts to CPU headroom.",
                 );
+                ui.checkbox(&mut self.display.perf_trace, "Pipeline profiling")
+                    .on_hover_text(
+                        "Per-pump stage timings below. Also enabled when HFSDR_PERF=1 is set in the environment.",
+                    );
                 if self.display.fft_auto {
                     let rate = self.engine_ui.stats.spectrum_rate;
                     let bin = rate / self.engine_ui.stats.spectrum_fft.max(1) as f32;
@@ -109,10 +113,64 @@ impl WaterfallApp {
             popup_section(ui, "Runtime", None, |ui| {
                 stat_row(ui, "IQ / pump", self.engine_ui.stats.last_drain.to_string());
                 stat_row(ui, "Decoders", self.skimmer_ui.skimmer_channels.to_string());
+                stat_row(
+                    ui,
+                    "Effective rate",
+                    format!(
+                        "{:.1} kS/s",
+                        self.engine_ui.stats.effective_sps / 1000.0
+                    ),
+                );
+                if self.engine_ui.stats.pipeline.dual_ring {
+                    stat_row(ui, "IQ path", "dual ring (raw + decim)");
+                }
                 if let Some(name) = &self.engine_ui.stats.audio_device {
                     stat_row(ui, "Audio out", name.clone());
                 }
             });
+
+            if self.display.perf_trace || self.engine_ui.stats.pipeline_avg.measured_total_ns() > 0
+            {
+                popup_section(
+                    ui,
+                    "Pipeline profile",
+                    Some("Smoothed per-pump CPU time (engine thread)"),
+                    |ui| {
+                        let m = &self.engine_ui.stats.pipeline_avg;
+                        let total_us = m.measured_total_ns() as f64 / 1000.0;
+                        stat_row(ui, "Total", format!("{total_us:.0} µs/pump"));
+                        if m.dual_ring {
+                            stat_row(ui, "Ingress", "dual ring (off hot path)");
+                        }
+                        for (name, ns) in m.stage_rows() {
+                            if ns == 0 {
+                                continue;
+                            }
+                            let pct = ns as f64 / m.measured_total_ns().max(1) as f64 * 100.0;
+                            stat_row(
+                                ui,
+                                name,
+                                format!("{:.0}% ({:.0} µs)", pct, ns as f64 / 1000.0),
+                            );
+                        }
+                        if m.iq_dropped_catchup > 0 {
+                            stat_row(
+                                ui,
+                                "IQ catch-up drops",
+                                m.iq_dropped_catchup.to_string(),
+                            );
+                        }
+                        if m.decim_ring_dropped > 0 {
+                            stat_row(
+                                ui,
+                                "Decim ring drops",
+                                m.decim_ring_dropped.to_string(),
+                            );
+                        }
+                        stat_row(ui, "FFT rows / pump", m.fft_rows.to_string());
+                    },
+                );
+            }
         });
     }
 }

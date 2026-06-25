@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use hfsdr::{CwChannelSettings, Spot};
+use hfsdr::{CwChannelSettings, PipelineMetrics, Spot};
 use hfsdr::SkimmerConfig;
 
 use crate::skimmer::ScpStatus;
@@ -67,6 +67,10 @@ pub struct EngineStats {
     pub kiwi_rf_attn_db: f32,
     /// Last hardware RF gain sent to the source (Kiwi `manGain`, etc.).
     pub hw_rf_gain: Option<u8>,
+    /// Latest per-pump pipeline timings (populated when perf tracing is on).
+    pub pipeline: PipelineMetrics,
+    /// Smoothed pipeline timings for the Performance panel.
+    pub pipeline_avg: PipelineMetrics,
 }
 
 impl Default for EngineStats {
@@ -104,6 +108,8 @@ impl Default for EngineStats {
             kiwi_has_rf_attn: false,
             kiwi_rf_attn_db: 0.0,
             hw_rf_gain: None,
+            pipeline: PipelineMetrics::default(),
+            pipeline_avg: PipelineMetrics::default(),
         }
     }
 }
@@ -125,6 +131,8 @@ pub struct EngineParams {
     /// Source-independent: works on every radio, even when hardware/RF AGC is on,
     /// because it scales the IQ we receive rather than a front-end gain stage.
     pub rf_gain_db: f32,
+    /// Per-pump stage timings in [`EngineStats::pipeline`] (also on when `HFSDR_PERF=1`).
+    pub perf_trace: bool,
 }
 
 impl Default for EngineParams {
@@ -139,6 +147,7 @@ impl Default for EngineParams {
             fft_auto: true,
             full_drain_spectrum: false,
             rf_gain_db: 0.0,
+            perf_trace: false,
         }
     }
 }

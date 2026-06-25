@@ -13,8 +13,11 @@
 //! ## Architecture in one diagram
 //!
 //! ```text
-//! IqSource → ring → engine { listen (CwChannel) | FFT | skimmer } → GUI try_poll
+//! IqSource → ring(s) → engine { listen (CwChannel) | FFT | skimmer } → GUI try_poll
 //! ```
+//!
+//! When ingress decimation is configured, a bridge thread fans device IQ into raw +
+//! decimated rings before the engine pump.
 
 #[cfg(feature = "airspy")]
 pub mod airspyhf;
@@ -27,7 +30,9 @@ pub mod dsp;
 pub mod history;
 pub mod iq_record;
 pub mod kiwi;
+pub mod pipeline_metrics;
 pub mod multisource;
+pub use pipeline_metrics::PipelineMetrics;
 pub use multisource::{select_best, snr_weights, spot_display_snr, spot_primary_source, SourceSnr};
 pub mod skimmer;
 pub mod source;

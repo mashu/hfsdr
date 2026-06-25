@@ -19,4 +19,6 @@ pub struct DisplayState {
     pub fft_size: usize,
     pub fft_auto: bool,
     pub full_drain_spectrum: bool,
+    /// Show per-pump DSP timings in the Performance panel (`HFSDR_PERF=1` also enables).
+    pub perf_trace: bool,
 }

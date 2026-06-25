@@ -106,11 +106,19 @@ impl DeviceSource {
     }
 }
 
+use super::iq_bridge::IqDualRingBridge;
+
 /// IQ consumer plus metadata for a connected [`DeviceSource`].
 pub struct Connection {
     pub device: DeviceSource,
+    /// Raw device-rate IQ (demod, recording).
     pub iq: Consumer<Complex32>,
+    /// Pre-decimated IQ for spectrum/skimmer when [`iq_ingress_decim`] > 1.
+    pub iq_spectrum: Option<Consumer<Complex32>>,
+    /// Keeps the ingress bridge thread alive.
+    pub(super) bridge: Option<IqDualRingBridge>,
     pub iq_ring_capacity: usize,
+    pub iq_spectrum_ring_capacity: usize,
     /// Native device IQ rate (full passband for demod and display).
     pub device_sample_rate: f32,
     /// Rate after optional client-side decimation (spectrum FFT path only).
@@ -119,6 +127,19 @@ pub struct Connection {
     pub is_kiwi: bool,
     /// Client-side integer decimation for the spectrum path (1 = none).
     pub iq_ingress_decim: usize,
+}
+
+impl Connection {
+    pub fn dual_ring_active(&self) -> bool {
+        self.iq_spectrum.is_some()
+    }
+
+    pub fn bridge_decim_dropped(&self) -> u64 {
+        self.bridge
+            .as_ref()
+            .map(IqDualRingBridge::decim_dropped)
+            .unwrap_or(0)
+    }
 }
 
 impl Connection {
@@ -148,7 +169,10 @@ impl Connection {
         Connection {
             device: DeviceSource::Kiwi(KiwiSource::new("test.local", 8073)),
             iq: cons,
+            iq_spectrum: None,
+            bridge: None,
             iq_ring_capacity: 65_536,
+            iq_spectrum_ring_capacity: 0,
             device_sample_rate: 12_000.0,
             sample_rate: 12_000.0,
             center_hz,
@@ -173,7 +197,10 @@ mod tests {
         Connection {
             device: DeviceSource::Kiwi(kiwi),
             iq: cons,
+            iq_spectrum: None,
+            bridge: None,
             iq_ring_capacity: 64,
+            iq_spectrum_ring_capacity: 0,
             device_sample_rate: 12_000.0,
             sample_rate: 12_000.0,
             center_hz: 14_000_000.0,

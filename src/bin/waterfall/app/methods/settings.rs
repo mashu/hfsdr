@@ -60,6 +60,7 @@ impl WaterfallApp {
         self.display.fft_size = s.fft_size.clamp(1024, 65_536);
         self.display.fft_auto = s.fft_auto;
         self.display.full_drain_spectrum = s.full_drain_spectrum;
+        self.display.perf_trace = s.perf_trace;
 
         self.audio.audio_enabled = s.audio_enabled;
         self.audio.volume = s.volume;
@@ -167,6 +168,7 @@ impl WaterfallApp {
             fft_size: self.display.fft_size,
             fft_auto: self.display.fft_auto,
             full_drain_spectrum: self.display.full_drain_spectrum,
+            perf_trace: self.display.perf_trace,
             audio_enabled: self.audio.audio_enabled,
             volume: self.audio.volume,
             skimmer_enabled: self.skimmer_ui.skimmer_enabled,

@@ -126,6 +126,7 @@ impl WaterfallApp {
             fft_auto: self.display.fft_auto,
             full_drain_spectrum: self.display.full_drain_spectrum,
             rf_gain_db: self.radio.rf_gain_db,
+            perf_trace: self.display.perf_trace,
         });
 
         let Some(poll) = self.engine.try_poll() else {
