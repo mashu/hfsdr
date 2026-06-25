@@ -16,6 +16,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use rtrb::{Producer, RingBuffer};
 
+use crate::source::controls::QmxControls;
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
 
 /// Native IQ sample rate from the QMX USB sound card.
@@ -245,17 +246,10 @@ impl IqSource for QmxSource {
     fn is_streaming(&self) -> bool {
         self.streaming
     }
+}
 
-    fn rssi_dbm(&self) -> Option<f32> {
-        let raw = self.smeter_db.load(Ordering::Relaxed);
-        if raw == i32::MIN {
-            None
-        } else {
-            Some(raw as f32)
-        }
-    }
-
-    fn set_rf_gain_db(&mut self, db: u8) -> Result<()> {
+impl QmxSource {
+    pub fn set_rf_gain_db(&mut self, db: u8) -> Result<()> {
         let db = db.min(99);
         self.cat
             .lock()
@@ -263,6 +257,25 @@ impl IqSource for QmxSource {
             .set_rf_gain_db(db)?;
         self.rf_gain_db = db;
         Ok(())
+    }
+
+    pub fn rssi_dbm(&self) -> Option<f32> {
+        let raw = self.smeter_db.load(Ordering::Relaxed);
+        if raw == i32::MIN {
+            None
+        } else {
+            Some(raw as f32)
+        }
+    }
+}
+
+impl QmxControls for QmxSource {
+    fn set_rf_gain_db(&mut self, db: u8) -> Result<()> {
+        QmxSource::set_rf_gain_db(self, db)
+    }
+
+    fn rssi_dbm(&self) -> Option<f32> {
+        QmxSource::rssi_dbm(self)
     }
 }
 

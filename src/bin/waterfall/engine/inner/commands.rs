@@ -7,7 +7,6 @@ use std::time::Instant;
 use hfsdr::{IqAudioDemod, IqPlayback, IqRecorder};
 
 use crate::log;
-use crate::source::ConnectRequest;
 use crate::source::controls_dispatch as src_ctl;
 
 use super::Engine;
@@ -34,7 +33,7 @@ pub(super) fn handle_command(&mut self, cmd: EngineCommand) {
             }
             EngineCommand::Tune(hz) => {
                 if let Some(conn) = &mut self.conn {
-                    let _ = conn.source.tune(hz);
+                    let _ = conn.device.tune(hz);
                     conn.center_hz = hz;
                 }
                 if let Some(req) = &mut self.request {
@@ -43,83 +42,83 @@ pub(super) fn handle_command(&mut self, cmd: EngineCommand) {
             }
             EngineCommand::SetRfAgc(on) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::kiwi_set_rf_agc(&mut *conn.source, on);
+                    src_ctl::kiwi_set_rf_agc(&mut conn.device, on);
                 }
             }
             EngineCommand::SetKiwiManGain(gain) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::kiwi_set_man_gain(&mut *conn.source, gain);
+                    src_ctl::kiwi_set_man_gain(&mut conn.device, gain);
                 }
             }
             EngineCommand::SetKiwiRfAttn(db) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::kiwi_set_rf_attn_db(&mut *conn.source, db);
+                    src_ctl::kiwi_set_rf_attn_db(&mut conn.device, db);
                 }
             }
             #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyAtt(step) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::airspy_set_hf_att(&mut *conn.source, step);
+                    src_ctl::airspy_set_hf_att(&mut conn.device, step);
                 }
             }
             #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyLna(on) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::airspy_set_hf_lna(&mut *conn.source, on);
+                    src_ctl::airspy_set_hf_lna(&mut conn.device, on);
                 }
             }
             #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyAgcThreshold(high) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::airspy_set_hf_agc_threshold(&mut *conn.source, high);
+                    src_ctl::airspy_set_hf_agc_threshold(&mut conn.device, high);
                 }
             }
             #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyFrontendOptions(flags) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::airspy_set_frontend_options(&mut *conn.source, flags);
+                    src_ctl::airspy_set_frontend_options(&mut conn.device, flags);
                 }
             }
             #[cfg(feature = "airspy")]
             EngineCommand::SetAirspyBiasTee(on) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::airspy_set_bias_tee(&mut *conn.source, on);
+                    src_ctl::airspy_set_bias_tee(&mut conn.device, on);
                 }
             }
             #[cfg(feature = "rtlsdr")]
             EngineCommand::SetRtlSdrRtlAgc(on) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::rtlsdr_set_rtl_agc(&mut *conn.source, on);
+                    src_ctl::rtlsdr_set_rtl_agc(&mut conn.device, on);
                 }
             }
             #[cfg(feature = "rtlsdr")]
             EngineCommand::SetRtlSdrManualGain(manual) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::rtlsdr_set_manual_gain(&mut *conn.source, manual);
+                    src_ctl::rtlsdr_set_manual_gain(&mut conn.device, manual);
                 }
             }
             #[cfg(feature = "rtlsdr")]
             EngineCommand::SetRtlSdrTunerGain(gain_db10) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::rtlsdr_set_tuner_gain(&mut *conn.source, gain_db10);
+                    src_ctl::rtlsdr_set_tuner_gain(&mut conn.device, gain_db10);
                 }
             }
             #[cfg(feature = "rtlsdr")]
             EngineCommand::SetRtlSdrBiasTee(on) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::rtlsdr_set_bias_tee(&mut *conn.source, on);
+                    src_ctl::rtlsdr_set_bias_tee(&mut conn.device, on);
                 }
             }
             #[cfg(feature = "rtlsdr")]
             EngineCommand::SetRtlSdrPpm(ppm) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::rtlsdr_set_ppm(&mut *conn.source, ppm);
+                    src_ctl::rtlsdr_set_ppm(&mut conn.device, ppm);
                 }
             }
             #[cfg(feature = "qmx")]
             EngineCommand::SetQmxRfGain(db) => {
                 if let Some(conn) = &mut self.conn {
-                    src_ctl::qmx_set_rf_gain_db(&mut *conn.source, db);
+                    src_ctl::qmx_set_rf_gain_db(&mut conn.device, db);
                 }
             }
             EngineCommand::SetAudioDevice(name) => {

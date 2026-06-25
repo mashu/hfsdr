@@ -28,6 +28,7 @@ pub mod history;
 pub mod iq_record;
 pub mod kiwi;
 pub mod multisource;
+pub use multisource::{select_best, snr_weights, spot_display_snr, spot_primary_source, SourceSnr};
 pub mod skimmer;
 pub mod source;
 

@@ -24,7 +24,7 @@ its own sake.
 | Area | Folder | Responsibility |
 |------|--------|----------------|
 | Front ends | `airspyhf/`, `kiwi/`, `rtlsdr/`, `qmx/` | Device I/O → IQ ring |
-| Contract | `source.rs` | `IqSource` trait |
+| Contract | `source/mod.rs` | Slim `IqSource` + `source/controls.rs` extension traits |
 | DSP | `dsp/` | Spectrum, CW chain, view math |
 | Skimmer | `skimmer/` | Peaks, decoders, spots, SCP |
 | Geography | `cty/` | Call → continent |
@@ -53,12 +53,13 @@ Adding a stage:
 |--------|------|
 | `app/mod.rs` | `WaterfallApp` shell, panel layout |
 | `app/methods/` | `impl WaterfallApp` per feature (plot, tuning, connection, …) |
-| `app/state/` | Grouped UI state (`ConnectionState`, `PlotState`, …) |
+| `app/state/` | Grouped UI state (`ConnectionFormState`, `KiwiDirectoryState`, `EngineUiState`, `PlotState`, …) |
+| `app/methods/plot/cache.rs` | Waterfall texture upload and incremental cache sync |
 | `engine/` | Background thread, pump, connection lifecycle |
 | `engine/policy.rs` | Pure wideband / pump policy (unit-tested) |
 | `widgets/` | Spectrum/waterfall draw layers |
 | `interaction/` | Plot state, geometry, freq formatting |
-| `source/` | Connect requests, per-device settings, `connect()` |
+| `source/` | Connect requests, `DeviceSource`, per-device settings, `connect()` |
 | `spot_filter.rs` | Pure spot filter/sort |
 | `settings.rs` | JSON persistence |
 | `log.rs` | Ring log |

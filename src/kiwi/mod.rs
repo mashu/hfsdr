@@ -5,6 +5,7 @@
 pub mod protocol;
 mod reader;
 
+use crate::source::controls::KiwiControls;
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
 use protocol::{kiwi_iq_half_hz, KIWI_IQ_RATE, KiwiRxSetup, KIWI_MAN_GAIN_DEFAULT, mod_iq_command};
 use reader::{READ_TIMEOUT, reader_loop};
@@ -337,20 +338,10 @@ impl IqSource for KiwiSource {
     fn is_streaming(&self) -> bool {
         self.streaming
     }
+}
 
-    fn rssi_dbm(&self) -> Option<f32> {
-        Some(self.meter_dbm())
-    }
-
-    fn hw_rf_gain(&self) -> Option<u8> {
-        Some(self.man_gain)
-    }
-
-    fn supports_passband(&self) -> bool {
-        true
-    }
-
-    fn set_passband(&mut self, low_hz: i32, high_hz: i32) -> Result<()> {
+impl KiwiSource {
+    pub fn set_passband(&mut self, low_hz: i32, high_hz: i32) -> Result<()> {
         self.low_cut = low_hz;
         self.high_cut = high_hz;
         if let Some(tx) = &self.cmd_tx {
@@ -359,7 +350,7 @@ impl IqSource for KiwiSource {
         Ok(())
     }
 
-    fn set_agc(&mut self, on: bool) -> Result<()> {
+    pub fn set_agc(&mut self, on: bool) -> Result<()> {
         self.agc_on = on;
         if let Some(tx) = &self.cmd_tx {
             let cmd = protocol::agc_command(on, self.man_gain);
@@ -368,13 +359,46 @@ impl IqSource for KiwiSource {
         Ok(())
     }
 
-    fn set_man_gain(&mut self, gain: u8) -> Result<()> {
+    pub fn set_man_gain(&mut self, gain: u8) -> Result<()> {
         self.man_gain = gain.clamp(0, 100);
         if let Some(tx) = &self.cmd_tx {
             let cmd = protocol::agc_command(self.agc_on, self.man_gain);
             let _ = tx.send(cmd);
         }
         Ok(())
+    }
+
+    pub fn set_rf_attn_db(&mut self, db: f32) -> Result<()> {
+        let db = db.clamp(0.0, protocol::KIWI_RF_ATTN_MAX_DB);
+        self.rf_attn_db = db;
+        self.rf_attn_cdb
+            .store((db * 10.0).round() as i32, Ordering::Relaxed);
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.send(protocol::rf_attn_command(db));
+        }
+        Ok(())
+    }
+}
+
+impl KiwiControls for KiwiSource {
+    fn supports_passband(&self) -> bool {
+        true
+    }
+
+    fn set_passband(&mut self, low_hz: i32, high_hz: i32) -> Result<()> {
+        KiwiSource::set_passband(self, low_hz, high_hz)
+    }
+
+    fn set_agc(&mut self, on: bool) -> Result<()> {
+        KiwiSource::set_agc(self, on)
+    }
+
+    fn set_man_gain(&mut self, gain: u8) -> Result<()> {
+        KiwiSource::set_man_gain(self, gain)
+    }
+
+    fn set_rf_attn_db(&mut self, db: f32) -> Result<()> {
+        KiwiSource::set_rf_attn_db(self, db)
     }
 
     fn has_rf_attn(&self) -> bool {
@@ -390,15 +414,12 @@ impl IqSource for KiwiSource {
         }
     }
 
-    fn set_rf_attn_db(&mut self, db: f32) -> Result<()> {
-        let db = db.clamp(0.0, protocol::KIWI_RF_ATTN_MAX_DB);
-        self.rf_attn_db = db;
-        self.rf_attn_cdb
-            .store((db * 10.0).round() as i32, Ordering::Relaxed);
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(protocol::rf_attn_command(db));
-        }
-        Ok(())
+    fn rssi_dbm(&self) -> Option<f32> {
+        Some(self.meter_dbm())
+    }
+
+    fn hw_rf_gain(&self) -> Option<u8> {
+        Some(self.man_gain)
     }
 
     fn link_ready(&self) -> bool {
@@ -423,6 +444,7 @@ impl Drop for KiwiSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::controls::KiwiControls;
     use crate::source::IqSource;
 
     #[test]
@@ -448,17 +470,17 @@ mod tests {
         assert_eq!(src.frequency(), 14_030_000.0);
         assert!(!src.is_streaming());
         assert_eq!(src.dropped_samples(), 0);
-        assert!(src.supports_passband());
-        src.set_passband(-4_000, 4_000).unwrap();
-        src.set_agc(true).unwrap();
-        src.set_man_gain(60).unwrap();
-        assert!(!src.has_rf_attn());
-        assert!(src.rf_attn_db().is_none());
-        src.set_rf_attn_db(6.0).unwrap();
-        assert!(src.rssi_dbm().is_some());
-        assert!(!src.link_ready());
-        assert!(!src.link_alive());
-        assert!(src.link_error().is_none());
+        assert!(KiwiControls::supports_passband(&src));
+        KiwiControls::set_passband(&mut src, -4_000, 4_000).unwrap();
+        KiwiControls::set_agc(&mut src, true).unwrap();
+        KiwiControls::set_man_gain(&mut src, 60).unwrap();
+        assert!(!KiwiControls::has_rf_attn(&src));
+        assert!(KiwiControls::rf_attn_db(&src).is_none());
+        KiwiControls::set_rf_attn_db(&mut src, 6.0).unwrap();
+        assert!(KiwiControls::rssi_dbm(&src).is_some());
+        assert!(!KiwiControls::link_ready(&src));
+        assert!(!KiwiControls::link_alive(&src));
+        assert!(KiwiControls::link_error(&src).is_none());
         src.stop().unwrap();
     }
 

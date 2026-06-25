@@ -3,15 +3,13 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use hfsdr::{audio_sample_rate, Complex32, DecimFilterKind, FirDecimator};
+use hfsdr::{Complex32, FirDecimator};
 use rayon::join;
 
 use crate::log;
-use hfsdr::kiwi_iq_half_hz;
-
 use super::Engine;
 use crate::engine::policy::{
-    ring_catchup_target_slots, skimmer_throttle, SKIMMER_PEAK_HOLD_DECAY_DB, WIDEBAND_IQ_THRESHOLD,
+    is_wideband_rate, ring_catchup_target_slots, skimmer_throttle, SKIMMER_PEAK_HOLD_DECAY_DB,
 };
 use crate::engine::types::{ConnState, EngineStats};
 use crate::engine::{WATERFALL_ROWS};
@@ -109,7 +107,7 @@ impl Engine {
         self.touch_skimmer_center(center_hz);
 
         let cw = params.cw.clone();
-        let wideband = device_rate > WIDEBAND_IQ_THRESHOLD;
+        let wideband = is_wideband_rate(device_rate);
         let batch = Arc::new(std::mem::take(&mut self.drain));
         self.drain = Vec::with_capacity(self.max_drain());
 
@@ -397,8 +395,8 @@ impl Engine {
         let spots = self.skimmer.spots();
         let scp = self.skimmer.scp_status();
         let channels = self.skimmer.active_channels();
-        let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
-        let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
+        let dropped = self.conn.as_ref().map(|c| c.device.dropped_samples()).unwrap_or(0);
+        let rssi = self.conn.as_ref().and_then(|c| c.device.rssi_dbm());
         let (sample_rate, _, is_kiwi) = self.link_meta();
         let (iq_recording, iq_playback, iq_capture_samples, iq_capture_path) = self.capture_ui();
         let effective = self.effective_rate(sample_rate);
@@ -481,8 +479,8 @@ impl Engine {
 
     pub(super) fn publish_stats(&mut self, got: usize) {
         let scp = self.skimmer.scp_status();
-        let dropped = self.conn.as_ref().map(|c| c.source.dropped_samples()).unwrap_or(0);
-        let rssi = self.conn.as_ref().and_then(|c| c.source.rssi_dbm());
+        let dropped = self.conn.as_ref().map(|c| c.device.dropped_samples()).unwrap_or(0);
+        let rssi = self.conn.as_ref().and_then(|c| c.device.rssi_dbm());
         let (sample_rate, _, is_kiwi) = self.link_meta();
         let (iq_recording, iq_playback, iq_capture_samples, iq_capture_path) = self.capture_ui();
         let effective = self.effective_rate(sample_rate);
@@ -544,11 +542,11 @@ impl Engine {
     pub(super) fn kiwi_rf_stats(&self) -> (bool, f32) {
         self.conn
             .as_ref()
-            .map(|c| (c.source.has_rf_attn(), c.source.rf_attn_db().unwrap_or(0.0)))
+            .map(|c| c.device.kiwi_rf_stats())
             .unwrap_or((false, 0.0))
     }
 
     pub(super) fn hw_rf_gain(&self) -> Option<u8> {
-        self.conn.as_ref().and_then(|c| c.source.hw_rf_gain())
+        self.conn.as_ref().and_then(|c| c.device.hw_rf_gain())
     }
 }

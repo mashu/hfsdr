@@ -23,9 +23,7 @@ use crate::skimmer::SkimmerHandle;
 use crate::source::{Connection, ConnectRequest};
 
 use super::audio::AudioScopeRing;
-use super::policy::MAX_DRAIN_WIDEBAND;
 use super::types::{EngineCommand, EngineParams, EngineShared};
-use super::{FFT_HOP, FFT_SIZE, MIN_SPECTRUM_ROWS_WIDEBAND};
 
 /// Owned entirely by the engine thread.
 pub(super) struct Engine {

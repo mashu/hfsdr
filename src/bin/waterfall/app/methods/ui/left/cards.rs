@@ -4,7 +4,7 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn smeter_card(&mut self, ui: &mut egui::Ui) {
-        let live = matches!(self.conn_state, ConnState::Streaming);
+        let live = matches!(self.engine_ui.conn_state, ConnState::Streaming);
         section_frame()
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
@@ -38,18 +38,18 @@ impl WaterfallApp {
                         -127.0
                     },
                     hw_rssi_dbm: if live {
-                        self.stats.rssi_dbm
+                        self.engine_ui.stats.rssi_dbm
                     } else {
                         None
                     },
                     agc_gain: if live {
-                        self.stats.agc_gain
+                        self.engine_ui.stats.agc_gain
                     } else {
                         1.0
                     },
                     agc_enabled: live && self.radio.cw.agc.enabled,
                     audio_peak: if live {
-                        self.stats.audio_peak
+                        self.engine_ui.stats.audio_peak
                     } else {
                         0.0
                     },
@@ -110,7 +110,7 @@ impl WaterfallApp {
 
 
     pub(crate) fn rf_front_end_card(&mut self, ui: &mut egui::Ui) {
-        let live = matches!(self.conn_state, ConnState::Streaming);
+        let live = matches!(self.engine_ui.conn_state, ConnState::Streaming);
         section_card(ui, |ui| {
             section_heading_with_tip(
                 ui,

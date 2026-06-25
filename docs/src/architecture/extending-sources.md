@@ -7,7 +7,7 @@ forking the FFT or skimmer.
 
 ## Implement `IqSource`
 
-Required capabilities:
+Required capabilities (streaming contract only):
 
 1. List and set **sample rate**.
 2. **Tune** center frequency (Hz).
@@ -15,7 +15,9 @@ Required capabilities:
 4. **Stop** and release resources.
 5. Report **dropped** sample count on overload.
 
-Contract details in `src/source.rs` module documentation.
+Contract details in `src/source/mod.rs`. Device-specific RF knobs belong in
+extension traits under `src/source/controls.rs` (`KiwiControls`, `AirspyControls`,
+…).
 
 ---
 
@@ -33,7 +35,10 @@ Violating this causes USB dropouts or Kiwi disconnects.
 
 ## Wire into the GUI
 
-Add variant to connection UI in `bin/waterfall/source/connection.rs` (`ConnectRequest`).
+1. Implement `IqSource` plus the matching control trait in the device module.
+2. Add a variant to [`DeviceSource`](../../src/bin/waterfall/source/device.rs) and
+   a connect path in `bin/waterfall/source/connection.rs` (`ConnectRequest`).
+3. Extend `controls_dispatch.rs` if the engine exposes new RF commands.
 
 Engine creates the source inside **engine thread** on `Connect` command — device
 handles need not be `Send`.
@@ -57,7 +62,8 @@ known quirks (e.g. integer Hz tuning only).
 ## Checklist
 
 - [ ] `IqSource` impl + error mapping
-- [ ] Connect path in GUI
+- [ ] Control trait impl when the device has RF knobs
+- [ ] `DeviceSource` variant + connect path in GUI
 - [ ] Drop counter visible in stats when stressed
 - [ ] Unit/integration test with synthetic IQ
 - [ ] Book chapter or paragraph for operators

@@ -15,10 +15,10 @@ impl WaterfallApp {
                  Row budget still adapts to CPU headroom.",
             );
             if self.display.fft_auto {
-                let rate = self.stats.spectrum_rate;
-                let bin = rate / self.stats.spectrum_fft.max(1) as f32;
-                let zoom_note = if self.stats.spectrum_zoomed {
-                    format!(" ×{} zoom", self.stats.spectrum_decim)
+                let rate = self.engine_ui.stats.spectrum_rate;
+                let bin = rate / self.engine_ui.stats.spectrum_fft.max(1) as f32;
+                let zoom_note = if self.engine_ui.stats.spectrum_zoomed {
+                    format!(" ×{} zoom", self.engine_ui.stats.spectrum_decim)
                 } else {
                     String::new()
                 };
@@ -27,7 +27,7 @@ impl WaterfallApp {
                     "FFT",
                     format!(
                         "{} @ {:.1} kS/s (~{bin:.1} Hz/bin){zoom_note}",
-                        self.stats.spectrum_fft,
+                        self.engine_ui.stats.spectrum_fft,
                         rate / 1000.0
                     ),
                 );
@@ -108,9 +108,9 @@ impl WaterfallApp {
             }
 
             ui.separator();
-            stat_row(ui, "IQ / pump", self.stats.last_drain.to_string());
+            stat_row(ui, "IQ / pump", self.engine_ui.stats.last_drain.to_string());
             stat_row(ui, "Decoders", self.skimmer_ui.skimmer_channels.to_string());
-            if let Some(name) = &self.stats.audio_device {
+            if let Some(name) = &self.engine_ui.stats.audio_device {
                 stat_row(ui, "Audio out", name.clone());
             }
         });

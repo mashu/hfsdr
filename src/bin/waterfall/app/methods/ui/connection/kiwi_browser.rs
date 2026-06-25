@@ -5,13 +5,13 @@ impl WaterfallApp {
 
     pub(crate) fn connection_kiwi_browser_section(&mut self, ui: &mut egui::Ui) {
         popup_section(ui, "Public KiwiSDRs", None, |ui| {
-            if self.connection.kiwi_directory_rx.is_some() {
+            if self.connection.kiwi.fetch_rx.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(egui::RichText::new("Loading…").small().color(MUTED));
                 });
-            } else if !self.connection.kiwi_nearby.is_empty() {
-                let mut nearby = self.connection.kiwi_nearby.clone();
+            } else if !self.connection.kiwi.nearby.is_empty() {
+                let mut nearby = self.connection.kiwi.nearby.clone();
                 nearby.sort_by(|a, b| {
                     let af = a.users >= a.users_max;
                     let bf = b.users >= b.users_max;
@@ -43,8 +43,8 @@ impl WaterfallApp {
                             );
                             let resp = list_row(ui, &line, !full);
                             if resp.clicked() {
-                                self.connection.form_host = rx.host;
-                                self.connection.form_port = rx.port;
+                                self.connection.form.host = rx.host;
+                                self.connection.form.port = rx.port;
                                 self.connect_now();
                             }
                         }
@@ -52,10 +52,10 @@ impl WaterfallApp {
                 if ghost_button(ui, "Refresh").clicked() {
                     self.start_kiwi_directory_fetch(true);
                 }
-            } else if let Some(err) = &self.connection.kiwi_directory_error {
+            } else if let Some(err) = &self.connection.kiwi.error {
                 alert_banner(ui, err, None);
                 if ghost_button(ui, "Retry").clicked() {
-                    self.connection.kiwi_directory_error = None;
+                    self.connection.kiwi.error = None;
                     self.start_kiwi_directory_fetch(true);
                 }
             } else if ghost_button(ui, "Refresh").clicked() {

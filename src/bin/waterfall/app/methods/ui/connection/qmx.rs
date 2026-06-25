@@ -15,28 +15,28 @@ impl WaterfallApp {
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new("CAT port").small().color(MUTED));
                     egui::ComboBox::from_id_salt("qmx_serial")
-                        .selected_text(if self.connection.form_qmx.serial_port.is_empty() {
+                        .selected_text(if self.connection.form.qmx.serial_port.is_empty() {
                             "(first available)".to_string()
                         } else {
-                            self.connection.form_qmx.serial_port.clone()
+                            self.connection.form.qmx.serial_port.clone()
                         })
                         .width(ui.available_width())
                         .show_ui(ui, |ui| {
                             if ui
-                                .selectable_label(self.connection.form_qmx.serial_port.is_empty(), "(first available)")
+                                .selectable_label(self.connection.form.qmx.serial_port.is_empty(), "(first available)")
                                 .clicked()
                             {
-                                self.connection.form_qmx.serial_port.clear();
+                                self.connection.form.qmx.serial_port.clear();
                             }
                             for port in &serial_ports {
                                 if ui
                                     .selectable_label(
-                                        self.connection.form_qmx.serial_port == *port,
+                                        self.connection.form.qmx.serial_port == *port,
                                         port,
                                     )
                                     .clicked()
                                 {
-                                    self.connection.form_qmx.serial_port = port.clone();
+                                    self.connection.form.qmx.serial_port = port.clone();
                                 }
                             }
                         });
@@ -44,28 +44,28 @@ impl WaterfallApp {
 
                     ui.label(egui::RichText::new("IQ audio in").small().color(MUTED));
                     egui::ComboBox::from_id_salt("qmx_audio")
-                        .selected_text(if self.connection.form_qmx.audio_device.is_empty() {
+                        .selected_text(if self.connection.form.qmx.audio_device.is_empty() {
                             "(auto-detect QMX)".to_string()
                         } else {
-                            self.connection.form_qmx.audio_device.clone()
+                            self.connection.form.qmx.audio_device.clone()
                         })
                         .width(ui.available_width())
                         .show_ui(ui, |ui| {
                             if ui
-                                .selectable_label(self.connection.form_qmx.audio_device.is_empty(), "(auto-detect QMX)")
+                                .selectable_label(self.connection.form.qmx.audio_device.is_empty(), "(auto-detect QMX)")
                                 .clicked()
                             {
-                                self.connection.form_qmx.audio_device.clear();
+                                self.connection.form.qmx.audio_device.clear();
                             }
                             for dev in &audio_inputs {
                                 if ui
                                     .selectable_label(
-                                        self.connection.form_qmx.audio_device == *dev,
+                                        self.connection.form.qmx.audio_device == *dev,
                                         dev,
                                     )
                                     .clicked()
                                 {
-                                    self.connection.form_qmx.audio_device = dev.clone();
+                                    self.connection.form.qmx.audio_device = dev.clone();
                                 }
                             }
                         });
@@ -75,7 +75,7 @@ impl WaterfallApp {
                     preset_combo_u32(
                         ui,
                         "qmx_proc",
-                        &mut self.connection.form_qmx.iq_process_hz,
+                        &mut self.connection.form.qmx.iq_process_hz,
                         QMX_PROCESS_RATE_PRESETS,
                         "Hz ",
                         0..=48_000,
@@ -84,7 +84,7 @@ impl WaterfallApp {
 
                     ui.label(egui::RichText::new("IF offset").small().color(MUTED));
                     ui.add(
-                        egui::DragValue::new(&mut self.connection.form_qmx.if_offset_hz)
+                        egui::DragValue::new(&mut self.connection.form.qmx.if_offset_hz)
                             .range(0..=50_000)
                             .suffix(" Hz"),
                     );
@@ -92,7 +92,7 @@ impl WaterfallApp {
 
                     ui.label(egui::RichText::new("RF gain").small().color(MUTED));
                     ui.add(
-                        egui::DragValue::new(&mut self.connection.form_qmx.rf_gain_db)
+                        egui::DragValue::new(&mut self.connection.form.qmx.rf_gain_db)
                             .range(0..=99)
                             .suffix(" dB"),
                     );
@@ -100,13 +100,13 @@ impl WaterfallApp {
 
                     ui.label(egui::RichText::new("CAT timeout").small().color(MUTED));
                     ui.toggle_value(
-                        &mut self.connection.form_qmx.disable_cat_timeout,
+                        &mut self.connection.form.qmx.disable_cat_timeout,
                         "Disable (stay in RX)",
                     );
                     ui.end_row();
 
                     ui.label(egui::RichText::new("CW mode").small().color(MUTED));
-                    ui.toggle_value(&mut self.connection.form_qmx.force_cw_mode, "Set at connect");
+                    ui.toggle_value(&mut self.connection.form.qmx.force_cw_mode, "Set at connect");
                     ui.end_row();
                 });
             section_hint(

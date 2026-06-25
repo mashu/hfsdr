@@ -21,12 +21,12 @@ impl WaterfallApp {
                     ),
                 ],
             );
-            let streaming = matches!(self.conn_state, ConnState::Streaming);
+            let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
             let hint = classify_level(
-                self.stats.audio_peak,
+                self.engine_ui.stats.audio_peak,
                 self.radio.cw.agc.enabled,
-                self.stats.agc_gain,
-                self.stats.agc_envelope,
+                self.engine_ui.stats.agc_gain,
+                self.engine_ui.stats.agc_envelope,
                 self.radio.cw.agc.target,
                 streaming,
             );
@@ -34,15 +34,15 @@ impl WaterfallApp {
                 ui,
                 &AfScopeParams {
                     samples: &self.audio.audio_scope,
-                    peak: self.stats.audio_peak,
-                    rms: self.stats.audio_rms,
-                    agc_gain: self.stats.agc_gain,
-                    agc_envelope: self.stats.agc_envelope,
+                    peak: self.engine_ui.stats.audio_peak,
+                    rms: self.engine_ui.stats.audio_rms,
+                    agc_gain: self.engine_ui.stats.agc_gain,
+                    agc_envelope: self.engine_ui.stats.agc_envelope,
                     agc_enabled: self.radio.cw.agc.enabled,
                     agc_target: self.radio.cw.agc.target,
-                    iq_headroom: self.stats.iq_buffer_fill,
-                    rssi_dbm: self.stats.rssi_dbm,
-                    iq_rf_level: self.stats.iq_rf_level,
+                    iq_headroom: self.engine_ui.stats.iq_buffer_fill,
+                    rssi_dbm: self.engine_ui.stats.rssi_dbm,
+                    iq_rf_level: self.engine_ui.stats.iq_rf_level,
                     streaming,
                     hint,
                 },

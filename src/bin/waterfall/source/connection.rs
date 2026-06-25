@@ -1,6 +1,6 @@
 use std::fmt;
 
-use hfsdr::{Complex32, Consumer, IqSource, KiwiSource};
+use hfsdr::{IqSource, KiwiSource};
 #[cfg(feature = "airspy")]
 use hfsdr::{airspyhf::iq_ring_capacity, AirspyHf};
 #[cfg(feature = "qmx")]
@@ -10,11 +10,12 @@ use hfsdr::{
 };
 #[cfg(feature = "rtlsdr")]
 use hfsdr::{
-    rtlsdr::{self, iq_ring_capacity as rtlsdr_ring_capacity},
+    rtlsdr::iq_ring_capacity as rtlsdr_ring_capacity,
     RtlSdr,
 };
 use serde::{Deserialize, Serialize};
 
+use super::device::DeviceSource;
 use super::settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};
 #[cfg(feature = "airspy")]
 use super::settings::default_airspy_sample_rate;
@@ -144,25 +145,10 @@ impl ConnectRequest {
     }
 }
 
-/// A connected, streaming source: the boxed front end plus its IQ consumer.
-pub struct Connection {
-    pub source: Box<dyn IqSource>,
-    pub iq: Consumer<Complex32>,
-    pub iq_ring_capacity: usize,
-    /// Native device IQ rate (full passband for demod and display).
-    pub device_sample_rate: f32,
-    /// Rate after optional client-side decimation (spectrum FFT path only).
-    pub sample_rate: f32,
-    pub center_hz: f64,
-    pub is_kiwi: bool,
-    /// Client-side integer decimation for the spectrum path (1 = none).
-    pub iq_ingress_decim: usize,
-}
-
 /// Build, tune, and start the requested source. Blocks until the link is up
 /// (or fails); intended to be called from the engine thread, never the UI.
 /// Polls `cancel` during network setup so Disconnect/Cancel can abort promptly.
-pub fn connect(req: &ConnectRequest, cancel: &std::sync::atomic::AtomicBool) -> Result<Connection, String> {
+pub fn connect(req: &ConnectRequest, cancel: &std::sync::atomic::AtomicBool) -> Result<super::device::Connection, String> {
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());
     }
@@ -180,7 +166,7 @@ pub fn connect(req: &ConnectRequest, cancel: &std::sync::atomic::AtomicBool) -> 
 fn connect_kiwi(
     req: &ConnectRequest,
     cancel: &std::sync::atomic::AtomicBool,
-) -> Result<Connection, String> {
+) -> Result<super::device::Connection, String> {
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());
     }
@@ -203,8 +189,8 @@ fn connect_kiwi(
     let reported = src.sample_rate();
     let (ingress_decim, eff_sr) = req.kiwi.ingress_decimation(reported);
     let iq = src.start_cancellable(cancel).map_err(|e| e.to_string())?;
-    Ok(Connection {
-        source: Box::new(src),
+    Ok(super::device::Connection {
+        device: DeviceSource::Kiwi(src),
         iq,
         iq_ring_capacity: 1 << 16,
         device_sample_rate: reported as f32,
@@ -219,7 +205,7 @@ fn connect_kiwi(
 fn connect_airspy(
     req: &ConnectRequest,
     cancel: &std::sync::atomic::AtomicBool,
-) -> Result<Connection, String> {
+) -> Result<super::device::Connection, String> {
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());
     }
@@ -245,8 +231,8 @@ fn connect_airspy(
     let (ingress_decim, eff_sr) = req.airspy.ingress_decimation(sr);
     let ring_cap = iq_ring_capacity(sr);
     let iq = src.start().map_err(|e| e.to_string())?;
-    Ok(Connection {
-        source: Box::new(src),
+    Ok(super::device::Connection {
+        device: DeviceSource::Airspy(src),
         iq,
         iq_ring_capacity: ring_cap,
         device_sample_rate: sr as f32,
@@ -261,7 +247,7 @@ fn connect_airspy(
 fn connect_rtlsdr(
     req: &ConnectRequest,
     cancel: &std::sync::atomic::AtomicBool,
-) -> Result<Connection, String> {
+) -> Result<super::device::Connection, String> {
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());
     }
@@ -290,8 +276,8 @@ fn connect_rtlsdr(
     let (ingress_decim, eff_sr) = req.rtlsdr.ingress_decimation(sr);
     let ring_cap = rtlsdr_ring_capacity(sr);
     let iq = src.start().map_err(|e| e.to_string())?;
-    Ok(Connection {
-        source: Box::new(src),
+    Ok(super::device::Connection {
+        device: DeviceSource::RtlSdr(src),
         iq,
         iq_ring_capacity: ring_cap,
         device_sample_rate: sr as f32,
@@ -306,7 +292,7 @@ fn connect_rtlsdr(
 fn connect_qmx(
     req: &ConnectRequest,
     cancel: &std::sync::atomic::AtomicBool,
-) -> Result<Connection, String> {
+) -> Result<super::device::Connection, String> {
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());
     }
@@ -325,8 +311,8 @@ fn connect_qmx(
     let (ingress_decim, eff_sr) = q.ingress_decimation(sr);
     let ring_cap = qmx_ring_capacity();
     let iq = src.start().map_err(|e| e.to_string())?;
-    Ok(Connection {
-        source: Box::new(src),
+    Ok(super::device::Connection {
+        device: DeviceSource::Qmx(src),
         iq,
         iq_ring_capacity: ring_cap,
         device_sample_rate: sr as f32,

@@ -4,7 +4,7 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn scp_section(&mut self, ui: &mut egui::Ui) {
-        let scp = &self.stats.scp;
+        let scp = &self.engine_ui.stats.scp;
         let downloading = self.skimmer_ui.scp_download_rx.is_some();
         collapsible_section(ui, "scp", "MASTER.SCP", None, false, |ui| {
             if scp.loaded {

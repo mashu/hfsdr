@@ -59,7 +59,7 @@ records connection errors.
 
 ## For contributors
 
-Never call **blocking** engine APIs from `app.rs` ui(). Never process IQ in widgets.
+Never call **blocking** engine APIs from `app/mod.rs` (`eframe::App::ui`). Never process IQ in widgets.
 If adding features, default to **engine thread** or **pure functions** called from UI.
 
 See [Code layout](./code-layout.md).

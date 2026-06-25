@@ -35,8 +35,8 @@ impl WaterfallApp {
         if !self.display.display_levels_initialized || ref_delta > 0.35 || range_delta > 0.75 {
             self.display.ref_db = ref_db;
             self.display.range_db = range_db;
-            self.plot.force_texture_full = true;
-            self.plot.textures_dirty = true;
+            self.plot.waterfall.force_texture_full = true;
+            self.plot.waterfall.textures_dirty = true;
             self.display.display_levels_initialized = true;
         }
     }

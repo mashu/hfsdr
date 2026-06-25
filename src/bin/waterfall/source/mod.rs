@@ -8,18 +8,18 @@
 mod cli;
 mod connection;
 pub mod controls_dispatch;
+mod device;
 mod kinds;
 mod settings;
 
 pub use cli::request_from_args;
-pub use connection::{connect, ConnectRequest, Connection, SourceKind};
+pub use connection::{connect, ConnectRequest, SourceKind};
+pub use device::Connection;
 pub use kinds::{
     is_local_source, source_kind_from_index, source_kind_index, source_kind_label,
     source_kind_labels,
 };
-pub use settings::{
-    AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings,
-};
+pub use settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};
 #[cfg(feature = "airspy")]
 pub use settings::default_airspy_sample_rate;
 #[cfg(feature = "rtlsdr")]

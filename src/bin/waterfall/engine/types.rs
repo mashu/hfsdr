@@ -1,8 +1,6 @@
 //! Engine types shared with the UI thread.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 use hfsdr::{CwChannelSettings, Spot};
 use hfsdr::SkimmerConfig;
@@ -10,7 +8,8 @@ use hfsdr::SkimmerConfig;
 use crate::skimmer::ScpStatus;
 use crate::source::ConnectRequest;
 
-use super::{FFT_SIZE, MIN_SPECTRUM_ROWS_WIDEBAND, WATERFALL_ROWS};
+use crate::engine::policy::MIN_SPECTRUM_ROWS_WIDEBAND;
+use super::{FFT_SIZE, WATERFALL_ROWS};
 
 
 /// Connection lifecycle, surfaced to the UI.

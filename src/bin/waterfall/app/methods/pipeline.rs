@@ -131,19 +131,19 @@ impl WaterfallApp {
 
 
     pub(crate) fn pipeline_ingress_decim(&self) -> usize {
-        let device_rate = if self.stats.sample_rate > 0.0 {
-            self.stats.sample_rate.round() as u32
+        let device_rate = if self.engine_ui.stats.sample_rate > 0.0 {
+            self.engine_ui.stats.sample_rate.round() as u32
         } else {
-            self.connection.form_sample_rate
+            self.connection.form.sample_rate
         };
-        match self.connection.form_kind {
+        match self.connection.form.kind {
             #[cfg(feature = "airspy")]
-            SourceKind::Airspy => self.connection.form_airspy.ingress_decimation(device_rate).0,
-            SourceKind::Kiwi => self.connection.form_kiwi.ingress_decimation(device_rate).0,
+            SourceKind::Airspy => self.connection.form.airspy.ingress_decimation(device_rate).0,
+            SourceKind::Kiwi => self.connection.form.kiwi.ingress_decimation(device_rate).0,
             #[cfg(feature = "rtlsdr")]
-            SourceKind::RtlSdr => self.connection.form_rtlsdr.ingress_decimation(device_rate).0,
+            SourceKind::RtlSdr => self.connection.form.rtlsdr.ingress_decimation(device_rate).0,
             #[cfg(feature = "qmx")]
-            SourceKind::Qmx => self.connection.form_qmx.ingress_decimation(device_rate).0,
+            SourceKind::Qmx => self.connection.form.qmx.ingress_decimation(device_rate).0,
         }
     }
 

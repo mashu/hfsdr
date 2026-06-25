@@ -4,11 +4,11 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn start_kiwi_directory_fetch(&mut self, force_refresh: bool) {
-        if self.connection.kiwi_directory_rx.is_some() {
+        if self.connection.kiwi.fetch_rx.is_some() {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        self.connection.kiwi_directory_rx = Some(rx);
+        self.connection.kiwi.fetch_rx = Some(rx);
         std::thread::spawn(move || {
             let result = if force_refresh {
                 crate::kiwi_directory::refresh_nearby_receivers()
@@ -22,23 +22,23 @@ impl WaterfallApp {
 
 
     pub(crate) fn poll_kiwi_directory(&mut self) {
-        let Some(rx) = &self.connection.kiwi_directory_rx else {
+        let Some(rx) = &self.connection.kiwi.fetch_rx else {
             return;
         };
         match rx.try_recv() {
             Ok(Ok((geo, receivers))) => {
-                self.connection.kiwi_geo = geo;
-                self.connection.kiwi_nearby = receivers;
-                self.connection.kiwi_directory_error = None;
-                self.connection.kiwi_directory_rx = None;
+                self.connection.kiwi.geo = geo;
+                self.connection.kiwi.nearby = receivers;
+                self.connection.kiwi.error = None;
+                self.connection.kiwi.fetch_rx = None;
             }
             Ok(Err(err)) => {
-                self.connection.kiwi_directory_error = Some(err);
-                self.connection.kiwi_directory_rx = None;
+                self.connection.kiwi.error = Some(err);
+                self.connection.kiwi.fetch_rx = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.connection.kiwi_directory_rx = None;
+                self.connection.kiwi.fetch_rx = None;
             }
         }
     }
@@ -46,9 +46,9 @@ impl WaterfallApp {
 
 
     pub(crate) fn connection_unstable(&self) -> bool {
-        self.stats.slow
+        self.engine_ui.stats.slow
             || matches!(
-                self.conn_state,
+                self.engine_ui.conn_state,
                 ConnState::Reconnecting { .. } | ConnState::Connecting { .. }
             )
     }
@@ -98,6 +98,9 @@ impl WaterfallApp {
     /// Scale skimmer decoder count with available bandwidth.
     pub(crate) fn effective_skimmer(&self) -> SkimmerConfig {
         let mut cfg = self.skimmer_ui.skimmer.clone().clamped();
+        if matches!(self.engine_ui.conn_state, ConnState::Streaming) {
+            cfg.source_label = self.connection_alias();
+        }
         if self.is_wideband() {
             cfg.max_channels = cfg.max_channels.min(8);
         } else if self.radio.sample_rate > 24_000.0 {
@@ -128,14 +131,14 @@ impl WaterfallApp {
             return;
         };
 
-        if poll.stats.slow && !self.stats.slow {
+        if poll.stats.slow && !self.engine_ui.stats.slow {
             log::warn("link slow or unstable");
         }
-        self.conn_state = poll.state;
-        self.stats = poll.stats;
+        self.engine_ui.conn_state = poll.state;
+        self.engine_ui.stats = poll.stats;
         if self.skimmer_ui.scp_reload_pending {
-            if self.stats.scp.loaded {
-                let n = self.stats.scp.calls;
+            if self.engine_ui.stats.scp.loaded {
+                let n = self.engine_ui.stats.scp.calls;
                 self.skimmer_ui.scp_notice = Some(format!("MASTER.SCP loaded ({n} calls)"));
                 self.skimmer_ui.scp_reload_pending = false;
                 self.skimmer_ui.scp_reload_deadline = None;
@@ -147,45 +150,45 @@ impl WaterfallApp {
                 self.skimmer_ui.scp_reload_deadline = None;
             }
         }
-        self.skimmer_ui.last_scp_loaded = self.stats.scp.loaded;
-        if poll.last_error.as_deref() != self.last_error.as_deref() {
+        self.skimmer_ui.last_scp_loaded = self.engine_ui.stats.scp.loaded;
+        if poll.last_error.as_deref() != self.engine_ui.last_error.as_deref() {
             if let Some(ref err) = poll.last_error {
                 log::error(err);
             }
         }
-        self.last_error = poll.last_error;
+        self.engine_ui.last_error = poll.last_error;
         self.skimmer_ui.skimmer_spots = poll.spots;
         self.audio.audio_scope = poll.audio_scope;
         let latest = poll.latest;
         let new_rows = poll.rows;
-        if matches!(self.conn_state, ConnState::Streaming)
-            && self.plot.waterfall_viewport_texture.is_none()
+        if matches!(self.engine_ui.conn_state, ConnState::Streaming)
+            && self.plot.waterfall.viewport_texture.is_none()
             && self.plot.rows.is_empty()
             && !new_rows.is_empty()
         {
-            self.plot.force_texture_full = true;
-            self.plot.textures_dirty = true;
+            self.plot.waterfall.force_texture_full = true;
+            self.plot.waterfall.textures_dirty = true;
         }
         if latest.len() != self.plot.latest.len() {
             // FFT size changed under us: adopt the new width and reset buffers.
             self.plot.latest = latest;
             self.plot.rows.clear();
-            self.plot.force_texture_full = true;
-            self.plot.textures_dirty = true;
+            self.plot.waterfall.force_texture_full = true;
+            self.plot.waterfall.textures_dirty = true;
         } else {
             self.plot.latest.copy_from_slice(&latest);
             self.plot.latest_frame_tick = true;
         }
 
-        self.radio.sample_rate = self.stats.sample_rate;
-        self.radio.is_kiwi = self.stats.is_kiwi;
-        if self.stats.kiwi_has_rf_attn && !self.radio.last_kiwi_has_rf_attn {
+        self.radio.sample_rate = self.engine_ui.stats.sample_rate;
+        self.radio.is_kiwi = self.engine_ui.stats.is_kiwi;
+        if self.engine_ui.stats.kiwi_has_rf_attn && !self.radio.last_kiwi_has_rf_attn {
             self.apply_kiwi_rf_attn_settings();
         }
-        self.radio.last_snr_db = self.stats.snr_db;
-        self.skimmer_ui.skimmer_channels = self.stats.skimmer_channels;
+        self.radio.last_snr_db = self.engine_ui.stats.snr_db;
+        self.skimmer_ui.skimmer_channels = self.engine_ui.stats.skimmer_channels;
         if self.display.fft_auto {
-            self.display.fft_size = self.stats.spectrum_fft.max(1024);
+            self.display.fft_size = self.engine_ui.stats.spectrum_fft.max(1024);
         }
 
         let full_span = self.plot_full_span_hz();
@@ -208,9 +211,9 @@ impl WaterfallApp {
                 self.plot.rows.push_front(stored);
             }
             self.display.waterfall_rows = self.plot.rows.len();
-            self.plot.pending_row_appends += n_new;
-            self.plot.pending_viewport_row_appends += n_new;
-            self.plot.textures_dirty = true;
+            self.plot.waterfall.pending_row_appends += n_new;
+            self.plot.waterfall.pending_viewport_row_appends += n_new;
+            self.plot.waterfall.textures_dirty = true;
             let levels_due = self
                 .plot.last_display_levels_at
                 .map(|t| t.elapsed() >= Duration::from_millis(300))

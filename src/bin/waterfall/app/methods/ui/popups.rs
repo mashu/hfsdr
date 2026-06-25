@@ -4,13 +4,13 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn connection_popup(&mut self, ctx: &egui::Context) {
-        if !self.connection.show_connection_drawer {
+        if !self.connection.form.show_connection_drawer {
             return;
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(320.0);
         let win_h = (screen.height() * 0.86).clamp(420.0, max_h);
-        let mut open = self.connection.show_connection_drawer;
+        let mut open = self.connection.form.show_connection_drawer;
         let (status_label, status_color) = self.connection_status_pill();
         configure_popup_window(
             "connection_popup",
@@ -34,7 +34,7 @@ impl WaterfallApp {
                 self.connection_card(ui);
             });
         });
-        self.connection.show_connection_drawer = open;
+        self.connection.form.show_connection_drawer = open;
     }
 
 
@@ -49,14 +49,14 @@ impl WaterfallApp {
         let mut open = self.chrome.show_iq_drawer;
         let subtitle = format!(
             "{:.0}% · {:.2}s queued",
-            self.stats.iq_buffer_fill * 100.0,
-            self.stats.iq_buffer_secs,
+            self.engine_ui.stats.iq_buffer_fill * 100.0,
+            self.engine_ui.stats.iq_buffer_secs,
         );
-        let status = if self.stats.iq_recording {
+        let status = if self.engine_ui.stats.iq_recording {
             let secs =
-                self.stats.iq_capture_samples as f32 / self.stats.sample_rate.max(1.0);
+                self.engine_ui.stats.iq_capture_samples as f32 / self.engine_ui.stats.sample_rate.max(1.0);
             Some((format!("REC {secs:.0}s"), WARN))
-        } else if self.stats.iq_playback {
+        } else if self.engine_ui.stats.iq_playback {
             Some(("PLAYBACK".to_string(), OK))
         } else {
             None
@@ -80,11 +80,11 @@ impl WaterfallApp {
                 &mut open,
             );
             popup_scroll_body(ui, |ui| {
-                let streaming = matches!(self.conn_state, ConnState::Streaming);
+                let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
                 let (cmds, dirty) = self.chrome.iq.show(
                     ui,
                     IqPanelView {
-                        stats: &self.stats,
+                        stats: &self.engine_ui.stats,
                         streaming,
                     },
                 );
@@ -107,13 +107,13 @@ impl WaterfallApp {
         let max_h = (screen.height() - 12.0).max(320.0);
         let win_h = 640.0_f32.clamp(420.0, max_h);
         let mut open = self.chrome.show_pipeline_drawer;
-        let streaming = matches!(self.conn_state, ConnState::Streaming);
+        let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
         let subtitle = format!(
             "{:.0} kS/s · {} IQ",
-            self.stats.effective_sps / 1000.0,
+            self.engine_ui.stats.effective_sps / 1000.0,
             if streaming { "live" } else { "idle" },
         );
-        let status = if self.stats.slow {
+        let status = if self.engine_ui.stats.slow {
             Some(("SLOW".to_string(), WARN))
         } else if streaming {
             Some(("LIVE".to_string(), OK))
@@ -145,12 +145,12 @@ impl WaterfallApp {
                 let snap = PipelineSnapshot {
                     source_label: &self.connection_alias(),
                     streaming,
-                    device_rate_hz: self.stats.sample_rate.max(self.connection.form_sample_rate as f32),
+                    device_rate_hz: self.engine_ui.stats.sample_rate.max(self.connection.form.sample_rate as f32),
                     ingress_decim: self.pipeline_ingress_decim(),
                     cw: &self.radio.cw,
                     skimmer_enabled: self.skimmer_ui.skimmer_enabled,
                     audio_enabled: self.audio.audio_enabled,
-                    stats: &self.stats,
+                    stats: &self.engine_ui.stats,
                 };
                 let toggled = self.chrome.pipeline_flow.show(ui, &snap);
                 for stage in toggled {

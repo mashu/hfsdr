@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use hfsdr::{Continent, ContinentResolver, Spot, SpotKind, SpotSort};
+use hfsdr::multisource::spot_display_snr;
 
 use crate::widgets::SpotLabel;
 
@@ -60,7 +61,7 @@ pub fn filter_spots(spots: &[Spot], cfg: &SpotFilterConfig, resolver: &Continent
 
     let mut out: Vec<Spot> = spots
         .iter()
-        .filter(|s| s.snr_db >= cfg.min_snr_db)
+        .filter(|s| spot_display_snr(s) >= cfg.min_snr_db)
         .filter(|s| continent_allowed(s, cfg.continent_filter, &cfg.show_continents, resolver))
         .filter(|s| !cfg.cq_only || s.kind == SpotKind::CallingCq)
         .filter(|s| max_age <= 0.0 || s.age().as_secs_f32() <= max_age)
@@ -76,7 +77,9 @@ pub fn filter_spots(spots: &[Spot], cfg: &SpotFilterConfig, resolver: &Continent
         .collect();
 
     match cfg.sort {
-        SpotSort::SnrDesc => out.sort_by(|a, b| b.snr_db.total_cmp(&a.snr_db)),
+        SpotSort::SnrDesc => out.sort_by(|a, b| {
+            spot_display_snr(b).total_cmp(&spot_display_snr(a))
+        }),
         SpotSort::Frequency => out.sort_by(|a, b| a.frequency_hz.total_cmp(&b.frequency_hz)),
         SpotSort::LastHeard => out.sort_by_key(|s| s.last_heard),
         SpotSort::Callsign => out.sort_by(|a, b| a.callsign.cmp(&b.callsign)),
@@ -100,7 +103,7 @@ pub fn build_spot_labels(
         }
         let key = (s.frequency_hz / bucket).round() as i64;
         match best.get(&key) {
-            Some(prev) if prev.snr_db >= s.snr_db => {}
+            Some(prev) if spot_display_snr(prev) >= spot_display_snr(s) => {}
             _ => {
                 best.insert(
                     key,
@@ -113,17 +116,18 @@ pub fn build_spot_labels(
         }
     }
     let mut merged: Vec<Spot> = best.into_values().collect();
-    merged.sort_by(|a, b| b.snr_db.total_cmp(&a.snr_db));
+    merged.sort_by(|a, b| spot_display_snr(b).total_cmp(&spot_display_snr(a)));
     merged.truncate(label_cfg.label_limit);
     merged
         .into_iter()
         .filter_map(|s| {
-            let text = s.callsign?;
+            let snr = spot_display_snr(&s);
+            let text = s.callsign.clone()?;
             Some(SpotLabel {
                 offset_hz: (s.frequency_hz - center_hz) as f32,
                 text,
                 cq: s.kind == SpotKind::CallingCq,
-                snr_db: s.snr_db,
+                snr_db: snr,
             })
         })
         .collect()

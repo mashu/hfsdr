@@ -6,8 +6,8 @@ use hfsdr::{Complex32, spectrum_hop, spectrum_plan, SpectrumAnalyzer};
 
 use super::Engine;
 use crate::engine::policy::{
-    adaptive_spectrum_rows as policy_adaptive_rows, max_drain_for, max_fft_input_for,
-    wideband_tail_len, SLOW_FRACTION, SLOW_HOLD, WIDEBAND_IQ_THRESHOLD, MAX_AUDIO_SAMPLES_WB,
+    adaptive_spectrum_rows as policy_adaptive_rows, demod_tail_max, max_drain_for,
+    max_fft_input_for, slow_link, wideband_tail_len, WIDEBAND_IQ_THRESHOLD,
 };
 use crate::engine::types::EngineParams;
 
@@ -70,10 +70,11 @@ impl Engine {
     }
 
     pub(super) fn demod_input<'a>(&self, samples: &'a [Complex32], rate: f32) -> &'a [Complex32] {
-        if rate > WIDEBAND_IQ_THRESHOLD {
-            self.wideband_tail(samples, rate, MAX_AUDIO_SAMPLES_WB)
-        } else {
+        let max = demod_tail_max(rate);
+        if max == usize::MAX {
             samples
+        } else {
+            self.wideband_tail(samples, rate, max)
         }
     }
     pub(super) fn link_meta(&self) -> (f32, f64, bool) {
@@ -117,12 +118,13 @@ impl Engine {
             self.slow_since = None;
             return false;
         }
-        if effective < SLOW_FRACTION * nominal {
+        let slow_since_secs = if effective < 0.7 * nominal {
             let since = *self.slow_since.get_or_insert_with(Instant::now);
-            since.elapsed() >= SLOW_HOLD
+            Some(since.elapsed().as_secs_f32())
         } else {
             self.slow_since = None;
-            false
-        }
+            None
+        };
+        slow_link(effective, nominal, slow_since_secs)
     }
 }

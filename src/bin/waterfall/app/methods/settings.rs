@@ -85,18 +85,18 @@ impl WaterfallApp {
         self.chrome.show_af_scope = s.show_af_scope;
         self.chrome.show_smeter = s.show_smeter;
 
-        self.connection.recent_hosts = s.recent_hosts.clone();
-        self.connection.form_kiwi = s.kiwi.clone();
-        self.connection.form_kiwi.man_gain = s.kiwi_man_gain;
+        self.connection.form.recent_hosts = s.recent_hosts.clone();
+        self.connection.form.kiwi = s.kiwi.clone();
+        self.connection.form.kiwi.man_gain = s.kiwi_man_gain;
         self.radio.last_kiwi_man_gain = s.kiwi_man_gain;
-        self.radio.last_kiwi_rf_attn_db = self.connection.form_kiwi.rf_attn_db;
-        self.connection.form_airspy = s.airspy.clone();
-        self.connection.form_rtlsdr = s.rtlsdr.clone();
-        self.connection.form_qmx = s.qmx.clone();
+        self.radio.last_kiwi_rf_attn_db = self.connection.form.kiwi.rf_attn_db;
+        self.connection.form.airspy = s.airspy.clone();
+        self.connection.form.rtlsdr = s.rtlsdr.clone();
+        self.connection.form.qmx = s.qmx.clone();
         if s.airspy_sample_rate != 0 {
-            self.connection.form_sample_rate = s.airspy_sample_rate;
+            self.connection.form.sample_rate = s.airspy_sample_rate;
         } else if s.rtlsdr_sample_rate != 0 {
-            self.connection.form_sample_rate = s.rtlsdr_sample_rate;
+            self.connection.form.sample_rate = s.rtlsdr_sample_rate;
         }
         self.radio.center_khz = s.last_center_mhz * 1000.0;
         self.clamp_center_to_ham_bands();
@@ -152,7 +152,7 @@ impl WaterfallApp {
             pitch_lock: self.radio.pitch_lock,
             lock_ham_bands: self.radio.lock_ham_bands,
             agc_rf_on: self.radio.agc_rf_on,
-            kiwi_man_gain: self.connection.form_kiwi.man_gain,
+            kiwi_man_gain: self.connection.form.kiwi.man_gain,
             ref_db: self.display.ref_db,
             range_db: self.display.range_db,
             display_auto_track: self.display.display_auto_track,
@@ -201,14 +201,14 @@ impl WaterfallApp {
             show_right: self.chrome.show_right,
             show_af_scope: self.chrome.show_af_scope,
             show_smeter: self.chrome.show_smeter,
-            recent_hosts: self.connection.recent_hosts.clone(),
+            recent_hosts: self.connection.form.recent_hosts.clone(),
             last_center_mhz: self.radio.center_khz / 1000.0,
-            kiwi: self.connection.form_kiwi.clone(),
-            airspy: self.connection.form_airspy.clone(),
-            airspy_sample_rate: self.connection.form_sample_rate,
-            rtlsdr: self.connection.form_rtlsdr.clone(),
-            rtlsdr_sample_rate: self.connection.form_sample_rate,
-            qmx: self.connection.form_qmx.clone(),
+            kiwi: self.connection.form.kiwi.clone(),
+            airspy: self.connection.form.airspy.clone(),
+            airspy_sample_rate: self.connection.form.sample_rate,
+            rtlsdr: self.connection.form.rtlsdr.clone(),
+            rtlsdr_sample_rate: self.connection.form.sample_rate,
+            qmx: self.connection.form.qmx.clone(),
             settings_format: 1,
             iq_capture_dir: self.chrome.iq.capture_dir.display().to_string(),
             iq_playback_path: self.chrome.iq.playback_path.clone(),
@@ -236,17 +236,17 @@ impl WaterfallApp {
 
     pub(crate) fn invalidate_waterfall_history(&mut self) {
         self.plot.rows.clear();
-        self.plot.force_texture_full = true;
-        self.plot.textures_dirty = true;
-        self.plot.last_viewport_key = None;
-        self.plot.last_storage_key = None;
-        self.plot.pending_row_appends = 0;
-        self.plot.pending_viewport_row_appends = 0;
-        self.plot.waterfall_storage_pixels.clear();
-        self.plot.waterfall_viewport_pixels.clear();
-        self.plot.storage_tex_width = 0;
-        self.plot.viewport_tex_width = 0;
-        self.plot.waterfall_viewport_texture = None;
+        self.plot.waterfall.force_texture_full = true;
+        self.plot.waterfall.textures_dirty = true;
+        self.plot.waterfall.last_viewport_key = None;
+        self.plot.waterfall.last_storage_key = None;
+        self.plot.waterfall.pending_row_appends = 0;
+        self.plot.waterfall.pending_viewport_row_appends = 0;
+        self.plot.waterfall.storage_pixels.clear();
+        self.plot.waterfall.viewport_pixels.clear();
+        self.plot.waterfall.storage_tex_width = 0;
+        self.plot.waterfall.viewport_tex_width = 0;
+        self.plot.waterfall.viewport_texture = None;
     }
 
 

@@ -1,12 +1,14 @@
+//! Plot interaction state, row history, and waterfall texture cache.
+
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use eframe::egui::{self, Color32};
+use eframe::egui;
 
 use crate::interaction::{PlotInteraction, PlotViewState};
 use crate::widgets::{PanadapterPlot, TraceViewKey};
 
-use crate::app::{StorageKey, ViewportKey};
+use super::plot_cache::WaterfallTextureCache;
 
 pub struct PlotState {
     pub rows: VecDeque<Vec<f32>>,
@@ -18,19 +20,8 @@ pub struct PlotState {
     pub overview_composed: Vec<f32>,
     pub overview_view_key: TraceViewKey,
     pub latest_frame_tick: bool,
-    pub waterfall_storage_pixels: Vec<Color32>,
-    pub storage_tex_width: usize,
-    pub last_storage_key: Option<StorageKey>,
-    pub waterfall_viewport_texture: Option<egui::TextureHandle>,
-    pub waterfall_viewport_pixels: Vec<Color32>,
-    pub viewport_tex_width: usize,
-    pub last_viewport_key: Option<ViewportKey>,
-    pub textures_dirty: bool,
-    pub force_texture_full: bool,
-    pub pending_row_appends: usize,
-    pub pending_viewport_row_appends: usize,
+    pub waterfall: WaterfallTextureCache,
     pub last_display_levels_at: Option<Instant>,
-    pub waterfall_row_scratch: Vec<f32>,
     pub panadapter_plot: PanadapterPlot,
     pub plot_view: PlotViewState,
     pub plot_interaction: PlotInteraction,

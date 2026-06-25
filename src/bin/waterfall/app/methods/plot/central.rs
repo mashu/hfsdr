@@ -4,9 +4,9 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn central_panel(&mut self, ui: &mut egui::Ui) {
-        if !matches!(self.conn_state, ConnState::Streaming) {
+        if !matches!(self.engine_ui.conn_state, ConnState::Streaming) {
             ui.horizontal_wrapped(|ui| {
-                match &self.conn_state {
+                match &self.engine_ui.conn_state {
                     ConnState::Reconnecting { attempt, retry_in_s } => {
                         ui.colored_label(
                             WARN,
@@ -108,7 +108,7 @@ impl WaterfallApp {
             range_db: self.display.range_db,
             height: SCOPE_HEIGHT,
             plot_width: plot_width as f32,
-            waterfall_display: self.plot.waterfall_viewport_texture.as_ref(),
+            waterfall_display: self.plot.waterfall.viewport_texture.as_ref(),
         };
 
         let plot_actions = self.plot.panadapter_plot.show(

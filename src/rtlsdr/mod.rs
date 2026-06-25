@@ -2,6 +2,7 @@
 
 mod sys;
 
+use crate::source::controls::RtlSdrControls;
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
 use rtrb::{Producer, RingBuffer};
 use std::ffi::CStr;
@@ -168,6 +169,25 @@ impl RtlSdr {
     pub fn set_bias_tee(&mut self, on: bool) -> Result<()> {
         check("rtlsdr_set_bias_tee", unsafe { sys::rtlsdr_set_bias_tee(self.dev, on as c_int) })
     }
+
+    pub fn set_tuner_gain(&mut self, gain_db10: i32) -> Result<()> {
+        let gain = self.clamp_tuner_gain(gain_db10);
+        check("rtlsdr_set_tuner_gain", unsafe {
+            sys::rtlsdr_set_tuner_gain(self.dev, gain)
+        })
+    }
+
+    pub fn set_tuner_gain_mode(&mut self, manual: bool) -> Result<()> {
+        check("rtlsdr_set_tuner_gain_mode", unsafe {
+            sys::rtlsdr_set_tuner_gain_mode(self.dev, manual as c_int)
+        })
+    }
+
+    pub fn set_freq_correction(&mut self, ppm: i32) -> Result<()> {
+        check("rtlsdr_set_freq_correction", unsafe {
+            sys::rtlsdr_set_freq_correction(self.dev, ppm)
+        })
+    }
 }
 
 impl IqSource for RtlSdr {
@@ -259,32 +279,27 @@ impl IqSource for RtlSdr {
     fn is_streaming(&self) -> bool {
         self.streaming
     }
+}
 
+impl RtlSdrControls for RtlSdr {
     fn set_agc(&mut self, on: bool) -> Result<()> {
-        self.set_rtl_agc(on)
-    }
-
-    fn set_tuner_gain(&mut self, gain_db10: i32) -> Result<()> {
-        let gain = self.clamp_tuner_gain(gain_db10);
-        check("rtlsdr_set_tuner_gain", unsafe {
-            sys::rtlsdr_set_tuner_gain(self.dev, gain)
-        })
+        RtlSdr::set_rtl_agc(self, on)
     }
 
     fn set_tuner_gain_mode(&mut self, manual: bool) -> Result<()> {
-        check("rtlsdr_set_tuner_gain_mode", unsafe {
-            sys::rtlsdr_set_tuner_gain_mode(self.dev, manual as c_int)
-        })
+        RtlSdr::set_tuner_gain_mode(self, manual)
     }
 
-    fn set_freq_correction(&mut self, ppm: i32) -> Result<()> {
-        check("rtlsdr_set_freq_correction", unsafe {
-            sys::rtlsdr_set_freq_correction(self.dev, ppm)
-        })
+    fn set_tuner_gain(&mut self, gain_db10: i32) -> Result<()> {
+        RtlSdr::set_tuner_gain(self, gain_db10)
     }
 
     fn set_bias_tee(&mut self, on: bool) -> Result<()> {
         RtlSdr::set_bias_tee(self, on)
+    }
+
+    fn set_freq_correction(&mut self, ppm: i32) -> Result<()> {
+        RtlSdr::set_freq_correction(self, ppm)
     }
 }
 

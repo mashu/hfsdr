@@ -211,4 +211,17 @@ mod tests {
         assert_eq!(super::wideband_tail_len(100, 384_000.0, 50), 50);
         assert_eq!(super::wideband_tail_len(100, 12_000.0, 50), 100);
     }
+
+    #[test]
+    fn slow_link_requires_hold() {
+        assert!(!slow_link(50_000.0, 100_000.0, None));
+        assert!(!slow_link(50_000.0, 100_000.0, Some(1.0)));
+        assert!(slow_link(50_000.0, 100_000.0, Some(6.0)));
+    }
+
+    #[test]
+    fn is_wideband_rate_threshold() {
+        assert!(!is_wideband_rate(96_000.0));
+        assert!(is_wideband_rate(96_001.0));
+    }
 }

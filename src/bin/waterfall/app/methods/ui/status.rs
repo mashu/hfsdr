@@ -4,7 +4,7 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn connection_status_pill(&self) -> (String, Color32) {
-        match &self.conn_state {
+        match &self.engine_ui.conn_state {
             ConnState::Streaming if self.connection_unstable() => ("UNSTABLE".to_string(), WARN),
             ConnState::Streaming => ("STREAMING".to_string(), OK),
             ConnState::Reconnecting { attempt, retry_in_s } => {
@@ -19,7 +19,7 @@ impl WaterfallApp {
 
     pub(crate) fn connection_session_live(&self) -> bool {
         matches!(
-            self.conn_state,
+            self.engine_ui.conn_state,
             ConnState::Streaming | ConnState::Connecting { .. } | ConnState::Reconnecting { .. }
         )
     }
@@ -27,25 +27,25 @@ impl WaterfallApp {
 
 
     pub(crate) fn connection_alias(&self) -> String {
-        match self.connection.form_kind {
+        match self.connection.form.kind {
             #[cfg(feature = "airspy")]
             SourceKind::Airspy => "Airspy HF+".to_string(),
             #[cfg(feature = "rtlsdr")]
-            SourceKind::RtlSdr => format!("RTL-SDR #{}", self.connection.form_rtlsdr.device_index),
+            SourceKind::RtlSdr => format!("RTL-SDR #{}", self.connection.form.rtlsdr.device_index),
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => {
-                if self.connection.form_qmx.serial_port.is_empty() {
+                if self.connection.form.qmx.serial_port.is_empty() {
                     "QMX".to_string()
                 } else {
-                    format!("QMX ({})", self.connection.form_qmx.serial_port)
+                    format!("QMX ({})", self.connection.form.qmx.serial_port)
                 }
             }
             SourceKind::Kiwi => {
-                let host = self.connection.form_host.trim();
+                let host = self.connection.form.host.trim();
                 if host.is_empty() {
                     "KiwiSDR".to_string()
                 } else {
-                    format!("{host}:{}", self.connection.form_port)
+                    format!("{host}:{}", self.connection.form.port)
                 }
             }
         }
@@ -54,7 +54,7 @@ impl WaterfallApp {
 
 
     pub(crate) fn status_banner(&mut self, ui: &mut egui::Ui) {
-        let conn_label = match &self.conn_state {
+        let conn_label = match &self.engine_ui.conn_state {
             ConnState::Streaming if self.connection_unstable() => "UNSTABLE".to_string(),
             ConnState::Streaming => "STREAMING".to_string(),
             ConnState::Reconnecting { attempt, retry_in_s } => {
@@ -63,30 +63,30 @@ impl WaterfallApp {
             ConnState::Connecting { .. } => "CONNECTING".to_string(),
             _ => "OFFLINE".to_string(),
         };
-        let conn_color = match &self.conn_state {
+        let conn_color = match &self.engine_ui.conn_state {
             ConnState::Streaming if !self.connection_unstable() => OK,
             ConnState::Disconnected => MUTED,
             _ => WARN,
         };
-        let streaming = matches!(self.conn_state, ConnState::Streaming);
+        let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
         let rx_color = if streaming { ACCENT } else { MUTED };
 
         ui.horizontal(|ui| {
             let badge_resp = clickable_badge(ui, &conn_label, conn_color)
                 .on_hover_text("Click to open connection settings");
             if badge_resp.clicked() {
-                self.connection.show_connection_drawer = !self.connection.show_connection_drawer;
+                self.connection.form.show_connection_drawer = !self.connection.form.show_connection_drawer;
             }
             if self.connection_session_live() {
                 let alias_resp =
                     crate::status_widgets::connection_alias_chip(ui, &self.connection_alias());
                 if alias_resp.clicked() {
-                    self.connection.show_connection_drawer = !self.connection.show_connection_drawer;
+                    self.connection.form.show_connection_drawer = !self.connection.form.show_connection_drawer;
                 }
                 if crate::status_widgets::disconnect_chip(ui).clicked() {
                     self.cancel_connection();
                 }
-            } else if matches!(self.conn_state, ConnState::Disconnected) {
+            } else if matches!(self.engine_ui.conn_state, ConnState::Disconnected) {
                 let can_connect = self.can_quick_connect();
                 let target = self.quick_connect_target_label();
                 let quick_resp = crate::status_widgets::quick_connect_chip(ui, can_connect)
@@ -142,22 +142,22 @@ impl WaterfallApp {
             }
             let gauge_resp = crate::status_widgets::iq_buffer_control(
                 ui,
-                self.stats.iq_buffer_fill,
-                self.stats.iq_buffer_secs,
+                self.engine_ui.stats.iq_buffer_fill,
+                self.engine_ui.stats.iq_buffer_secs,
                 self.chrome.show_iq_drawer,
             );
             if gauge_resp.clicked() {
                 self.chrome.show_iq_drawer = !self.chrome.show_iq_drawer;
             }
-            let rec_secs = self.stats.iq_capture_samples as f32 / self.stats.sample_rate.max(1.0);
+            let rec_secs = self.engine_ui.stats.iq_capture_samples as f32 / self.engine_ui.stats.sample_rate.max(1.0);
             let rec_resp = crate::status_widgets::iq_record_toggle(
                 ui,
-                self.stats.iq_recording,
+                self.engine_ui.stats.iq_recording,
                 streaming,
                 rec_secs,
             );
             if rec_resp.clicked() {
-                if let Some(cmd) = self.chrome.iq.toggle_recording(self.stats.iq_recording, streaming) {
+                if let Some(cmd) = self.chrome.iq.toggle_recording(self.engine_ui.stats.iq_recording, streaming) {
                     self.settings_dirty_at = Some(Instant::now());
                     self.process_iq_cmds(vec![cmd]);
                 }
@@ -165,7 +165,7 @@ impl WaterfallApp {
             let has_iq_file = !self.chrome.iq.playback_path.trim().is_empty();
             let play_resp = crate::status_widgets::iq_playback_chip(
                 ui,
-                self.stats.iq_playback,
+                self.engine_ui.stats.iq_playback,
                 has_iq_file,
             );
             if play_resp.clicked() {
@@ -174,34 +174,34 @@ impl WaterfallApp {
                 }
             }
             ui.label(
-                egui::RichText::new(format!("{:.0} kS/s", self.stats.effective_sps / 1000.0))
+                egui::RichText::new(format!("{:.0} kS/s", self.engine_ui.stats.effective_sps / 1000.0))
                     .small()
                     .color(MUTED),
             );
             if !self.radio.is_kiwi
-                && self.stats.sample_rate > 0.0
-                && (self.stats.effective_sps / self.stats.sample_rate) < 0.85
+                && self.engine_ui.stats.sample_rate > 0.0
+                && (self.engine_ui.stats.effective_sps / self.engine_ui.stats.sample_rate) < 0.85
             {
                 ui.label(
                     egui::RichText::new(format!(
                         "({:.0} kS/s device)",
-                        self.stats.sample_rate / 1000.0
+                        self.engine_ui.stats.sample_rate / 1000.0
                     ))
                     .small()
                     .color(MUTED),
                 );
             }
-            if self.stats.iq_playback {
+            if self.engine_ui.stats.iq_playback {
                 ui.colored_label(OK, "PLAYBACK");
             }
-            if self.stats.dropped > 0 {
-                ui.colored_label(WARN, format!("drops {}", self.stats.dropped));
+            if self.engine_ui.stats.dropped > 0 {
+                ui.colored_label(WARN, format!("drops {}", self.engine_ui.stats.dropped));
             }
             if streaming && !(self.chrome.show_left && self.chrome.show_smeter) {
                 show_status_rf_meter(
                     ui,
                     self.rf_meter_dbm(),
-                    self.stats.rssi_dbm,
+                    self.engine_ui.stats.rssi_dbm,
                 );
             }
             if self.connection_unstable() {
@@ -247,8 +247,8 @@ impl WaterfallApp {
             });
         });
 
-        if let Some(err) = &self.last_error {
-            if matches!(self.conn_state, ConnState::Reconnecting { .. }) {
+        if let Some(err) = &self.engine_ui.last_error {
+            if matches!(self.engine_ui.conn_state, ConnState::Reconnecting { .. }) {
                 ui.colored_label(WARN, err);
             }
         }

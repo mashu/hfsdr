@@ -14,7 +14,7 @@ impl WaterfallApp {
                     preset_combo_u32(
                         ui,
                         "kiwi_iq_rate",
-                        &mut self.connection.form_kiwi.iq_rate_hz,
+                        &mut self.connection.form.kiwi.iq_rate_hz,
                         KIWI_IQ_RATE_PRESETS,
                         "Hz ",
                         4_000..=30_000,
@@ -25,7 +25,7 @@ impl WaterfallApp {
                     preset_combo_u32(
                         ui,
                         "kiwi_bw",
-                        &mut self.connection.form_kiwi.iq_half_bw_hz,
+                        &mut self.connection.form.kiwi.iq_half_bw_hz,
                         KIWI_BW_PRESETS,
                         "±Hz ",
                         0..=30_000,
@@ -36,7 +36,7 @@ impl WaterfallApp {
                     preset_combo_u32(
                         ui,
                         "kiwi_resample",
-                        &mut self.connection.form_kiwi.iq_resample_hz,
+                        &mut self.connection.form.kiwi.iq_resample_hz,
                         KIWI_RESAMPLE_PRESETS,
                         "Hz ",
                         0..=48_000,
@@ -47,7 +47,7 @@ impl WaterfallApp {
                     preset_combo_f64(
                         ui,
                         "kiwi_lo",
-                        &mut self.connection.form_kiwi.freq_offset_khz,
+                        &mut self.connection.form.kiwi.freq_offset_khz,
                         KIWI_LO_PRESETS,
                         "kHz ",
                         0.0..=1_000_000.0,
@@ -58,7 +58,7 @@ impl WaterfallApp {
                     preset_combo_u32(
                         ui,
                         "kiwi_ar",
-                        &mut self.connection.form_kiwi.ar_out_hz,
+                        &mut self.connection.form.kiwi.ar_out_hz,
                         KIWI_AR_OUT_PRESETS,
                         "Hz ",
                         8_000..=192_000,
@@ -67,7 +67,7 @@ impl WaterfallApp {
 
                     ui.label(egui::RichText::new("RF attn").small().color(MUTED));
                     ui.add(
-                        egui::DragValue::new(&mut self.connection.form_kiwi.rf_attn_db)
+                        egui::DragValue::new(&mut self.connection.form.kiwi.rf_attn_db)
                             .range(0.0..=31.5)
                             .speed(0.1)
                             .suffix(" dB"),
@@ -76,7 +76,7 @@ impl WaterfallApp {
 
                     ui.label(egui::RichText::new("Gen attn").small().color(MUTED));
                     ui.add(
-                        egui::DragValue::new(&mut self.connection.form_kiwi.gen_attn)
+                        egui::DragValue::new(&mut self.connection.form.kiwi.gen_attn)
                             .range(0..=255)
                             .suffix(" (handshake)"),
                     );

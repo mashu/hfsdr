@@ -11,6 +11,7 @@ mod input;
 mod pipeline;
 mod plot {
     mod actions;
+    mod cache;
     mod central;
     mod waterfall;
 }

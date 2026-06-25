@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use super::inner::Engine;
-use super::types::{ConnState, EngineCommand, EngineParams, EnginePoll, EngineShared};
+use super::types::{EngineCommand, EngineParams, EnginePoll, EngineShared};
 
 /// UI-side handle to the engine thread.
 pub struct EngineHandle {

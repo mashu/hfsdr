@@ -15,7 +15,7 @@ impl WaterfallApp {
                     preset_combo_u32(
                         ui,
                         "airspy_sr",
-                        &mut self.connection.form_sample_rate,
+                        &mut self.connection.form.sample_rate,
                         AIRSPY_SAMPLE_RATE_PRESETS,
                         "Hz ",
                         3_000..=768_000,
@@ -26,7 +26,7 @@ impl WaterfallApp {
                     preset_combo_u32(
                         ui,
                         "airspy_proc",
-                        &mut self.connection.form_airspy.iq_process_hz,
+                        &mut self.connection.form.airspy.iq_process_hz,
                         AIRSPY_PROCESS_RATE_PRESETS,
                         "Hz ",
                         0..=768_000,
@@ -34,18 +34,18 @@ impl WaterfallApp {
                     ui.end_row();
 
                     ui.label(egui::RichText::new("HF AGC").small().color(MUTED));
-                    ui.toggle_value(&mut self.connection.form_airspy.hf_agc, "On");
+                    ui.toggle_value(&mut self.connection.form.airspy.hf_agc, "On");
                     ui.end_row();
 
                     ui.label(egui::RichText::new("AGC threshold").small().color(MUTED));
                     ui.horizontal(|ui| {
                         ui.selectable_value(
-                            &mut self.connection.form_airspy.hf_agc_threshold_high,
+                            &mut self.connection.form.airspy.hf_agc_threshold_high,
                             false,
                             "Low",
                         );
                         ui.selectable_value(
-                            &mut self.connection.form_airspy.hf_agc_threshold_high,
+                            &mut self.connection.form.airspy.hf_agc_threshold_high,
                             true,
                             "High",
                         );
@@ -54,19 +54,19 @@ impl WaterfallApp {
 
                     ui.label(egui::RichText::new("Attenuator").small().color(MUTED));
                     ui.add(
-                        egui::DragValue::new(&mut self.connection.form_airspy.hf_att)
+                        egui::DragValue::new(&mut self.connection.form.airspy.hf_att)
                             .range(0..=8)
                             .suffix(" ×6 dB"),
                     );
                     ui.end_row();
 
                     ui.label(egui::RichText::new("Preamp").small().color(MUTED));
-                    ui.toggle_value(&mut self.connection.form_airspy.hf_lna, "+6 dB LNA (passive ant.)");
+                    ui.toggle_value(&mut self.connection.form.airspy.hf_lna, "+6 dB LNA (passive ant.)");
                     ui.end_row();
 
                     ui.label(egui::RichText::new("Bias tee").small().color(MUTED));
                     ui.toggle_value(
-                        &mut self.connection.form_airspy.bias_tee,
+                        &mut self.connection.form.airspy.bias_tee,
                         "Antenna DC (active preamp)",
                     );
                     ui.end_row();
@@ -74,18 +74,18 @@ impl WaterfallApp {
                     ui.label(egui::RichText::new("Frontend").small().color(MUTED));
                     ui.vertical(|ui| {
                         ui.toggle_value(
-                            &mut self.connection.form_airspy.frontend_optimize_band_iii,
+                            &mut self.connection.form.airspy.frontend_optimize_band_iii,
                             "Optimize VHF Band III",
                         );
                         ui.toggle_value(
-                            &mut self.connection.form_airspy.frontend_optimize_pll_boundary,
+                            &mut self.connection.form.airspy.frontend_optimize_pll_boundary,
                             "Optimize PLL int. boundary",
                         );
                     });
                     ui.end_row();
 
                     ui.label(egui::RichText::new("Lib DSP").small().color(MUTED));
-                    ui.toggle_value(&mut self.connection.form_airspy.lib_dsp, "IQ correction");
+                    ui.toggle_value(&mut self.connection.form.airspy.lib_dsp, "IQ correction");
                     ui.end_row();
                 });
             section_hint(

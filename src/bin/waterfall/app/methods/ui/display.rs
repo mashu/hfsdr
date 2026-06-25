@@ -95,14 +95,14 @@ impl WaterfallApp {
             if scroll_slider_f32(ui, &mut self.display.ref_db, -120.0..=20.0, "Ref dB").changed() {
                 self.display.display_levels_initialized = true;
                 self.display.display_auto_track = false;
-                self.plot.force_texture_full = true;
-                self.plot.textures_dirty = true;
+                self.plot.waterfall.force_texture_full = true;
+                self.plot.waterfall.textures_dirty = true;
             }
             if scroll_slider_f32(ui, &mut self.display.range_db, 12.0..=80.0, "Range dB").changed() {
                 self.display.display_levels_initialized = true;
                 self.display.display_auto_track = false;
-                self.plot.force_texture_full = true;
-                self.plot.textures_dirty = true;
+                self.plot.waterfall.force_texture_full = true;
+                self.plot.waterfall.textures_dirty = true;
             }
             scroll_slider_f32(ui, &mut self.display.smooth_alpha, 0.05..=0.45, "Spectrum smooth");
             ui.horizontal(|ui| {
@@ -114,8 +114,8 @@ impl WaterfallApp {
                         .clicked()
                     {
                         self.display.waterfall_avg = n;
-                        self.plot.force_texture_full = true;
-                        self.plot.textures_dirty = true;
+                        self.plot.waterfall.force_texture_full = true;
+                        self.plot.waterfall.textures_dirty = true;
                     }
                 }
             });

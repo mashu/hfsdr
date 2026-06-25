@@ -4,7 +4,7 @@ use crate::app::prelude::*;
 impl WaterfallApp {
 
     pub(crate) fn apply_plot_actions(&mut self, actions: Vec<PlotAction>) {
-        let iq_playback = self.stats.iq_playback;
+        let iq_playback = self.engine_ui.stats.iq_playback;
         for action in actions {
             match action {
                 PlotAction::TuneDeltaHz(delta) => {
@@ -102,7 +102,7 @@ impl WaterfallApp {
     pub(crate) fn iq_passband_hz(&self) -> f32 {
         rf_view::iq_passband_hz(
             self.radio.is_kiwi,
-            self.stats.iq_passband_hz,
+            self.engine_ui.stats.iq_passband_hz,
             self.radio.sample_rate,
         )
     }
@@ -113,7 +113,7 @@ impl WaterfallApp {
 
 
     pub(crate) fn plot_full_span_hz(&self) -> f32 {
-        rf_view::spectrum_plot_span_hz(self.stats.spectrum_rate, self.iq_passband_hz())
+        rf_view::spectrum_plot_span_hz(self.engine_ui.stats.spectrum_rate, self.iq_passband_hz())
     }
 
 
@@ -138,8 +138,8 @@ impl WaterfallApp {
             self.iq_passband_hz(),
             self.plot_full_span_hz(),
             self.band_overview_span_hz(),
-            self.stats.spectrum_rate,
-            self.stats.spectrum_zoomed,
+            self.engine_ui.stats.spectrum_rate,
+            self.engine_ui.stats.spectrum_zoomed,
             &self.plot.plot_view,
         )
     }
@@ -154,7 +154,7 @@ impl WaterfallApp {
             self.iq_passband_hz(),
             self.plot_full_span_hz(),
             self.band_overview_span_hz(),
-            self.stats.spectrum_rate,
+            self.engine_ui.stats.spectrum_rate,
         )
     }
 

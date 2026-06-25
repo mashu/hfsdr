@@ -42,9 +42,9 @@ impl WaterfallApp {
                 ]),
             );
             scroll_slider_f32(ui, &mut self.audio.volume, 0.0..=4.0, "Volume (- / +)");
-            if let Some(name) = &self.stats.audio_device {
+            if let Some(name) = &self.engine_ui.stats.audio_device {
                 stat_row(ui, "Active", name.clone());
-                stat_row(ui, "Rate", format!("{} Hz", self.stats.audio_rate));
+                stat_row(ui, "Rate", format!("{} Hz", self.engine_ui.stats.audio_rate));
             } else {
                 ui.colored_label(WARN, "No output device open");
             }

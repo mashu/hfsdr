@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crate::source::SourceKind;
 
 use super::Engine;
-use crate::engine::policy::{handshake_timeout, stall_timeout, SLOW_FRACTION, SLOW_HOLD};
+use crate::engine::policy::{handshake_timeout, stall_timeout};
 use crate::engine::types::ConnState;
 
 
@@ -18,11 +18,11 @@ pub(super) fn poll_handshake(&mut self) {
         let link_error = self
             .conn
             .as_ref()
-            .and_then(|c| c.source.link_error());
+            .and_then(|c| c.device.link_error());
         let alive = self
             .conn
             .as_ref()
-            .is_some_and(|c| c.source.link_alive());
+            .is_some_and(|c| c.device.link_alive());
         if let Some(err) = link_error {
             self.fail_connection(err);
             return;
@@ -52,9 +52,9 @@ pub(super) fn poll_handshake(&mut self) {
     }
 
     pub(super) fn maybe_reconnect_on_stall(&mut self) {
-        let link_error = self.conn.as_ref().and_then(|c| c.source.link_error());
+        let link_error = self.conn.as_ref().and_then(|c| c.device.link_error());
         let reader_dead = self.conn.as_ref().is_some_and(|c| {
-            c.is_kiwi && c.source.is_streaming() && !c.source.link_alive()
+            c.is_kiwi && c.device.is_streaming() && !c.device.link_alive()
         });
         let stalled = if self.first_iq_received {
             self.last_data.elapsed() > self.stall_timeout()

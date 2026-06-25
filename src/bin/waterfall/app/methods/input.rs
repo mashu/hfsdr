@@ -66,7 +66,7 @@ impl WaterfallApp {
         let max_zoom = self.plot_max_zoom_out();
         let can_pan = self.plot.plot_view.can_pan(full_span, max_zoom);
 
-        if can_pan || self.stats.iq_playback {
+        if can_pan || self.engine_ui.stats.iq_playback {
             self.plot.plot_view.pan_offset_hz += delta_hz;
             self.plot.plot_view.clamp_pan(full_span, max_zoom);
         } else {

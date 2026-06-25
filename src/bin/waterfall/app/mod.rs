@@ -16,16 +16,15 @@ mod state;
 mod prelude;
 pub(crate) use prelude::*;
 pub(crate) use state::{
-    AudioUiState, ChromeState, ConnectionState, DisplayState, PlotState, RadioState, SkimmerUiState,
+    AudioUiState, ChromeState, ConnectionFormState, ConnectionState, DisplayState, EngineUiState,
+    KiwiDirectoryState, PlotState, RadioState, SkimmerUiState, WaterfallTextureCache,
 };
 
 pub(crate) use constants::*;
 
 pub struct WaterfallApp {
     engine: EngineHandle,
-    conn_state: ConnState,
-    stats: EngineStats,
-    last_error: Option<String>,
+    pub(crate) engine_ui: EngineUiState,
     pub(crate) connection: ConnectionState,
     pub(crate) radio: RadioState,
     pub(crate) plot: PlotState,
@@ -47,28 +46,30 @@ impl WaterfallApp {
 
         let mut app = Self {
             engine: EngineHandle::spawn(),
-            conn_state: ConnState::Disconnected,
-            stats: EngineStats::default(),
-            last_error: None,
+            engine_ui: EngineUiState::default(),
             connection: ConnectionState {
-                pending_connect: None,
-                form_kind: SourceKind::Kiwi,
-                form_host: String::new(),
-                form_port: 8073,
-                form_kiwi: KiwiSettings::default(),
-                form_sample_rate: 384_000,
-                form_airspy: AirspySettings::default(),
-                last_airspy_rf: AirspySettings::default(),
-                form_rtlsdr: RtlSdrSettings::default(),
-                last_rtlsdr_rf: RtlSdrSettings::default(),
-                form_qmx: QmxSettings::default(),
-                last_qmx_rf: QmxSettings::default(),
-                recent_hosts: Vec::new(),
-                kiwi_geo: None,
-                kiwi_nearby: Vec::new(),
-                kiwi_directory_rx: None,
-                kiwi_directory_error: None,
-                show_connection_drawer: false,
+                form: ConnectionFormState {
+                    pending_connect: None,
+                    kind: SourceKind::Kiwi,
+                    host: String::new(),
+                    port: 8073,
+                    kiwi: KiwiSettings::default(),
+                    sample_rate: 384_000,
+                    airspy: AirspySettings::default(),
+                    last_airspy_rf: AirspySettings::default(),
+                    rtlsdr: RtlSdrSettings::default(),
+                    last_rtlsdr_rf: RtlSdrSettings::default(),
+                    qmx: QmxSettings::default(),
+                    last_qmx_rf: QmxSettings::default(),
+                    recent_hosts: Vec::new(),
+                    show_connection_drawer: false,
+                },
+                kiwi: KiwiDirectoryState {
+                    geo: None,
+                    nearby: Vec::new(),
+                    fetch_rx: None,
+                    error: None,
+                },
             },
             radio: RadioState {
                 sample_rate: 12_000.0,
@@ -96,19 +97,12 @@ impl WaterfallApp {
                 overview_composed: Vec::new(),
                 overview_view_key: TraceViewKey::new(0.0, 0.0, 0.0, 0.0, 0),
                 latest_frame_tick: false,
-                waterfall_storage_pixels: Vec::new(),
-                storage_tex_width: 0,
-                last_storage_key: None,
-                waterfall_viewport_texture: None,
-                waterfall_viewport_pixels: Vec::new(),
-                viewport_tex_width: 0,
-                last_viewport_key: None,
-                textures_dirty: false,
-                force_texture_full: true,
-                pending_row_appends: 0,
-                pending_viewport_row_appends: 0,
+                waterfall: WaterfallTextureCache {
+                    textures_dirty: false,
+                    force_texture_full: true,
+                    ..WaterfallTextureCache::default()
+                },
                 last_display_levels_at: None,
-                waterfall_row_scratch: Vec::new(),
                 panadapter_plot: PanadapterPlot::new(),
                 plot_view: PlotViewState::new(),
                 plot_interaction: PlotInteraction::new(),
@@ -187,32 +181,32 @@ impl WaterfallApp {
 
         app.apply_settings(&saved);
 
-        if let Some(r) = app.connection.recent_hosts.first().cloned() {
+        if let Some(r) = app.connection.form.recent_hosts.first().cloned() {
             app.apply_connect_form(&r);
         }
 
         if let Some(req) = autoconnect {
-            app.connection.form_kind = req.kind;
-            app.connection.form_host = req.host.clone();
-            app.connection.form_port = req.port;
-            app.connection.form_kiwi = req.kiwi.clone();
+            app.connection.form.kind = req.kind;
+            app.connection.form.host = req.host.clone();
+            app.connection.form.port = req.port;
+            app.connection.form.kiwi = req.kiwi.clone();
             if req.sample_rate != 0 {
-                app.connection.form_sample_rate = req.sample_rate;
+                app.connection.form.sample_rate = req.sample_rate;
             }
-            app.connection.form_airspy = req.airspy.clone();
-            app.connection.form_rtlsdr = req.rtlsdr.clone();
-            app.connection.form_qmx = req.qmx.clone();
+            app.connection.form.airspy = req.airspy.clone();
+            app.connection.form.rtlsdr = req.rtlsdr.clone();
+            app.connection.form.qmx = req.qmx.clone();
             app.radio.center_khz = req.center_hz / 1000.0;
             app.clamp_center_to_ham_bands();
             app.radio.last_center_khz = app.radio.center_khz;
-            app.connection.pending_connect = Some(req);
-            app.connection.show_connection_drawer = false;
+            app.connection.form.pending_connect = Some(req);
+            app.connection.form.show_connection_drawer = false;
         }
 
         app.last_settings_snapshot = Some(app.current_settings());
         if let Some((geo, receivers)) = crate::kiwi_directory::load_cached_receivers() {
-            app.connection.kiwi_geo = geo;
-            app.connection.kiwi_nearby = receivers;
+            app.connection.kiwi.geo = geo;
+            app.connection.kiwi.nearby = receivers;
         }
         app.start_kiwi_directory_fetch(false);
         app.apply_default_view_zoom();
@@ -228,17 +222,17 @@ impl eframe::App for WaterfallApp {
             self.chrome.themed = true;
         }
 
-        if let Some(mut req) = self.connection.pending_connect.take() {
-            self.connection.form_kind = req.kind;
-            self.connection.form_host = req.host.clone();
-            self.connection.form_port = req.port;
-            self.connection.form_kiwi = req.kiwi.clone();
+        if let Some(mut req) = self.connection.form.pending_connect.take() {
+            self.connection.form.kind = req.kind;
+            self.connection.form.host = req.host.clone();
+            self.connection.form.port = req.port;
+            self.connection.form.kiwi = req.kiwi.clone();
             if req.sample_rate != 0 {
-                self.connection.form_sample_rate = req.sample_rate;
+                self.connection.form.sample_rate = req.sample_rate;
             }
-            self.connection.form_airspy = req.airspy.clone();
-            self.connection.form_rtlsdr = req.rtlsdr.clone();
-            self.connection.form_qmx = req.qmx.clone();
+            self.connection.form.airspy = req.airspy.clone();
+            self.connection.form.rtlsdr = req.rtlsdr.clone();
+            self.connection.form.qmx = req.qmx.clone();
             self.radio.center_khz = req.center_hz / 1000.0;
             self.clamp_center_to_ham_bands();
             req.center_hz = self.radio.center_khz * 1000.0;

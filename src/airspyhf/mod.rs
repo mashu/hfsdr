@@ -6,6 +6,7 @@ mod sys;
 
 pub use sys::{FLAGS_OPTIMIZE_BAND_III, FLAGS_OPTIMIZE_PLL_INT_BOUNDARY};
 
+use crate::source::controls::AirspyControls;
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
 use rtrb::{Producer, RingBuffer};
 use std::os::raw::{c_char, c_int, c_void};
@@ -350,11 +351,9 @@ impl IqSource for AirspyHf {
     fn is_streaming(&self) -> bool {
         self.streaming
     }
+}
 
-    fn set_agc(&mut self, on: bool) -> Result<()> {
-        self.set_hf_agc(on)
-    }
-
+impl AirspyControls for AirspyHf {
     fn set_hf_att(&mut self, step: u8) -> Result<()> {
         AirspyHf::set_hf_att(self, step)
     }
@@ -373,6 +372,10 @@ impl IqSource for AirspyHf {
 
     fn set_bias_tee(&mut self, on: bool) -> Result<()> {
         AirspyHf::set_bias_tee(self, on)
+    }
+
+    fn set_agc(&mut self, on: bool) -> Result<()> {
+        AirspyHf::set_hf_agc(self, on)
     }
 }
 

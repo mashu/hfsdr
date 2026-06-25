@@ -1,14 +1,6 @@
-//! Multi-source combining (build-order item 6) — honest about what is real.
-//!
-//! Three regimes, easiest first:
-//! - **Selection diversity** (implemented here): per signal, pick the source
-//!   with the best instantaneous SNR. No phase coherence needed; kills QSB
-//!   nulls and local QRM at one site. Biggest bang-for-buck.
-//! - **Non-coherent combining** (scaffolded): time-align envelopes via
-//!   cross-correlation, resample to a common rate with drift tracking, then
-//!   SNR-weight and sum. Modest gain, strong anti-fade.
-//! - **Coherent MRC** (out of scope): needs sample + carrier-phase alignment;
-//!   not generally recoverable across independent Kiwis without a shared clock.
+//! Selection diversity and per-source SNR helpers for multi-RX spots.
+
+use crate::skimmer::Spot;
 
 /// A source's running SNR for one signal ("what heard it").
 #[derive(Clone, Debug)]
@@ -18,8 +10,6 @@ pub struct SourceSnr {
 }
 
 /// Selection diversity: choose the best-SNR source for a signal.
-///
-/// Returns the index of the winning source, or `None` if the list is empty.
 pub fn select_best(sources: &[SourceSnr]) -> Option<usize> {
     sources
         .iter()
@@ -29,9 +19,6 @@ pub fn select_best(sources: &[SourceSnr]) -> Option<usize> {
 }
 
 /// SNR-weighted blend weights (sum to 1) for non-coherent combining.
-///
-/// Envelope/time alignment and clock-drift resampling must be applied *before*
-/// blending; those live in [`align`] (not yet implemented).
 pub fn snr_weights(sources: &[SourceSnr]) -> Vec<f32> {
     let lin: Vec<f32> = sources
         .iter()
@@ -44,25 +31,37 @@ pub fn snr_weights(sources: &[SourceSnr]) -> Vec<f32> {
     lin.iter().map(|&w| w / total).collect()
 }
 
-pub mod align {
-    //! Time/clock alignment primitives for non-coherent combining (scaffold).
-    //!
-    //! Sample-delay estimation via envelope cross-correlation and per-source
-    //! clock-drift tracking. Not yet implemented — combining only applies per
-    //! signal that multiple sources actually hear.
-
-    /// Estimate the integer sample delay that best aligns `b` onto `a`.
-    ///
-    /// TODO: implement envelope cross-correlation with sub-sample interpolation
-    /// and continuous drift tracking (independent LOs/clocks drift).
-    pub fn estimate_delay(_a: &[f32], _b: &[f32]) -> Option<isize> {
-        None
+/// Display SNR for a spot: best instantaneous source when tracked, else aggregate.
+pub fn spot_display_snr(spot: &Spot) -> f32 {
+    if spot.sources.is_empty() {
+        return spot.snr_db;
     }
+    let ranked: Vec<SourceSnr> = spot
+        .sources
+        .iter()
+        .map(|(label, snr_db)| SourceSnr {
+            label: label.clone(),
+            snr_db: *snr_db,
+        })
+        .collect();
+    select_best(&ranked)
+        .map(|i| ranked[i].snr_db)
+        .unwrap_or(spot.snr_db)
+}
+
+/// Primary source label for a spot (best SNR), if known.
+pub fn spot_primary_source(spot: &Spot) -> Option<String> {
+    spot.sources
+        .iter()
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(label, _)| label.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skimmer::{Spot, SpotKind};
+    use std::time::Instant;
 
     fn s(label: &str, snr: f32) -> SourceSnr {
         SourceSnr {
@@ -83,5 +82,23 @@ mod tests {
         let w = snr_weights(&sources);
         assert!(w[0] > w[1]);
         assert!((w.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn spot_display_snr_uses_best_source() {
+        let now = Instant::now();
+        let spot = Spot {
+            frequency_hz: 7_030_000.0,
+            callsign: Some("AA1A".into()),
+            kind: SpotKind::Heard,
+            snr_db: 10.0,
+            wpm: 24.0,
+            first_heard: now,
+            last_heard: now,
+            sources: vec![("rx1".into(), 12.0), ("rx2".into(), 20.0)],
+            callsign_rank: 0,
+        };
+        assert_eq!(spot_display_snr(&spot), 20.0);
+        assert_eq!(spot_primary_source(&spot), Some("rx2".into()));
     }
 }

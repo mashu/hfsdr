@@ -3,7 +3,7 @@
 use std::thread;
 use std::time::Duration;
 
-use hfsdr::{IqSource, KiwiSource, KIWI_IQ_HALF_HZ};
+use hfsdr::{IqSource, KiwiControls, KiwiSource, KIWI_IQ_HALF_HZ};
 
 #[test]
 #[ignore]
@@ -30,14 +30,14 @@ fn kiwi_receives_iq_samples() {
     }
 
     assert!(
-        got > 512 || src.link_error().is_some(),
+        got > 512 || KiwiControls::link_error(&src).is_some(),
         "expected IQ samples, got {got} (error={:?})",
-        src.link_error()
+        KiwiControls::link_error(&src)
     );
     if got > 512 {
-        let rssi = src.rssi_dbm().unwrap_or(0.0);
+        let rssi = KiwiControls::rssi_dbm(&src).unwrap_or(0.0);
         eprintln!("kiwi live: {got} samples, S-meter {rssi:.1} dBm");
     } else {
-        eprintln!("kiwi live: server busy or rejected: {:?}", src.link_error());
+        eprintln!("kiwi live: server busy or rejected: {:?}", KiwiControls::link_error(&src));
     }
 }

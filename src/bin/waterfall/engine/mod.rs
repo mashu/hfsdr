@@ -19,12 +19,8 @@ mod policy;
 mod types;
 
 pub use handle::EngineHandle;
-pub use policy::{
-    MAX_CATCHUP_PUMPS, MAX_CATCHUP_PUMPS_LIGHT, MIN_SPECTRUM_ROWS_WIDEBAND,
-    WIDEBAND_IQ_THRESHOLD,
-};
 pub use types::{
-    ConnState, EngineCommand, EngineParams, EnginePoll, EngineShared, EngineStats,
+    ConnState, EngineCommand, EngineParams, EngineStats,
 };
 
 pub const FFT_SIZE: usize = 2048;

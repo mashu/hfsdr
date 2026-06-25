@@ -1,7 +1,7 @@
 //! Main engine loop.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::Mutex;
 use std::thread;
@@ -14,8 +14,9 @@ use crate::skimmer::SkimmerHandle;
 use crate::engine::audio::AudioScopeRing;
 use super::Engine;
 use crate::engine::policy::{catchup_pumps_max, MAX_DRAIN_WIDEBAND};
-use crate::engine::types::{ConnState, EngineCommand, EngineParams, EngineShared};
-use crate::engine::{FFT_HOP, FFT_SIZE, MIN_SPECTRUM_ROWS_WIDEBAND};
+use crate::engine::types::{EngineCommand, EngineParams, EngineShared};
+use crate::engine::policy::MIN_SPECTRUM_ROWS_WIDEBAND;
+use crate::engine::{FFT_HOP, FFT_SIZE};
 
 impl Engine {
     pub(crate) fn new(
@@ -140,7 +141,7 @@ impl Engine {
         }
         // Clean shutdown: stop source so the reader thread exits.
         if let Some(conn) = &mut self.conn {
-            let _ = conn.source.stop();
+            let _ = conn.device.stop();
         }
     }
 
