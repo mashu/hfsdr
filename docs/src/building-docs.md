@@ -42,8 +42,8 @@ whose dependencies are present (library-only if both are absent).
 2. Link new pages in `docs/src/SUMMARY.md`.
 3. Run `mdbook build docs` and fix broken links.
 
-Prefer **explanations and diagrams** over module path lists. Put API details in
-rustdoc.
+Prefer **explanations** over module path lists. Put API details in rustdoc.
+Use plain Markdown (text, tables, fenced code blocks) — no custom JavaScript.
 
 ---
 

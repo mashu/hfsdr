@@ -19,7 +19,11 @@ buffer**; if the engine is slow, excess samples are **discarded** and counted.
 The **engine thread** pulls a bounded number of samples per loop (so one heavy
 FFT cannot freeze the app for seconds). From that block, three consumers run:
 
-<div data-diagram="signal-journey"></div>
+```text
+  IQ block  →  Listen (CwChannel)  →  audio
+            →  Spectrum (FFT)       →  waterfall
+            →  Skimmer (peaks)      →  spot table
+```
 
 They share **input** but not **filters**. Widening the panadapter zoom does not
 widen your CW filter.

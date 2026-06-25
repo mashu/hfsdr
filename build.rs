@@ -5,6 +5,10 @@ use std::process::Command;
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(airspyhf_extended_api)");
+    println!("cargo:rerun-if-env-changed=HFSDR_DEPS_PREFIX");
+    println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
+    println!("cargo:rerun-if-env-changed=VCPKG_INSTALLED_DIR");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
 
     if std::env::var_os("CARGO_FEATURE_GUI_CORE").is_some() {
         generate_waterfall_impl_methods();
@@ -14,7 +18,8 @@ fn main() {
         probe_or_panic(
             "libairspyhf",
             "libairspyhf not found. Install the system library (e.g. libairspyhf-dev on Linux, \
-             `brew install airspyhf` on macOS) or build with --no-default-features.",
+             `brew install airspyhf` on macOS, or `pwsh scripts/install-windows-sdr-deps.ps1` \
+             on Windows) or build with --no-default-features.",
             &["airspyhf", ""],
             &["libairspyhf.dylib", "libairspyhf.a"],
         );
@@ -27,7 +32,8 @@ fn main() {
         probe_or_panic(
             "librtlsdr",
             "librtlsdr not found. Install the system library (e.g. librtlsdr-dev on Linux, \
-             `brew install librtlsdr` on macOS) or disable the `rtlsdr` feature.",
+             `brew install librtlsdr` on macOS, or `pwsh scripts/install-windows-sdr-deps.ps1` \
+             on Windows) or disable the `rtlsdr` feature.",
             &["librtlsdr", ""],
             &["librtlsdr.dylib", "librtlsdr.a"],
         );
@@ -53,10 +59,46 @@ fn probe_or_panic(
         return;
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    if link_windows_lib(pkg) {
+        return;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = (macos_brew_formulas, macos_lib_names);
 
     panic!("{panic_msg}");
+}
+
+#[cfg(target_os = "windows")]
+fn link_windows_lib(pkg: &str) -> bool {
+    let lib_name = match pkg {
+        "libairspyhf" => "airspyhf",
+        "librtlsdr" => "rtlsdr",
+        _ => return false,
+    };
+    for lib_dir in windows_lib_dirs() {
+        if find_lib_in_dir(&lib_dir, lib_name).is_some() {
+            println!("cargo:rustc-link-search=native={}", lib_dir.display());
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn windows_lib_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(deps) = std::env::var("HFSDR_DEPS_PREFIX") {
+        dirs.push(PathBuf::from(deps).join("lib"));
+    }
+    if let Ok(vcpkg) = std::env::var("VCPKG_ROOT") {
+        dirs.push(PathBuf::from(vcpkg).join("installed/x64-windows/lib"));
+    }
+    if let Ok(installed) = std::env::var("VCPKG_INSTALLED_DIR") {
+        dirs.push(PathBuf::from(installed).join("lib"));
+    }
+    dirs
 }
 
 #[cfg(target_os = "macos")]
@@ -115,6 +157,13 @@ fn airspyhf_lib_path() -> Option<PathBuf> {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    for dir in windows_lib_dirs() {
+        if let Some(path) = find_lib_in_dir(&dir, "airspyhf") {
+            return Some(path);
+        }
+    }
+
     for dir in [
         "/usr/lib/x86_64-linux-gnu",
         "/usr/lib/aarch64-linux-gnu",
@@ -130,36 +179,60 @@ fn airspyhf_lib_path() -> Option<PathBuf> {
 }
 
 fn find_lib_in_dir(dir: impl AsRef<Path>, name: &str) -> Option<PathBuf> {
-    for suffix in [".so", ".dylib", ".dll", ".a"] {
-        let path = dir.as_ref().join(format!("lib{name}{suffix}"));
-        if path.exists() {
-            return Some(path);
+    for stem in [format!("lib{name}"), name.to_string()] {
+        for suffix in [".so", ".dylib", ".dll", ".a", ".lib"] {
+            let path = dir.as_ref().join(format!("{stem}{suffix}"));
+            if path.exists() {
+                return Some(path);
+            }
         }
     }
     None
 }
 
 fn has_symbol(lib: &Path, sym: &str) -> bool {
-    for args in [
-        vec!["-D", lib.to_str().unwrap_or_default()],
-        vec!["-gU", lib.to_str().unwrap_or_default()],
-        vec![lib.to_str().unwrap_or_default()],
-    ] {
-        let Ok(output) = Command::new("nm").args(&args).output() else {
-            continue;
-        };
-        if !output.status.success() {
-            continue;
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        if text.lines().any(|line| {
-            line.contains(sym)
-                && (line.contains(" T ") || line.contains(" W ") || line.ends_with(&format!(" T {sym}")))
-        }) {
-            return true;
-        }
+    #[cfg(target_os = "windows")]
+    {
+        return has_symbol_dumpbin(lib, sym);
     }
-    false
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for args in [
+            vec!["-D", lib.to_str().unwrap_or_default()],
+            vec!["-gU", lib.to_str().unwrap_or_default()],
+            vec![lib.to_str().unwrap_or_default()],
+        ] {
+            let Ok(output) = Command::new("nm").args(&args).output() else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&output.stdout);
+            if text.lines().any(|line| {
+                line.contains(sym)
+                    && (line.contains(" T ")
+                        || line.contains(" W ")
+                        || line.ends_with(&format!(" T {sym}")))
+            }) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn has_symbol_dumpbin(lib: &Path, sym: &str) -> bool {
+    let lib_path = lib.to_str().unwrap_or_default();
+    let Ok(output) = Command::new("dumpbin").args(["/exports", lib_path]).output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout).contains(sym)
 }
 
 fn generate_waterfall_impl_methods() {
@@ -172,20 +245,35 @@ fn generate_waterfall_impl_methods() {
     println!("cargo:rerun-if-changed={}", script.display());
     println!("cargo:rerun-if-changed={}", methods_dir.display());
 
-    let status = Command::new("python3")
+    let python = python_command();
+    let status = Command::new(python)
         .arg(&script)
         .arg("--regenerate-impl")
         .arg("--out")
         .arg(&out)
         .status()
-        .unwrap_or_else(|e| panic!("failed to run {}: {e}", script.display()));
+        .unwrap_or_else(|e| panic!("failed to run {} with {python}: {e}", script.display()));
 
     if !status.success() {
         panic!(
             "waterfall impl_methods generation failed (exit {status}); \
-             run: python3 scripts/split_app_rs.py --regenerate-impl"
+             run: {python} scripts/split_app_rs.py --regenerate-impl"
         );
     }
+}
+
+fn python_command() -> &'static str {
+    for cmd in ["python3", "python"] {
+        if Command::new(cmd)
+            .arg("--version")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return cmd;
+        }
+    }
+    "python3"
 }
 
 #[cfg(target_os = "macos")]

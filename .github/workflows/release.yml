@@ -57,11 +57,11 @@ jobs:
               echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
               echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
-            artifact_name: hfsdr-windows-x86_64-kiwi
+            artifact_name: hfsdr-windows-x86_64
             archive: zip
-            features: gui-core
-            airspy: false
-            install: echo "Kiwi+QMX build"
+            features: gui
+            airspy: true
+            install: pwsh -File scripts/install-windows-sdr-deps.ps1
     steps:
       - uses: actions/checkout@v4
 
@@ -98,6 +98,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/release/hfsdr.exe dist/
           Copy-Item README.md dist/
+          $binDirs = @(
+            "$env:HFSDR_DEPS_PREFIX/bin",
+            "$env:VCPKG_ROOT/installed/x64-windows/bin"
+          )
+          foreach ($dir in $binDirs) {
+            if (Test-Path $dir) {
+              Copy-Item (Join-Path $dir "*.dll") dist/ -ErrorAction SilentlyContinue
+            }
+          }
           Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
 
       - name: Upload release asset

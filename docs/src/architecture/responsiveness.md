@@ -7,7 +7,13 @@ hfsdr treats that as a bug by design.
 
 ## Two threads you care about
 
-<div data-diagram="thread-map"></div>
+```text
+  Main thread (egui)  ←── try_poll ──→  Engine thread
+                                            ├── Source (Kiwi / Airspy / RTL / QMX)
+                                            ├── Audio (cpal)
+                                            ├── Skimmer (rayon)
+                                            └── Ingress decimator
+```
 
 The main thread **never** waits on a mutex held while processing 100k samples.
 

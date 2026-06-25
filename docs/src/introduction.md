@@ -29,22 +29,40 @@ spectrum display but often still feeds **one** audio path.
 
 hfsdr splits the work into **parallel paths** from the same IQ stream:
 
-<div data-diagram="parallel-paths"></div>
+```text
+                    IQ stream (one ring buffer)
+                              |
+        +---------------------+---------------------+
+        |                     |                     |
+    Listen path          Panadapter             Skimmer
+  CwChannel → audio    FFT → waterfall      parallel decoders
+```
 
 That split is the central design idea: **looking** at the band must not degrade
 **listening**, and **copying** twenty CQs must not stall the waterfall.
 
 ---
 
-## Supported hardware (today)
+## Supported hardware
+
+| | Linux | macOS | Windows |
+|---|:---:|:---:|:---:|
+| **KiwiSDR** | ✓ | ✓ | ✓ |
+| **Airspy HF+** | ✓ | ✓ | ✓ |
+| **RTL-SDR** | ✓ | ✓ | ✓ |
+| **QMX / QMX+** | ✓ | ✓ | ✓ |
 
 | Radio | Typical use |
 |-------|-------------|
 | **Airspy HF+** | Local USB, up to hundreds of kHz IQ — wide contest views |
+| **RTL-SDR** | Local USB, common dongles — budget panadapter |
 | **KiwiSDR** | Remote WebSocket, ~12 kHz passband — network receivers |
+| **QMX / QMX+** | USB CAT + audio IQ — QRP Labs transceiver |
 
-Both speak the same internal language (complex IQ samples). Adding another SDR
-means implementing one interface, not rewriting the FFT or the skimmer.
+All sources speak the same internal language (complex IQ samples). Adding another
+SDR means implementing one interface, not rewriting the FFT or the skimmer.
+
+Build instructions: [Building hfsdr](./building.md).
 
 ---
 
@@ -57,6 +75,7 @@ means implementing one interface, not rewriting the FFT or the skimmer.
 | Pick a filter on a crowded band | [Why filters matter](./filters/why-filters-matter.md) → [Channel shapes](./filters/channel-shapes.md) |
 | Trust skimmer callsigns | [MASTER.SCP](./skimmer/callsign-validation.md) |
 | Hack on the codebase | [Code layout](./architecture/code-layout.md) |
+| Build from source | [Building hfsdr](./building.md) |
 
 ---
 

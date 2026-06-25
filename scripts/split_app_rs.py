@@ -8,6 +8,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src/bin/waterfall/app.rs"
 OUT = ROOT / "src/bin/waterfall/app"
+UTF8 = "utf-8"
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding=UTF8)
+
+
+def write_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding=UTF8, newline="\n")
 
 METHOD_GROUPS: dict[str, list[str]] = {
     "engine": [
@@ -330,7 +339,7 @@ def main() -> None:
     if not SRC.exists():
         raise SystemExit(f"{SRC} not found (use --regenerate-impl to rebuild impl_methods.inc)")
 
-    text = SRC.read_text()
+    text = read_text(SRC)
     lines = text.splitlines(keepends=True)
 
     methods = parse_methods([l.rstrip("\n") for l in lines])
@@ -349,7 +358,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
     # prelude.rs (included by impl submodules)
-    (OUT / "prelude.rs").write_text(PRELUDE.lstrip())
+    write_text(OUT / "prelude.rs", PRELUDE.lstrip())
 
     # constants.rs (lines 72-230)
     constants_text = CONSTANTS_HEADER + "".join(lines[71:230])
@@ -385,17 +394,18 @@ def main() -> None:
         "    pub(crate) fn from(",
         "    pub(crate) fn from_storage(",
     )
-    (OUT / "constants.rs").write_text(constants_text)
+    write_text(OUT / "constants.rs", constants_text)
 
     # codec.rs (free functions after main impl, excluding eframe::App)
     codec_body = "".join(lines[5043:5229]) + "".join(lines[5330:5337])
     codec_body = re.sub(r"^fn ", "pub(crate) fn ", codec_body, flags=re.MULTILINE)
-    (OUT / "codec.rs").write_text(
+    write_text(
+        OUT / "codec.rs",
         "//! Settings serialization helpers and small shared utilities.\n\n"
         + "use eframe::egui;\n"
         + CODEC_USE
         + "\n"
-        + codec_body
+        + codec_body,
     )
 
     # Extract method bodies per group (included into the single impl block in mod.rs)
@@ -408,8 +418,9 @@ def main() -> None:
             start, end = methods[name]
             chunks.append("".join(lines[start - 1 : end]))
         body = "\n\n".join(chunks)
-        path.write_text(
-            f"// `{rel_path}` — `WaterfallApp` methods.\n\n" + body
+        write_text(
+            path,
+            f"// `{rel_path}` — `WaterfallApp` methods.\n\n" + body,
         )
         method_sections.append(
             f"    // --- {rel_path} ---\n" + body
@@ -558,7 +569,7 @@ pub struct WaterfallApp {
         + 'include!(concat!(env!("OUT_DIR"), "/waterfall_impl_methods.inc"));\n\n'
         + eframe_impl
     )
-    (OUT / "mod.rs").write_text(mod_rs)
+    write_text(OUT / "mod.rs", mod_rs)
 
     SRC.unlink()
     print(f"Split {SRC} into {OUT}/")
@@ -593,7 +604,7 @@ def write_impl_methods(out_path: Path) -> None:
         if not path.exists():
             raise SystemExit(f"Missing method group file: {path}")
         seen.add(str(path.resolve()))
-        body = trim_method_group(path.read_text())
+        body = trim_method_group(read_text(path))
         sections.append(f"    // --- {rel_path} ---\n{body}")
 
     for path in sorted((OUT / "methods").rglob("*.rs")):
@@ -605,7 +616,7 @@ def write_impl_methods(out_path: Path) -> None:
     impl_body = "impl WaterfallApp {\n" + "\n".join(sections) + "\n}\n"
     impl_body = impl_body.replace("StorageKey::from(", "StorageKey::from_storage(")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(impl_body)
+    write_text(out_path, impl_body)
 
 
 def regenerate_impl(out_path: Path | None = None) -> None:

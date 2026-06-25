@@ -32,14 +32,14 @@ ureq = { version = "2.12", optional = true, default-features = false, features =
 
 [features]
 default = ["airspy"]
-# Links libairspyhf (system package). Disable on platforms without the library
-# (e.g. Windows CI builds use `--no-default-features --features gui` for Kiwi-only).
+# Links libairspyhf (system package). Disable with --no-default-features when the
+# library is unavailable (e.g. Kiwi/QMX-only builds via gui-core).
 airspy = []
 # Links librtlsdr (system package). Included in `gui`; use `gui-core` without it.
 rtlsdr = []
 # QRP Labs QMX/QMX+ via USB CAT + audio IQ (pure Rust).
 qmx = ["dep:serialport", "dep:cpal"]
-# GUI without librtlsdr (Windows CI / Kiwi+QMX only).
+# GUI without librtlsdr (Kiwi/QMX-only builds without local USB SDR libraries).
 gui-core = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd", "qmx"]
 gui = ["gui-core", "rtlsdr"]
 

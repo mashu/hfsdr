@@ -14,7 +14,7 @@ its own sake.
   ├── src/bin/       executables (GUI, airspy-probe)
   ├── docs/          this book (mdBook)
   ├── tests/         integration + optional live Kiwi test
-  └── scripts/       build-docs.sh
+  └── scripts/       build-docs.sh, install-windows-sdr-deps.ps1
 ```
 
 ---
@@ -23,7 +23,7 @@ its own sake.
 
 | Area | Folder | Responsibility |
 |------|--------|----------------|
-| Front ends | `airspyhf/`, `kiwi/` | Device I/O → IQ ring |
+| Front ends | `airspyhf/`, `kiwi/`, `rtlsdr/`, `qmx/` | Device I/O → IQ ring |
 | Contract | `source.rs` | `IqSource` trait |
 | DSP | `dsp/` | Spectrum, CW chain, view math |
 | Skimmer | `skimmer/` | Peaks, decoders, spots, SCP |
@@ -77,10 +77,15 @@ Run: `cargo test --features gui`
 
 ## Features
 
-- `airspy` — link libairspyhf
-- `gui` — eframe + cpal + settings
+| Feature | Links |
+|---------|--------|
+| `airspy` | libairspyhf (default) |
+| `rtlsdr` | librtlsdr |
+| `gui` | `gui-core` + `rtlsdr` |
+| `gui-core` | eframe, cpal, Kiwi, QMX — no RTL-SDR |
+| `qmx` | serialport + cpal for QMX |
 
-Windows CI often builds `--no-default-features --features gui` (Kiwi only).
+Platform-specific library setup: [Building hfsdr](../building.md).
 
 ---
 

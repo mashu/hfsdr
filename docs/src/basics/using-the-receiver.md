@@ -8,8 +8,8 @@ to expect, and which controls interact.
 ## First launch
 
 1. Start `hfsdr` (release binary or `cargo run --features gui --bin hfsdr`).
-2. Choose **Airspy** or **Kiwi**, enter host/port if needed, set **center
-   frequency** (MHz), click **Connect**.
+2. Choose **Airspy**, **RTL-SDR**, **Kiwi**, or **QMX**, enter connection
+   details, set **center frequency** (MHz), click **Connect**.
 3. Wait for **Streaming** in the status bar. The waterfall fills from the top.
 
 If connect fails, open the **Log** panel (status bar **Log** or `` ` `` key) —
@@ -19,7 +19,16 @@ errors land there instead of spamming the terminal.
 
 ## Main areas of the window
 
-<div data-diagram="gui-layout"></div>
+```text
++------------------------------------------------------------------+
+| Status bar (link, SNR, drops, panel toggles)                     |
++----------+-------------------------------------------+-----------+
+| Left     | Spectrum + waterfall (click to tune)      | Right     |
+| panel    | Cyan band = listen passband               | CW/skimmer|
++----------+-------------------------------------------+-----------+
+| History · log · pipeline (optional bottom panels)                |
++------------------------------------------------------------------+
+```
 
 | Area | Purpose |
 |------|---------|

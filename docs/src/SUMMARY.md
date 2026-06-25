@@ -44,4 +44,5 @@
 - [How the code is organized](./architecture/code-layout.md)
 - [Adding another radio front end](./architecture/extending-sources.md)
 - [Contributing](./contributing.md)
+- [Building hfsdr](./building.md)
 - [Building this book and API docs](./building-docs.md)

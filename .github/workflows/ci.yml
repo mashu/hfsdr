@@ -30,8 +30,8 @@ jobs:
               echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
               echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
-            features: ""
-            install: echo "Kiwi-only (no libairspyhf on Windows runner)"
+            features: airspy,rtlsdr
+            install: pwsh -File scripts/install-windows-sdr-deps.ps1
     steps:
       - uses: actions/checkout@v4
 
@@ -109,9 +109,9 @@ jobs:
               echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
               echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           - os: windows-latest
-            label: windows-x86_64-kiwi
-            features: gui-core
-            install: echo "Kiwi+QMX GUI build (no native SDR libs on Windows CI)"
+            label: windows-x86_64
+            features: gui
+            install: pwsh -File scripts/install-windows-sdr-deps.ps1
     steps:
       - uses: actions/checkout@v4
 
@@ -124,15 +124,7 @@ jobs:
         shell: bash
 
       - name: cargo build --release
-        run: |
-          case "${{ matrix.label }}" in
-            windows-*)
-              cargo build --release --no-default-features --features "${{ matrix.features }}"
-              ;;
-            *)
-              cargo build --release --features "${{ matrix.features }}"
-              ;;
-          esac
+        run: cargo build --release --features "${{ matrix.features }}"
         shell: bash
 
       - name: Smoke-check binary exists

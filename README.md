@@ -19,13 +19,11 @@ phone/AM/FM modes or unrelated clutter.
 | | **Linux** | **macOS** | **Windows** |
 |---|:---:|:---:|:---:|
 | **KiwiSDR** | ✓ | ✓ | ✓ |
-| **Airspy HF+** | ✓ | ✓ | — |
-| **RTL-SDR** | ✓ | ✓ | — |
+| **Airspy HF+** | ✓ | ✓ | ✓ |
+| **RTL-SDR** | ✓ | ✓ | ✓ |
 | **QMX / QMX+** | ✓ | ✓ | ✓ |
 
-Build the GUI with all local sources (Linux/macOS): `cargo build --features gui --bin hfsdr`.
-
-Windows (Kiwi + QMX): `cargo build --no-default-features --features gui-core --bin hfsdr`.
+Build and install: [hfsdr documentation — Building](https://mashu.github.io/hfsdr/building.html).
 
 CLI auto-connect examples:
 
