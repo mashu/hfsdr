@@ -494,4 +494,42 @@ mod tests {
         let clean = sanitize_json_array("[{\"x\":1},]");
         assert!(!clean.contains(",]"));
     }
+
+    #[test]
+    fn rank_deprioritizes_full_receivers() {
+        let geo = GeoLocation {
+            country: "United Kingdom".into(),
+            country_code: "GB".into(),
+            lat: 51.5,
+            lon: -0.1,
+        };
+        let mut list = vec![
+            KiwiReceiver {
+                host: "full.example".into(),
+                port: 8073,
+                name: "full".into(),
+                location: "London, United Kingdom".into(),
+                lat: 51.5,
+                lon: -0.1,
+                users: 4,
+                users_max: 4,
+                snr: 50,
+                distance_km: 0.0,
+            },
+            KiwiReceiver {
+                host: "open.example".into(),
+                port: 8073,
+                name: "open".into(),
+                location: "London, United Kingdom".into(),
+                lat: 51.5,
+                lon: -0.12,
+                users: 1,
+                users_max: 4,
+                snr: 30,
+                distance_km: 0.0,
+            },
+        ];
+        rank_by_proximity(&mut list, &geo);
+        assert_eq!(list[0].host, "open.example");
+    }
 }

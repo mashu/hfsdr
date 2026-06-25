@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crate::source::SourceKind;
 
 use super::Engine;
-use crate::engine::policy::{handshake_timeout, stall_timeout};
+use crate::engine::policy::{handshake_timeout, reconnect_retry_secs, stall_timeout, RECONNECT_BUSY_DELAY_SECS};
 use crate::engine::types::ConnState;
 
 
@@ -116,18 +116,15 @@ pub(super) fn poll_handshake(&mut self) {
             .and_then(|g| g.last_error.clone())
             .is_some_and(|e| e.to_ascii_lowercase().contains("busy"));
         let secs = if busy {
-            15.0
+            RECONNECT_BUSY_DELAY_SECS
         } else {
-            self.retry_secs()
+            reconnect_retry_secs(self.is_kiwi_request(), self.reconnect_attempt)
         };
         self.retry_at = Some(Instant::now() + Duration::from_secs_f32(secs));
     }
 
     pub(super) fn retry_secs(&self) -> f32 {
-        let base = if self.is_kiwi_request() { 3.0 } else { 2.0 };
-        let exp = self.reconnect_attempt.saturating_sub(1).min(6);
-        let max = if self.is_kiwi_request() { 60.0 } else { 30.0 };
-        (base * 2u32.pow(exp) as f32).min(max)
+        reconnect_retry_secs(self.is_kiwi_request(), self.reconnect_attempt)
     }
 
     pub(super) fn set_state(&self, state: ConnState) {

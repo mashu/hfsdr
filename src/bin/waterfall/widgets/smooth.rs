@@ -61,4 +61,12 @@ mod tests {
         assert_eq!(out[0], 0.0);
         assert_eq!(out[4], 0.0);
     }
+
+    #[test]
+    fn ema_blends_after_initial_seed() {
+        let mut smoothed = vec![-80.0; 3];
+        let row = [-70.0, -70.0, -70.0];
+        ema_update(&mut smoothed, &row, 0.5);
+        assert!((smoothed[0] + 75.0).abs() < 1e-3);
+    }
 }

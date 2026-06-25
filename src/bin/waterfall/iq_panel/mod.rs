@@ -157,3 +157,58 @@ impl IqPanel {
         (cmds, dirty)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn start_recording_builds_capture_path() {
+        let dir = std::env::temp_dir().join("hfsdr_iq_panel_test");
+        let mut panel = IqPanel::new(dir.clone());
+        match panel.start_recording() {
+            IqPanelCmd::StartRecord(path) => {
+                assert!(path.starts_with(&dir));
+            }
+            other => panic!("expected StartRecord, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_recording_stop_when_active() {
+        let mut panel = IqPanel::new(PathBuf::from("/tmp"));
+        assert_eq!(panel.toggle_recording(true, true), Some(IqPanelCmd::StopRecord));
+    }
+
+    #[test]
+    fn toggle_recording_start_when_streaming() {
+        let mut panel = IqPanel::new(std::env::temp_dir());
+        match panel.toggle_recording(false, true) {
+            Some(IqPanelCmd::StartRecord(_)) => {}
+            other => panic!("expected StartRecord, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_recording_none_when_offline() {
+        let mut panel = IqPanel::new(PathBuf::from("/tmp"));
+        assert_eq!(panel.toggle_recording(false, false), None);
+    }
+
+    #[test]
+    fn replay_playback_empty_path_returns_none() {
+        let panel = IqPanel::new(PathBuf::from("/tmp"));
+        assert_eq!(panel.replay_playback(), None);
+    }
+
+    #[test]
+    fn replay_playback_with_path() {
+        let mut panel = IqPanel::new(PathBuf::from("/tmp"));
+        panel.playback_path = "/tmp/test.hiq.gz".into();
+        match panel.replay_playback() {
+            Some(IqPanelCmd::Play(p)) => assert_eq!(p, PathBuf::from("/tmp/test.hiq.gz")),
+            other => panic!("expected Play, got {other:?}"),
+        }
+    }
+}

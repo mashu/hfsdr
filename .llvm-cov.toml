@@ -1,0 +1,3 @@
+# Manual bench/probe binaries only — not part of the shipped app or CI test suite.
+[report]
+ignore-filename-regex = "(pipeline_bench|skimmer_bench|kiwi_pipeline_bench|airspy_probe)\\.rs"

@@ -29,7 +29,7 @@ fn test_harness() -> Harness<'static, WaterfallApp> {
         })
 }
 
-fn streaming_stats() -> EngineStats {
+pub(crate) fn streaming_stats() -> EngineStats {
     let mut stats = EngineStats::default();
     stats.sample_rate = 96_000.0;
     stats.iq_passband_hz = 96_000.0;
@@ -44,7 +44,7 @@ fn streaming_stats() -> EngineStats {
     stats
 }
 
-fn synthetic_streaming_poll(frame: usize) -> EnginePoll {
+pub(crate) fn synthetic_streaming_poll(frame: usize) -> EnginePoll {
     let mut latest = vec![-90.0; FFT_SIZE];
     for (i, v) in latest.iter_mut().enumerate() {
         *v = -90.0 + ((i + frame * 17) % 50) as f32 * 0.1;
@@ -105,7 +105,7 @@ fn assert_ui_values_finite(app: &WaterfallApp) {
     assert!(rf_level_dbm(stats.rssi_dbm, stats.iq_rf_level).is_finite());
 }
 
-fn inject_and_step(harness: &mut Harness<'_, WaterfallApp>, poll: EnginePoll, steps: usize) {
+pub(crate) fn inject_and_step(harness: &mut Harness<'_, WaterfallApp>, poll: EnginePoll, steps: usize) {
     harness.state().inject_engine_poll(poll);
     harness.run_steps(steps);
 }
@@ -305,4 +305,31 @@ fn connecting_shows_connecting_badge() {
     });
     harness.run_steps(2);
     harness.get_by_label("CONNECTING");
+}
+
+#[test]
+fn streaming_poll_updates_sample_rate_label() {
+    let mut harness = test_harness();
+    harness.run_steps(1);
+    inject_and_step(&mut harness, synthetic_streaming_poll(0), 2);
+    assert_eq!(harness.state().radio.sample_rate, 96_000.0);
+    assert_ui_values_finite(harness.state());
+}
+
+#[test]
+fn disconnected_after_error_poll_stays_finite() {
+    let mut harness = test_harness();
+    harness.run_steps(1);
+    harness.state().inject_engine_poll(EnginePoll {
+        state: ConnState::Disconnected,
+        stats: streaming_stats(),
+        spots: Vec::new(),
+        rows: Vec::new(),
+        latest: vec![-90.0; FFT_SIZE],
+        last_error: Some("connection stalled (no data)".into()),
+        audio_scope: Vec::new(),
+    });
+    harness.run_steps(2);
+    harness.get_by_label("OFFLINE");
+    assert_ui_values_finite(harness.state());
 }

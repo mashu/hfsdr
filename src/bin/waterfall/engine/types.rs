@@ -340,4 +340,30 @@ mod tests {
         assert!(poll.latest.iter().all(|v| v.is_finite()));
         assert!(poll.rows[0].iter().all(|v| v.is_finite()));
     }
+
+    #[test]
+    fn sanitize_poll_fills_empty_row_entries() {
+        let poll = EnginePoll {
+            state: ConnState::Streaming,
+            stats: EngineStats::default(),
+            spots: Vec::new(),
+            rows: vec![vec![]],
+            latest: vec![-90.0; 8],
+            last_error: None,
+            audio_scope: Vec::new(),
+        };
+        let poll = poll.sanitized(8);
+        assert_eq!(poll.rows[0].len(), 8);
+        assert!(poll.rows[0].iter().all(|v| *v <= -119.0));
+    }
+
+    #[test]
+    fn sanitize_stats_clamps_buffer_fill() {
+        let mut stats = EngineStats::default();
+        stats.iq_buffer_fill = 2.5;
+        stats.spectrum_fft = 512;
+        let stats = stats.sanitized();
+        assert!((stats.iq_buffer_fill - 1.0).abs() < 1e-6);
+        assert!(stats.spectrum_fft >= 1024);
+    }
 }

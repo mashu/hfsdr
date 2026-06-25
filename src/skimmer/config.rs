@@ -174,4 +174,26 @@ mod tests {
         b.decoder = SkimmerDecoderKind::Adaptive;
         assert!(a.channel_dsp_changed(&b));
     }
+
+    #[test]
+    fn clamped_enforces_min_channels_and_decode_snr_floor() {
+        let mut cfg = SkimmerConfig::default();
+        cfg.max_channels = 0;
+        cfg.min_snr_db = 20.0;
+        cfg.min_decode_snr_db = 5.0;
+        let cfg = cfg.clamped();
+        assert!(cfg.max_channels >= 1);
+        assert!(cfg.min_decode_snr_db >= cfg.min_snr_db);
+    }
+
+    #[test]
+    fn envelope_clamped_keeps_high_above_low() {
+        let env = EnvelopeSettings {
+            thr_low: 0.9,
+            thr_high: 0.2,
+            min_span_fraction: 0.0,
+        }
+        .clamped();
+        assert!(env.thr_high > env.thr_low);
+    }
 }

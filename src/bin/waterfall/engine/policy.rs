@@ -152,6 +152,17 @@ pub fn slow_link(effective: f32, nominal: f32, slow_since_secs: Option<f32>) -> 
     slow_since_secs.is_some_and(|s| s >= SLOW_HOLD.as_secs_f32())
 }
 
+/// Exponential backoff for auto-reconnect (seconds until next attempt).
+pub fn reconnect_retry_secs(is_kiwi: bool, attempt: u32) -> f32 {
+    let base = if is_kiwi { 3.0 } else { 2.0 };
+    let exp = attempt.saturating_sub(1).min(6);
+    let max = if is_kiwi { 60.0 } else { 30.0 };
+    (base * 2u32.pow(exp) as f32).min(max)
+}
+
+/// Fixed delay when the remote reports all client slots busy.
+pub const RECONNECT_BUSY_DELAY_SECS: f32 = 15.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +262,16 @@ mod tests {
     #[test]
     fn slow_link_ok_when_effective_near_nominal() {
         assert!(!slow_link(72_000.0, 96_000.0, Some(10.0)));
+    }
+
+    #[test]
+    fn reconnect_backoff_exponential_with_cap() {
+        assert!((reconnect_retry_secs(true, 1) - 3.0).abs() < 1e-6);
+        assert!((reconnect_retry_secs(true, 2) - 6.0).abs() < 1e-6);
+        assert!((reconnect_retry_secs(true, 8) - 60.0).abs() < 1e-6);
+        assert!((reconnect_retry_secs(false, 1) - 2.0).abs() < 1e-6);
+        assert!((reconnect_retry_secs(false, 4) - 16.0).abs() < 1e-6);
+        assert!((reconnect_retry_secs(false, 5) - 30.0).abs() < 1e-6);
+        assert!((reconnect_retry_secs(false, 10) - 30.0).abs() < 1e-6);
     }
 }

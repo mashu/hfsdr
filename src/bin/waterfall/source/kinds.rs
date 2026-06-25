@@ -86,4 +86,10 @@ mod tests {
         #[cfg(feature = "qmx")]
         assert!(is_local_source(SourceKind::Qmx));
     }
+
+    #[test]
+    fn source_kind_labels_match_kinds() {
+        assert_eq!(source_kind_labels().len(), all_source_kinds().len());
+        assert!(source_kind_labels().iter().all(|l| !l.is_empty()));
+    }
 }

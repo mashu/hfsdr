@@ -222,4 +222,11 @@ mod tests {
         assert_eq!(data[2], 0.0);
         assert_eq!(data[3], 0.0);
     }
+
+    #[test]
+    fn list_output_devices_includes_test_injection() {
+        set_test_output_devices(Some(vec!["Test Output".into()]));
+        let names = AudioOutput::list_output_devices();
+        assert!(names.iter().any(|n| n == "Test Output"));
+    }
 }

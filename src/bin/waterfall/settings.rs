@@ -345,4 +345,18 @@ mod tests {
         assert!(s.audio_enabled);
         assert!(s.lock_ham_bands);
     }
+
+    #[test]
+    fn deserialize_minimal_json_uses_defaults() {
+        let back: AppSettings = serde_json::from_str("{}").expect("deserialize");
+        assert_eq!(back.bfo_hz, AppSettings::default().bfo_hz);
+        assert!(back.skimmer_enabled);
+    }
+
+    #[test]
+    fn notch_data_defaults_disabled() {
+        let n = NotchData::default();
+        assert!(!n.enabled);
+        assert!((n.width_hz - 50.0).abs() < 1e-6);
+    }
 }

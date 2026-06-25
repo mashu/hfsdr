@@ -7,6 +7,9 @@ mod reconnect;
 mod spectrum;
 mod worker;
 
+#[cfg(test)]
+mod tests;
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
