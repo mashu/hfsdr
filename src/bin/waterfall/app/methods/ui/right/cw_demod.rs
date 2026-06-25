@@ -60,7 +60,12 @@ impl WaterfallApp {
                 }
             });
             if self.radio.cw.window == WindowKind::Kaiser {
-                scroll_slider_f32(ui, &mut self.radio.cw.kaiser_beta, 2.0..=14.0, "Kaiser β");
+                scroll_slider_f32(
+                    ui,
+                    &mut self.radio.cw.kaiser_beta,
+                    MIN_KAISER_BETA..=MAX_KAISER_BETA,
+                    "Kaiser β",
+                );
             }
             let flatten_resp =
                 ui.checkbox(&mut self.radio.cw.passband_flatten, "Flatten passband (inv-sinc)");
@@ -165,7 +170,16 @@ impl WaterfallApp {
                             hfsdr::audio_sample_rate(self.radio.sample_rate, self.radio.cw.decimation);
                         let delay_note = if self.radio.cw.channel_filter == ChannelFilterKind::LinearFir {
                             let delay_ms = channel_group_delay_ms(audio_rate, self.radio.cw.passband_hz);
-                            format!("Filter delay ~{delay_ms:.0} ms (linear-phase FIR)")
+                            let shape_hint = match self.radio.cw.window {
+                                WindowKind::Gaussian => {
+                                    " · Blackman/Kaiser reject skirt noise better"
+                                }
+                                WindowKind::RaisedCosine => {
+                                    " · Blackman is steeper on adjacent carriers"
+                                }
+                                _ => "",
+                            };
+                            format!("Filter delay ~{delay_ms:.0} ms (linear-phase FIR){shape_hint}")
                         } else {
                             "IIR 2-pole — minimal delay, non-linear phase (may ring)".to_string()
                         };

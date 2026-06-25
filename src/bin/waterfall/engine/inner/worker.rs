@@ -74,6 +74,7 @@ impl Engine {
             iq_buffer_peak: 0.0,
             last_pump_got: 0,
             last_pump_at: Instant::now(),
+            last_iq_dropped: 0,
             last_spectrum_rows: MIN_SPECTRUM_ROWS_WIDEBAND,
             row_pool: Vec::new(),
             level_audio_peak: 0.0,

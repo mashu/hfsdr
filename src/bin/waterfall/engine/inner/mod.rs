@@ -83,6 +83,7 @@ pub(super) struct Engine {
     iq_buffer_peak: f32,
     last_pump_got: usize,
     last_pump_at: Instant,
+    last_iq_dropped: u64,
     last_spectrum_rows: usize,
     row_pool: Vec<Vec<f32>>,
     level_audio_peak: f32,

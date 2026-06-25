@@ -1,6 +1,7 @@
 //! Connected front end as a typed enum (IQ streaming + device-specific controls).
 
 use hfsdr::{KiwiControls, QmxControls, Complex32, Consumer, IqSource, KiwiSource, Result};
+#[cfg(test)]
 use rtrb::RingBuffer;
 #[cfg(feature = "airspy")]
 use hfsdr::AirspyHf;
@@ -138,6 +139,7 @@ impl Connection {
     }
 
     /// Ring buffer pre-filled with IQ for engine pump tests (no live hardware).
+    #[cfg(test)]
     pub(crate) fn mock_ring(samples: &[Complex32], center_hz: f64, is_kiwi: bool) -> Self {
         let (mut prod, cons) = RingBuffer::<Complex32>::new(65_536);
         for &s in samples {

@@ -10,6 +10,7 @@ use std::f32::consts::PI;
 use crate::source::Complex32;
 
 use super::super::simd::dot_f32;
+use super::filter_plan::{self, plan_num_taps, passband_cutoff_hz, MAX_KAISER_BETA, MIN_KAISER_BETA};
 
 /// Window applied to the ideal sinc — the "shape" of the CW filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +39,7 @@ impl Default for LowpassDesign {
     fn default() -> Self {
         Self {
             window: WindowKind::Gaussian,
-            kaiser_beta: 6.0,
+            kaiser_beta: filter_plan::DEFAULT_KAISER_BETA,
             passband_flatten: false,
         }
     }
@@ -51,31 +52,6 @@ pub struct FirFilter {
     delay_i: Vec<f32>,
     delay_q: Vec<f32>,
     pos: usize,
-}
-
-/// Maximum filter group delay — longer delays smear CW keying edges.
-const MAX_GROUP_DELAY_MS: f32 = 12.0;
-
-/// Tap count for a channel filter (matches [`design_lowpass_with`]).
-pub fn plan_num_taps(sample_rate: f32, bandwidth_hz: f32) -> usize {
-    let cutoff = (bandwidth_hz * 0.5).max(10.0);
-    let mut num_taps = ((sample_rate / cutoff) * 4.0).round() as usize;
-    let max_taps_delay =
-        ((sample_rate * MAX_GROUP_DELAY_MS / 1000.0) * 2.0).round() as usize | 1;
-    num_taps = num_taps.min(max_taps_delay).clamp(31, 2047);
-    if num_taps.is_multiple_of(2) {
-        num_taps += 1;
-    }
-    num_taps
-}
-
-/// Linear-phase group delay of the channel FIR (~half the tap count).
-pub fn channel_group_delay_ms(sample_rate: f32, bandwidth_hz: f32) -> f32 {
-    if sample_rate <= 0.0 {
-        return 0.0;
-    }
-    let n = plan_num_taps(sample_rate, bandwidth_hz) as f32;
-    (n - 1.0) * 0.5 / sample_rate * 1000.0
 }
 
 impl FirFilter {
@@ -190,11 +166,11 @@ pub fn design_lowpass_with(
     bandwidth_hz: f32,
     design: LowpassDesign,
 ) -> FirFilter {
-    let cutoff = (bandwidth_hz * 0.5).max(10.0);
+    let cutoff = passband_cutoff_hz(bandwidth_hz);
     let num_taps = plan_num_taps(sample_rate, bandwidth_hz);
     let m = (num_taps - 1) as f32;
     let fc = cutoff / sample_rate;
-    let beta = design.kaiser_beta.clamp(2.0, 14.0);
+    let beta = design.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
 
     let mut taps = Vec::with_capacity(num_taps);
     let mut sum = 0.0f32;
@@ -243,7 +219,7 @@ pub fn design_gaussian_lowpass_compact(sample_rate: f32, bandwidth_hz: f32) -> F
         } else {
             (2.0 * PI * fc * x).sin() / (PI * x)
         };
-        let tap = sinc * window_value(WindowKind::Gaussian, k, TAPS, 6.0);
+        let tap = sinc * window_value(WindowKind::Gaussian, k, TAPS, filter_plan::DEFAULT_KAISER_BETA);
         taps.push(tap);
         sum += tap;
     }
@@ -357,6 +333,7 @@ fn bessel_i0(x: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use super::filter_plan::CHANNEL_PASSBAND_MIN_HZ;
     use super::*;
     use std::f32::consts::TAU;
 
@@ -437,9 +414,22 @@ mod tests {
     }
 
     #[test]
-    fn ultra_narrow_caps_group_delay() {
-        let ms = channel_group_delay_ms(12_000.0, 50.0);
-        assert!(ms <= MAX_GROUP_DELAY_MS + 1.0, "delay {ms} ms smears keying");
+    fn gaussian_25hz_rejects_adjacent() {
+        let db = stopband_db(LowpassDesign::default(), CHANNEL_PASSBAND_MIN_HZ, 75.0);
+        assert!(db < -30.0, "75 Hz offset with 25 Hz BW: {db} dB");
+    }
+
+    #[test]
+    fn blackman_25hz_rejects_close_adjacent() {
+        let db = stopband_db(
+            LowpassDesign {
+                window: WindowKind::Blackman,
+                ..Default::default()
+            },
+            CHANNEL_PASSBAND_MIN_HZ,
+            60.0,
+        );
+        assert!(db < -35.0, "60 Hz offset with 25 Hz BW Blackman: {db} dB");
     }
 
     #[test]
@@ -453,5 +443,28 @@ mod tests {
             250.0,
         );
         assert!(db < -35.0, "250 Hz tone with 100 Hz BW: {db} dB");
+    }
+
+    #[test]
+    fn skirt_rejection_outside_cyan_edge() {
+        let bw = 200.0;
+        let probe = bw * 0.6;
+        let gauss = stopband_db(LowpassDesign::default(), bw, probe);
+        let blackman = stopband_db(
+            LowpassDesign {
+                window: WindowKind::Blackman,
+                ..Default::default()
+            },
+            bw,
+            probe,
+        );
+        assert!(
+            gauss < -24.0,
+            "Gaussian skirt outside cyan: {gauss} dB"
+        );
+        assert!(
+            blackman < -32.0,
+            "Blackman skirt at cyan edge: {blackman} dB"
+        );
     }
 }

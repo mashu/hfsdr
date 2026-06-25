@@ -25,7 +25,10 @@ use super::nco::ComplexNco;
 use super::noiseblanker::NoiseBlanker;
 use super::noisereduction::NoiseReduction;
 use super::notch::IqNotch;
-use super::settings::{ChannelFilterKind, CwChannelSettings, DecimFilterKind, MAX_NOTCHES};
+use super::filter_plan::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
+use super::settings::{
+    ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
+};
 
 /// Allocation-free CW receiver channel for one tuned signal.
 #[derive(Clone, Debug)]
@@ -66,8 +69,11 @@ impl CwChannel {
             notches: std::array::from_fn(|_| IqNotch::new()),
             channel_fir: design_lowpass_with(
                 audio_rate,
-                200.0,
-                LowpassDesign::default(),
+                DEFAULT_CHANNEL_PASSBAND_HZ,
+                LowpassDesign {
+                    window: DEFAULT_CHANNEL_WINDOW,
+                    ..LowpassDesign::default()
+                },
             ),
             channel_iir: IirChannelFilter::new(),
             agc: CwAgc::new(),
@@ -80,9 +86,9 @@ impl CwChannel {
             rf_meter: 1e-6,
             last_iq_rate: iq_sample_rate,
             last_decimation: 0,
-            last_bandwidth: 200.0,
-            last_window: WindowKind::Gaussian,
-            last_kaiser_beta: 6.0,
+            last_bandwidth: DEFAULT_CHANNEL_PASSBAND_HZ,
+            last_window: DEFAULT_CHANNEL_WINDOW,
+            last_kaiser_beta: DEFAULT_KAISER_BETA,
             last_passband_flatten: false,
             last_channel_filter: ChannelFilterKind::LinearFir,
             last_decim_filter: DecimFilterKind::LinearFir,
@@ -399,6 +405,38 @@ mod tests {
              rms with={rms_with} without={rms_without}",
             interferer.hz(),
             listen.hz()
+        );
+    }
+
+    #[test]
+    fn channel_filter_rejects_skirt_interferer() {
+        let rate = 12_000.0;
+        let n = rate as usize * 3;
+        let iq = tone_iq(rate, 120.0, n);
+        let mut channel = CwChannel::new(rate);
+        let mut narrow = CwChannelSettings {
+            bfo_hz: 650.0,
+            passband_hz: 200.0,
+            window: WindowKind::Blackman,
+            ..CwChannelSettings::default()
+        };
+        narrow.agc.enabled = false;
+        let origin = ListenOrigin::at_center();
+        let mut filtered = Vec::new();
+        channel.process(&iq, rate, &narrow, origin, &mut filtered);
+        let mut bypassed = narrow.clone();
+        bypassed.diagnostic.channel_fir = true;
+        let mut raw = Vec::new();
+        channel.process(&iq, rate, &bypassed, origin, &mut raw);
+        let rms = |v: &[f32]| {
+            let s = &v[v.len() * 2 / 3..];
+            (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+        };
+        assert!(
+            rms(&filtered) < rms(&raw) * 0.12,
+            "120 Hz skirt should be crushed vs FIR bypass: filtered={} bypass={}",
+            rms(&filtered),
+            rms(&raw)
         );
     }
 

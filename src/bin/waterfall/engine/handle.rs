@@ -49,6 +49,7 @@ impl EngineHandle {
     }
 
     /// Headless UI harness: no engine thread; push [`EnginePoll`] snapshots via [`Self::inject_poll`].
+    #[cfg(test)]
     pub fn spawn_for_test() -> Self {
         Self {
             cmd_tx: None,
@@ -61,6 +62,7 @@ impl EngineHandle {
     }
 
     /// Queue a synthetic engine poll (test handles only).
+    #[cfg(test)]
     pub fn inject_poll(&self, poll: EnginePoll) {
         let Some(q) = &self.test_polls else {
             return;

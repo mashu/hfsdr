@@ -17,6 +17,7 @@ mod autonotch;
 mod channel;
 mod decimator;
 mod detector;
+mod filter_plan;
 mod fir;
 mod iir_channel;
 mod lms;
@@ -33,9 +34,14 @@ pub use autonotch::AutoNotch;
 pub use channel::CwChannel;
 pub use decimator::{audio_sample_rate, decimation_factor, effective_decimation, Decimator};
 pub use detector::ProductDetector;
+pub use filter_plan::{
+    channel_group_delay_ms, clamp_passband_hz, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
+    CHANNEL_PASSBAND_NARROW_MAX_HZ, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA,
+    MAX_KAISER_BETA, MIN_KAISER_BETA, PASSBAND_STEP_HZ,
+};
 pub use fir::{
-    channel_group_delay_ms, design_gaussian_lowpass, design_lowpass, design_lowpass_with,
-    FirFilter, LowpassDesign, WindowKind,
+    design_gaussian_lowpass, design_lowpass, design_lowpass_with, FirFilter, LowpassDesign,
+    WindowKind,
 };
 pub use lms::{LmsPredictor, LmsStep};
 pub use nco::ComplexNco;
@@ -45,5 +51,5 @@ pub use notch::IqNotch;
 pub use settings::{
     AgcMode, AgcSettings, ApfSettings, AutoNotchSettings, ChannelFilterKind, CwChannelSettings,
     DecimFilterKind, DiagnosticBypassSettings, NoiseBlankerSettings, NoiseReductionSettings,
-    NotchSpec, MAX_NOTCHES,
+    NotchSpec, DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
 };

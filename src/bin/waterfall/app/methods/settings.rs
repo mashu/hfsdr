@@ -9,7 +9,7 @@ impl WaterfallApp {
         self.radio.cw.channel_filter = channel_filter_from_u8(s.channel_filter);
         self.radio.cw.decim_filter = channel_filter_from_u8(s.decim_filter);
         self.radio.cw.window = window_from_u8(s.window);
-        self.radio.cw.kaiser_beta = s.kaiser_beta.clamp(2.0, 14.0);
+        self.radio.cw.kaiser_beta = s.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
         self.radio.cw.passband_flatten = s.passband_flatten;
         self.radio.cw.decimation = s.decimation;
         self.radio.cw.noise_blanker.enabled = s.nb_enabled;
