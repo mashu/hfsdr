@@ -11,6 +11,7 @@ pub trait KiwiControls {
     fn supports_passband(&self) -> bool;
     fn set_passband(&mut self, low_hz: i32, high_hz: i32) -> Result<()>;
     fn set_agc(&mut self, on: bool) -> Result<()>;
+    fn rf_agc_on(&self) -> bool;
     fn set_man_gain(&mut self, gain: u8) -> Result<()>;
     fn set_rf_attn_db(&mut self, db: f32) -> Result<()>;
     fn has_rf_attn(&self) -> bool;
@@ -57,6 +58,10 @@ mod tests {
         let mut src = KiwiSource::new("example.test", 8073);
         assert!(KiwiControls::supports_passband(&src));
         KiwiControls::set_passband(&mut src, -4_000, 4_000).unwrap();
+        KiwiControls::set_agc(&mut src, true).unwrap();
+        assert!(KiwiControls::rf_agc_on(&src));
+        KiwiControls::set_agc(&mut src, false).unwrap();
+        assert!(!KiwiControls::rf_agc_on(&src));
         KiwiControls::set_agc(&mut src, true).unwrap();
         KiwiControls::set_man_gain(&mut src, 60).unwrap();
         KiwiControls::set_rf_attn_db(&mut src, 6.0).unwrap();

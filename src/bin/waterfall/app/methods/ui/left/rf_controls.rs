@@ -71,12 +71,12 @@ impl WaterfallApp {
             Some(&[
                 ("Hardware loop", ACCENT),
                 (
-                    "When on, Kiwi runs its own SND AGC — the RF gain slider has no effect on IQ.",
+                    "Kiwi normalizes IQ in hardware when on — manGain is then applied in software here.",
                     MUTED,
                 ),
                 ("Dual AGC", OK),
                 (
-                    "Turn off for manual RF gain (Yaesu-style). Software IQ AGC is separate.",
+                    "Software IQ AGC holds AF steady; RF gain + manGain still move the S-meter and waterfall.",
                     MUTED,
                 ),
             ]),
@@ -116,21 +116,21 @@ impl WaterfallApp {
             }
             attach_rich_tooltip(
                 &resp,
-                Some("RF gain"),
+                Some("HW gain (manGain)"),
                 &[
                     ("Scale", ACCENT),
                     (
                         "0 dB = full gain (Kiwi manGain 100). Each step is ~1 dB; −50 dB is the old Kiwi default.",
                         MUTED,
                     ),
-                    ("Kiwi RF AGC off", OK),
+                    ("Kiwi RF AGC on", OK),
                     (
-                        "Manual gain applies only with Kiwi RF AGC off — unlike a Yaesu, Kiwi IQ ignores manGain while AGC is on.",
+                        "Kiwi firmware ignores manGain while AGC is on — we apply the same dB in software so the S-meter and waterfall still move.",
                         MUTED,
                     ),
-                    ("Yaesu analogy", MUTED),
+                    ("Kiwi RF AGC off", OK),
                     (
-                        "Start at 0 dB (max) and reduce gain if the band is hot — same idea as RF GAIN fully clockwise.",
+                        "Gain is applied in Kiwi hardware (CAT manGain). Stacks with the RF gain slider above.",
                         MUTED,
                     ),
                 ],
