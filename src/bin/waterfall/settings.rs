@@ -64,6 +64,8 @@ pub struct AppSettings {
     pub window: u8,
     pub kaiser_beta: f32,
     pub passband_flatten: bool,
+    #[serde(default)]
+    pub economy_filter: bool,
     pub decimation: u32,
     pub nb_enabled: bool,
     pub nb_threshold: f32,
@@ -192,6 +194,7 @@ impl Default for AppSettings {
             window: window_to_persisted(DEFAULT_CHANNEL_WINDOW),
             kaiser_beta: DEFAULT_KAISER_BETA,
             passband_flatten: false,
+            economy_filter: false,
             decimation: 0,
             nb_enabled: false,
             nb_threshold: 6.0,

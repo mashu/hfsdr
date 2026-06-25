@@ -72,12 +72,11 @@ impl Engine {
     }
 
     pub(super) fn demod_input<'a>(&self, samples: &'a [Complex32], rate: f32) -> &'a [Complex32] {
-        let max = demod_tail_max(rate);
-        if max == usize::MAX {
-            samples
-        } else {
-            self.wideband_tail(samples, rate, max)
+        if self.recorder.is_some() {
+            return samples;
         }
+        let max = demod_tail_max(rate);
+        self.wideband_tail(samples, rate, max)
     }
     pub(super) fn link_meta(&self) -> (f32, f64, bool) {
         if let Some(pb) = &self.playback {

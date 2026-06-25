@@ -19,6 +19,10 @@ mod perf;
 mod policy;
 mod types;
 
+pub use policy::{
+    demod_tail_max, wideband_tail_len, MAX_AUDIO_SAMPLES_NARROW, MAX_AUDIO_SAMPLES_WB,
+};
+
 pub use handle::EngineHandle;
 pub(crate) use inner::Engine;
 pub(crate) use types::EngineShared;

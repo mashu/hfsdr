@@ -31,7 +31,7 @@ pub use anti_alias::AntiAliasFilter;
 pub use agc::CwAgc;
 pub use apf::AudioPeakFilter;
 pub use autonotch::AutoNotch;
-pub use channel::CwChannel;
+pub use channel::{CwChannel, CwStageMetrics};
 pub use decimator::{audio_sample_rate, decimation_factor, effective_decimation, Decimator};
 pub use detector::ProductDetector;
 pub use filter_plan::{

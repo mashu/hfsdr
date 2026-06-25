@@ -25,7 +25,7 @@ pub use cw::{
     design_lowpass,
     design_lowpass_with, effective_decimation, audio_sample_rate, AgcMode, AgcSettings, ApfSettings,
     AudioPeakFilter, AutoNotch, AutoNotchSettings, ChannelFilterKind, ComplexNco, CwAgc,
-    CwChannel, CwChannelSettings, DecimFilterKind, Decimator, FirFilter, LowpassDesign, IqNotch,
+    CwChannel, CwChannelSettings, CwStageMetrics, DecimFilterKind, Decimator, FirFilter, LowpassDesign, IqNotch,
     LmsPredictor,
     LmsStep, NoiseBlanker, NoiseBlankerSettings, NoiseReduction, NoiseReductionSettings, NotchSpec,
     ProductDetector, WindowKind, MAX_NOTCHES, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
