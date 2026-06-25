@@ -6,6 +6,20 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::log;
 
+#[cfg(test)]
+use std::sync::Mutex;
+
+#[cfg(test)]
+static TEST_OUTPUT_DEVICES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// Headless UI tests: skip cpal/ALSA enumeration (faster, quieter CI).
+#[cfg(test)]
+pub fn set_test_output_devices(devices: Option<Vec<String>>) {
+    if let Ok(mut guard) = TEST_OUTPUT_DEVICES.lock() {
+        *guard = devices;
+    }
+}
+
 /// Standard device rate — demod output is resampled in [`AudioOutput::push`].
 pub const OUTPUT_SAMPLE_RATE: u32 = 48_000;
 
@@ -21,6 +35,12 @@ pub struct AudioOutput {
 
 impl AudioOutput {
     pub fn list_output_devices() -> Vec<String> {
+        #[cfg(test)]
+        if let Ok(guard) = TEST_OUTPUT_DEVICES.lock() {
+            if let Some(devices) = guard.as_ref() {
+                return devices.clone();
+            }
+        }
         let host = cpal::default_host();
         let Ok(devices) = host.output_devices() else {
             return Vec::new();
@@ -172,4 +192,34 @@ fn pick_output_config(device: &Device) -> Option<SupportedStreamConfig> {
         })
         .ok()
         .filter(|c| c.sample_format() == cpal::SampleFormat::F32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtrb::RingBuffer;
+
+    #[test]
+    fn fill_output_mono_drains_ring() {
+        let (mut prod, mut cons) = RingBuffer::<f32>::new(4);
+        prod.push(0.25).unwrap();
+        prod.push(0.75).unwrap();
+        let mut data = [0.0_f32; 3];
+        fill_output(&mut data, 1, &mut cons);
+        assert!((data[0] - 0.25).abs() < 1e-6);
+        assert!((data[1] - 0.75).abs() < 1e-6);
+        assert_eq!(data[2], 0.0);
+    }
+
+    #[test]
+    fn fill_output_stereo_duplicates_mono() {
+        let (mut prod, mut cons) = RingBuffer::<f32>::new(2);
+        prod.push(0.5).unwrap();
+        let mut data = [0.0_f32; 4];
+        fill_output(&mut data, 2, &mut cons);
+        assert!((data[0] - 0.5).abs() < 1e-6);
+        assert!((data[1] - 0.5).abs() < 1e-6);
+        assert_eq!(data[2], 0.0);
+        assert_eq!(data[3], 0.0);
+    }
 }

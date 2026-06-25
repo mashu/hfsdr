@@ -531,4 +531,42 @@ mod tests {
         src.tune(14_030_000.0).unwrap();
         assert_eq!(src.frequency(), 14_030_000.0);
     }
+
+    #[test]
+    fn iq_ready_and_link_state_before_connect() {
+        let src = KiwiSource::new("kiwi.test", 8073);
+        assert!(!src.iq_ready());
+        assert!(!src.link_alive());
+        assert!(src.link_error().is_none());
+    }
+
+    #[test]
+    fn has_rf_attn_reflects_atomic() {
+        let src = KiwiSource::new("kiwi.test", 8073);
+        assert!(!src.has_rf_attn.load(Ordering::Relaxed));
+        src.has_rf_attn.store(true, Ordering::Relaxed);
+        assert!(KiwiControls::has_rf_attn(&src));
+    }
+
+    #[test]
+    fn start_while_streaming_is_invalid_state() {
+        let mut src = KiwiSource::new("127.0.0.1", 1);
+        src.streaming = true;
+        assert!(matches!(src.start(), Err(SourceError::InvalidState(_))));
+    }
+
+    #[test]
+    fn builder_gen_attn_and_compression_defaults() {
+        let src = KiwiSource::new("kiwi.test", 8073).with_gen_attn(12);
+        assert_eq!(src.gen_attn, 12);
+        assert!(!src.compression);
+    }
+
+    #[test]
+    fn stop_is_idempotent_before_streaming() {
+        let mut src = KiwiSource::new("kiwi.test", 8073);
+        src.stop().unwrap();
+        src.stop().unwrap();
+        assert!(!src.is_streaming());
+    }
 }

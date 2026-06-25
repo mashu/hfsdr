@@ -574,4 +574,22 @@ mod tests {
         }
         assert!(!sk.store().is_empty(), "adaptive decoder produced no spot");
     }
+
+    #[test]
+    fn trim_decoded_prefix_removes_through_call() {
+        let mut text = "CQ CQ DE W1AW".to_string();
+        trim_decoded_prefix(&mut text, "W1AW");
+        assert!(text.is_empty());
+
+        let mut tail = "CQ W1AW TEST".to_string();
+        trim_decoded_prefix(&mut tail, "W1AW");
+        assert_eq!(tail.trim(), "TEST");
+    }
+
+    #[test]
+    fn trim_decoded_prefix_clears_when_call_missing() {
+        let mut text = "CQ CQ".to_string();
+        trim_decoded_prefix(&mut text, "W1AW");
+        assert!(text.is_empty());
+    }
 }

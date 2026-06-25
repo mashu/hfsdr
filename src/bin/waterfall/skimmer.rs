@@ -265,3 +265,65 @@ impl SkimmerHandle {
             .unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+
+    fn sample_input(spectrum_val: f32) -> SkimmerInput {
+        SkimmerInput {
+            iq: Vec::new(),
+            spectrum: vec![spectrum_val],
+            iq_rate: 12_000.0,
+            spectrum_rate: 12_000.0,
+            spectrum_pan_hz: 0.0,
+            center_hz: 14_010_000.0,
+        }
+    }
+
+    #[test]
+    fn coalesce_frame_keeps_latest() {
+        let (tx, rx) = sync_channel(8);
+        tx.try_send(SkimmerMsg::Frame(sample_input(2.0))).unwrap();
+        let (out, deferred) = coalesce_frame(&rx, sample_input(1.0));
+        assert_eq!(out.spectrum[0], 2.0);
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
+    fn coalesce_defers_control_messages() {
+        let (tx, rx) = sync_channel(8);
+        tx.try_send(SkimmerMsg::Clear).unwrap();
+        let (out, deferred) = coalesce_frame(&rx, sample_input(1.0));
+        assert_eq!(out.spectrum[0], 1.0);
+        assert_eq!(deferred.len(), 1);
+        assert!(matches!(deferred[0], SkimmerMsg::Clear));
+    }
+
+    #[test]
+    fn handle_clear_resets_spots_and_channels() {
+        let handle = SkimmerHandle::spawn("test".into());
+        handle.clear();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(handle.spots().is_empty());
+        assert_eq!(handle.active_channels(), 0);
+    }
+
+    #[test]
+    fn submit_ignored_when_disabled() {
+        let mut handle = SkimmerHandle::spawn("test".into());
+        handle.set_enabled(false);
+        handle.submit(
+            &[Complex32::new(1.0, 0.0)],
+            &[-90.0; 64],
+            12_000.0,
+            12_000.0,
+            12_000.0,
+            14_010_000.0,
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(handle.spots().is_empty());
+    }
+}

@@ -23,6 +23,13 @@ pub fn classify_level(
     if !streaming {
         return AudioLevelHint::Idle;
     }
+    if !peak.is_finite()
+        || !agc_gain.is_finite()
+        || !agc_envelope.is_finite()
+        || !agc_target.is_finite()
+    {
+        return AudioLevelHint::Idle;
+    }
     if peak < 1e-5 && agc_envelope < 1e-5 {
         return AudioLevelHint::Idle;
     }
@@ -53,7 +60,12 @@ const SMETER_IQ_S9: f32 = 0.1;
 /// Calibrated so a healthy CW signal lands mid-scale and a ×10 change in IQ amplitude
 /// (e.g. +20 dB of software RF gain) moves the needle by +20 dB (~3 S-units).
 pub fn iq_rf_level_to_dbm(iq_rf_level: f32) -> f32 {
-    let ratio = iq_rf_level.max(1e-9) / SMETER_IQ_S9;
+    let level = if iq_rf_level.is_finite() {
+        iq_rf_level
+    } else {
+        0.0
+    };
+    let ratio = level.max(1e-9) / SMETER_IQ_S9;
     (-73.0 + 20.0 * ratio.log10()).clamp(SMETER_DBM_MIN, SMETER_DBM_MAX)
 }
 
@@ -91,4 +103,84 @@ pub(crate) fn dbm_to_needle_t(dbm: f32) -> f32 {
 
 pub(crate) fn needle_angle(t: f32) -> f32 {
     std::f32::consts::PI * (1.0 - t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_level_idle_when_not_streaming() {
+        assert_eq!(
+            classify_level(0.5, true, 1.0, 0.5, 0.25, false),
+            AudioLevelHint::Idle
+        );
+    }
+
+    #[test]
+    fn classify_level_sweet_spot_mid_peak() {
+        assert_eq!(
+            classify_level(0.35, true, 2.0, 0.2, 0.25, true),
+            AudioLevelHint::SweetSpot
+        );
+    }
+
+    #[test]
+    fn classify_level_too_hot_when_clipping() {
+        assert_eq!(
+            classify_level(0.95, true, 1.0, 0.5, 0.25, true),
+            AudioLevelHint::TooHot
+        );
+    }
+
+    #[test]
+    fn classify_level_too_quiet_when_agc_starved() {
+        assert_eq!(
+            classify_level(0.2, true, 20.0, 0.01, 0.25, true),
+            AudioLevelHint::TooQuiet
+        );
+    }
+
+    #[test]
+    fn iq_rf_level_maps_decades_to_db() {
+        let s9 = iq_rf_level_to_dbm(0.1);
+        let ten_x = iq_rf_level_to_dbm(1.0);
+        assert!((ten_x - s9 - 20.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn dbm_to_s_reading_classic_scale() {
+        assert_eq!(dbm_to_s_reading(-73.0), "S9");
+        assert_eq!(dbm_to_s_reading(-67.0), "S9+1");
+        assert_eq!(dbm_to_s_reading(-97.0), "S5");
+    }
+
+    #[test]
+    fn needle_position_monotonic() {
+        let low = dbm_to_needle_t(-120.0);
+        let mid = dbm_to_needle_t(-80.0);
+        let high = dbm_to_needle_t(-40.0);
+        assert!(low < mid);
+        assert!(mid < high);
+        assert!((needle_angle(0.0) - std::f32::consts::PI).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rf_level_ignores_hardware_rssi() {
+        assert_eq!(rf_level_dbm(Some(-50.0), 0.05), iq_rf_level_to_dbm(0.05));
+    }
+
+    #[test]
+    fn iq_rf_level_nan_maps_to_floor() {
+        assert_eq!(iq_rf_level_to_dbm(f32::NAN), -127.0);
+        assert!(iq_rf_level_to_dbm(f32::NAN).is_finite());
+    }
+
+    #[test]
+    fn classify_level_idle_on_nan_inputs() {
+        assert_eq!(
+            classify_level(f32::NAN, true, 1.0, 0.2, 0.25, true),
+            AudioLevelHint::Idle
+        );
+    }
 }

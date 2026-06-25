@@ -208,4 +208,135 @@ mod tests {
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].text, "G0AAB");
     }
+
+    #[test]
+    fn min_snr_filters_weak_spots() {
+        let cfg = SpotFilterConfig {
+            min_snr_db: 15.0,
+            cq_only: false,
+            max_age_secs: 0.0,
+            callsign_prefix: String::new(),
+            continent_filter: false,
+            show_continents: [true; 7],
+            sort: SpotSort::SnrDesc,
+        };
+        let spots = vec![spot("G0ABC", 10.0, SpotKind::Heard), spot("G1ABC", 20.0, SpotKind::Heard)];
+        let out = filter_spots(&spots, &cfg, &ContinentResolver::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].callsign.as_deref(), Some("G1ABC"));
+    }
+
+    #[test]
+    fn hide_heard_labels_skips_heard_kind() {
+        let labels = build_spot_labels(
+            &[spot("G0ABC", 20.0, SpotKind::Heard)],
+            7_030_000.0,
+            &SpotLabelConfig {
+                hide_heard: true,
+                bucket_hz: 80.0,
+                label_limit: 10,
+            },
+        );
+        assert!(labels.is_empty());
+    }
+
+    #[test]
+    fn cq_label_flag_set_for_calling_cq() {
+        let labels = build_spot_labels(
+            &[spot("G0ABC", 20.0, SpotKind::CallingCq)],
+            7_030_000.0,
+            &SpotLabelConfig {
+                hide_heard: false,
+                bucket_hz: 80.0,
+                label_limit: 10,
+            },
+        );
+        assert_eq!(labels.len(), 1);
+        assert!(labels[0].cq);
+    }
+
+    #[test]
+    fn label_limit_truncates() {
+        let spots: Vec<Spot> = (0..5)
+            .map(|i| {
+                let mut s = spot(&format!("G{i}ABC"), 10.0 + i as f32, SpotKind::Heard);
+                s.frequency_hz = 7_030_000.0 + i as f64 * 5_000.0;
+                s
+            })
+            .collect();
+        let labels = build_spot_labels(
+            &spots,
+            7_030_000.0,
+            &SpotLabelConfig {
+                hide_heard: false,
+                bucket_hz: 10.0,
+                label_limit: 2,
+            },
+        );
+        assert_eq!(labels.len(), 2);
+    }
+
+    #[test]
+    fn sort_by_frequency_orders_ascending() {
+        let mut a = spot("G0AAA", 10.0, SpotKind::Heard);
+        a.frequency_hz = 7_040_000.0;
+        let mut b = spot("G0AAB", 10.0, SpotKind::Heard);
+        b.frequency_hz = 7_020_000.0;
+        let cfg = SpotFilterConfig {
+            min_snr_db: 0.0,
+            cq_only: false,
+            max_age_secs: 0.0,
+            callsign_prefix: String::new(),
+            continent_filter: false,
+            show_continents: [true; 7],
+            sort: SpotSort::Frequency,
+        };
+        let out = filter_spots(&[a, b], &cfg, &ContinentResolver::new());
+        assert!(out[0].frequency_hz < out[1].frequency_hz);
+    }
+
+    #[test]
+    fn continent_filter_respects_show_flags() {
+        let cfg = SpotFilterConfig {
+            min_snr_db: 0.0,
+            cq_only: false,
+            max_age_secs: 0.0,
+            callsign_prefix: String::new(),
+            continent_filter: true,
+            show_continents: {
+                let mut show = [true; 7];
+                show[continent_index(Continent::Europe)] = false;
+                show
+            },
+            sort: SpotSort::SnrDesc,
+        };
+        let spots = vec![spot("G0ABC", 15.0, SpotKind::Heard)];
+        let out = filter_spots(&spots, &cfg, &ContinentResolver::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn max_age_filters_stale_spots() {
+        let fresh = spot("G0ABC", 15.0, SpotKind::Heard);
+        let mut stale = spot("G1ABC", 20.0, SpotKind::Heard);
+        stale.last_heard = Instant::now() - std::time::Duration::from_secs(120);
+        let cfg = SpotFilterConfig {
+            min_snr_db: 0.0,
+            cq_only: false,
+            max_age_secs: 60.0,
+            callsign_prefix: String::new(),
+            continent_filter: false,
+            show_continents: [true; 7],
+            sort: SpotSort::SnrDesc,
+        };
+        let out = filter_spots(&[fresh, stale], &cfg, &ContinentResolver::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].callsign.as_deref(), Some("G0ABC"));
+    }
+
+    #[test]
+    fn continent_index_covers_all_variants() {
+        assert_eq!(continent_index(Continent::NorthAmerica), 0);
+        assert_eq!(continent_index(Continent::Antarctica), 6);
+    }
 }

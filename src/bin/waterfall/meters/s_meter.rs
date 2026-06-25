@@ -356,3 +356,45 @@ pub fn show_analog_s_meter(ui: &mut Ui, p: &AnalogSmeterParams) -> eframe::egui:
     }
     resp
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meters::level::{dbm_to_needle_t, needle_angle, SMETER_DBM_MAX, SMETER_DBM_MIN};
+
+    #[test]
+    fn scale_marks_cover_s9_and_plus() {
+        let marks = smeter_scale_marks();
+        assert!(marks.iter().any(|(l, _)| *l == "S9"));
+        assert!(marks.iter().any(|(l, _)| *l == "+40"));
+    }
+
+    #[test]
+    fn arc_point_lies_on_sem_circle() {
+        let center = Pos2::new(100.0, 200.0);
+        let p0 = arc_point(center, 50.0, 0.0);
+        let p1 = arc_point(center, 50.0, 1.0);
+        let r0 = ((p0.x - center.x).powi(2) + (p0.y - center.y).powi(2)).sqrt();
+        let r1 = ((p1.x - center.x).powi(2) + (p1.y - center.y).powi(2)).sqrt();
+        assert!((r0 - 50.0).abs() < 0.01);
+        assert!((r1 - 50.0).abs() < 0.01);
+        assert!(p0.y <= center.y);
+        assert!(p1.y <= center.y);
+    }
+
+    #[test]
+    fn arc_zone_color_warms_with_level() {
+        let quiet = arc_zone_color(dbm_to_needle_t(-100.0));
+        let hot = arc_zone_color(dbm_to_needle_t(-40.0));
+        assert_ne!(quiet, hot);
+        let dbm = SMETER_DBM_MIN + 0.5 * (SMETER_DBM_MAX - SMETER_DBM_MIN);
+        let mid = arc_zone_color(dbm_to_needle_t(dbm));
+        assert_ne!(mid, hot);
+    }
+
+    #[test]
+    fn needle_angle_endpoints() {
+        assert!((needle_angle(0.0) - std::f32::consts::PI).abs() < 1e-5);
+        assert!(needle_angle(1.0).abs() < 1e-5);
+    }
+}

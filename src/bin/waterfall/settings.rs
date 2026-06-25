@@ -337,4 +337,12 @@ mod tests {
         assert_eq!(s.kiwi_man_gain, 100);
         assert_eq!(s.kiwi.man_gain, 100);
     }
+
+    #[test]
+    fn default_skimmer_and_audio_flags() {
+        let s = AppSettings::default();
+        assert!(s.skimmer_enabled);
+        assert!(s.audio_enabled);
+        assert!(s.lock_ham_bands);
+    }
 }

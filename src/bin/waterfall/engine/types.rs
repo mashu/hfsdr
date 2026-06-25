@@ -224,3 +224,120 @@ pub struct EnginePoll {
     pub last_error: Option<String>,
     pub audio_scope: Vec<f32>,
 }
+
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
+}
+
+fn sanitize_db_row(row: &mut Vec<f32>, fallback_len: usize) {
+    if row.is_empty() {
+        row.resize(fallback_len.max(1), -120.0);
+        return;
+    }
+    for v in row.iter_mut() {
+        if !v.is_finite() {
+            *v = -120.0;
+        }
+    }
+}
+
+impl EngineStats {
+    /// Clamp non-finite meter/plot inputs before the UI consumes them.
+    pub fn sanitized(mut self) -> Self {
+        self.sample_rate = finite_or(self.sample_rate, 12_000.0).max(1.0);
+        self.iq_passband_hz = finite_or(self.iq_passband_hz, self.sample_rate).max(1.0);
+        self.effective_sps = finite_or(self.effective_sps, 0.0).max(0.0);
+        self.snr_db = finite_or(self.snr_db, 0.0);
+        self.iq_rf_level = finite_or(self.iq_rf_level, 0.0).max(0.0);
+        self.agc_gain = finite_or(self.agc_gain, 1.0).max(1e-6);
+        self.agc_envelope = finite_or(self.agc_envelope, 0.0).max(0.0);
+        self.audio_peak = finite_or(self.audio_peak, 0.0).max(0.0);
+        self.audio_rms = finite_or(self.audio_rms, 0.0).max(0.0);
+        self.iq_buffer_fill = finite_or(self.iq_buffer_fill, 0.0).clamp(0.0, 1.0);
+        self.iq_buffer_secs = finite_or(self.iq_buffer_secs, 0.0).max(0.0);
+        self.spectrum_rate = finite_or(self.spectrum_rate, self.sample_rate).max(1.0);
+        self.kiwi_rf_attn_db = finite_or(self.kiwi_rf_attn_db, 0.0);
+        if let Some(rssi) = self.rssi_dbm {
+            self.rssi_dbm = Some(finite_or(rssi, -127.0));
+        }
+        self.spectrum_fft = self.spectrum_fft.max(1024);
+        self
+    }
+}
+
+impl EnginePoll {
+    /// Replace NaN/Inf spectrum bins and bogus stats before UI ingest.
+    pub fn sanitized(mut self, fft_fallback_len: usize) -> Self {
+        self.stats = self.stats.sanitized();
+        let row_len = self.latest.len().max(fft_fallback_len).max(FFT_SIZE);
+        sanitize_db_row(&mut self.latest, row_len);
+        for row in &mut self.rows {
+            sanitize_db_row(row, self.latest.len());
+        }
+        for sample in &mut self.audio_scope {
+            if !sample.is_finite() {
+                *sample = 0.0;
+            }
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_stats_replaces_nan() {
+        let mut stats = EngineStats::default();
+        stats.sample_rate = f32::NAN;
+        stats.snr_db = f32::INFINITY;
+        stats.iq_rf_level = f32::NAN;
+        stats.agc_gain = f32::NAN;
+        let stats = stats.sanitized();
+        assert!(stats.sample_rate.is_finite() && stats.sample_rate > 0.0);
+        assert!(stats.snr_db.is_finite());
+        assert!(stats.iq_rf_level.is_finite());
+        assert!(stats.agc_gain.is_finite() && stats.agc_gain > 0.0);
+    }
+
+    #[test]
+    fn sanitize_poll_fills_empty_spectrum() {
+        let poll = EnginePoll {
+            state: ConnState::Streaming,
+            stats: EngineStats::default(),
+            spots: Vec::new(),
+            rows: Vec::new(),
+            latest: Vec::new(),
+            last_error: None,
+            audio_scope: vec![f32::NAN, 1.0],
+        };
+        let poll = poll.sanitized(FFT_SIZE);
+        assert_eq!(poll.latest.len(), FFT_SIZE);
+        assert!(poll.latest.iter().all(|v| v.is_finite()));
+        assert!(poll.audio_scope.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn sanitize_poll_replaces_nan_bins() {
+        let mut latest = vec![-90.0; 8];
+        latest[3] = f32::NAN;
+        latest[7] = f32::INFINITY;
+        let poll = EnginePoll {
+            state: ConnState::Streaming,
+            stats: EngineStats::default(),
+            spots: Vec::new(),
+            rows: vec![latest.clone()],
+            latest,
+            last_error: None,
+            audio_scope: Vec::new(),
+        };
+        let poll = poll.sanitized(8);
+        assert!(poll.latest.iter().all(|v| v.is_finite()));
+        assert!(poll.rows[0].iter().all(|v| v.is_finite()));
+    }
+}

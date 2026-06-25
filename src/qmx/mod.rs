@@ -483,3 +483,117 @@ fn pick_input_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfi
         .default_input_config()
         .map_err(|e| SourceError::Unsupported(e.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtrb::RingBuffer;
+
+    #[test]
+    fn iq_ring_capacity_is_power_of_two() {
+        let cap = iq_ring_capacity();
+        assert!(cap.is_power_of_two());
+        assert!(cap >= 4096);
+    }
+
+    #[test]
+    fn device_looks_like_qmx_matches_names() {
+        assert!(device_looks_like_qmx("QMX USB Audio"));
+        assert!(device_looks_like_qmx("QRP Labs Interface"));
+        assert!(!device_looks_like_qmx("Built-in Audio"));
+    }
+
+    #[test]
+    fn resolve_serial_port_trims_and_passthrough() {
+        assert_eq!(resolve_serial_port(" /dev/ttyUSB0 ").unwrap(), "/dev/ttyUSB0");
+    }
+
+    #[test]
+    fn push_f32_skips_mono_and_tx() {
+        let (prod, _cons) = RingBuffer::<Complex32>::new(8);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let transmitting = Arc::new(AtomicBool::new(false));
+        let mut ctx = AudioCtx {
+            prod,
+            dropped: Arc::clone(&dropped),
+            transmitting: Arc::clone(&transmitting),
+        };
+        push_interleaved_f32(&[1.0, 0.0, 0.5, 0.5], 1, &mut ctx);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+
+        transmitting.store(true, Ordering::Relaxed);
+        push_interleaved_f32(&[1.0, 0.0], 2, &mut ctx);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn push_f32_writes_stereo_iq() {
+        let (prod, mut cons) = RingBuffer::<Complex32>::new(16);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let transmitting = Arc::new(AtomicBool::new(false));
+        let mut ctx = AudioCtx {
+            prod,
+            dropped,
+            transmitting,
+        };
+        push_interleaved_f32(&[0.8, -0.2, 0.3, 0.4], 2, &mut ctx);
+        let a = cons.pop().expect("first frame");
+        let b = cons.pop().expect("second frame");
+        assert!((a.re - 0.8).abs() < 1e-5);
+        assert!((a.im + 0.2).abs() < 1e-5);
+        assert!((b.re - 0.3).abs() < 1e-5);
+        assert!((b.im - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn push_i16_scales_to_unit() {
+        let (prod, mut cons) = RingBuffer::<Complex32>::new(8);
+        let ctx = &mut AudioCtx {
+            prod,
+            dropped: Arc::new(AtomicU64::new(0)),
+            transmitting: Arc::new(AtomicBool::new(false)),
+        };
+        push_interleaved_i16(&[i16::MAX, 0], 2, ctx);
+        let s = cons.pop().unwrap();
+        assert!((s.re - 1.0).abs() < 0.01);
+        assert!(s.im.abs() < 1e-5);
+    }
+
+    #[test]
+    fn push_i32_scales_24bit() {
+        let (prod, mut cons) = RingBuffer::<Complex32>::new(8);
+        let ctx = &mut AudioCtx {
+            prod,
+            dropped: Arc::new(AtomicU64::new(0)),
+            transmitting: Arc::new(AtomicBool::new(false)),
+        };
+        let full_scale = 8_388_607i32;
+        push_interleaved_i32(&[full_scale, 0], 2, ctx);
+        let s = cons.pop().unwrap();
+        assert!((s.re - 1.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn list_helpers_do_not_panic() {
+        let _ = list_serial_ports();
+        let _ = list_input_devices();
+    }
+
+    #[test]
+    fn push_f32_counts_ring_overflow() {
+        let (prod, _cons) = RingBuffer::<Complex32>::new(2);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let ctx = &mut AudioCtx {
+            prod,
+            dropped: Arc::clone(&dropped),
+            transmitting: Arc::new(AtomicBool::new(false)),
+        };
+        push_interleaved_f32(&[1.0, 0.0, 0.5, 0.5, 0.25, 0.25], 2, ctx);
+        assert!(dropped.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn resolve_audio_device_passthrough() {
+        assert_eq!(resolve_audio_device(" My Device ").unwrap(), "My Device");
+    }
+}

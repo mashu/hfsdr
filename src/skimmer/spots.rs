@@ -162,4 +162,34 @@ mod tests {
         let spot = &store.sorted(SpotSort::SnrDesc)[0];
         assert_eq!(spot.sources.len(), 2);
     }
+
+    #[test]
+    fn higher_rank_call_wins() {
+        let mut store = SpotStore::new();
+        store.observe(7_030_000.0, Some("AA1A".into()), 10, SpotKind::Heard, 20.0, 28.0, "rx1");
+        store.observe(7_030_000.0, Some("BB2B".into()), 50, SpotKind::Heard, 20.0, 28.0, "rx1");
+        let spot = &store.sorted(SpotSort::SnrDesc)[0];
+        assert_eq!(spot.callsign.as_deref(), Some("BB2B"));
+    }
+
+    #[test]
+    fn prune_drops_stale_spots() {
+        let mut store = SpotStore::new();
+        store.observe(7_030_000.0, None, 0, SpotKind::Heard, 10.0, 25.0, "rx1");
+        store.prune(Duration::from_secs(0));
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn clear_and_sort_orders() {
+        let mut store = SpotStore::new();
+        store.observe(7_040_000.0, Some("ZZ9Z".into()), 10, SpotKind::CallingCq, 10.0, 30.0, "rx1");
+        store.observe(7_030_000.0, Some("AA1A".into()), 10, SpotKind::Heard, 30.0, 28.0, "rx1");
+        let by_freq = store.sorted(SpotSort::Frequency);
+        assert!(by_freq[0].frequency_hz < by_freq[1].frequency_hz);
+        let by_call = store.sorted(SpotSort::Callsign);
+        assert_eq!(by_call[0].callsign.as_deref(), Some("AA1A"));
+        store.clear();
+        assert_eq!(store.len(), 0);
+    }
 }

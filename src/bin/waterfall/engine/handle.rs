@@ -1,5 +1,6 @@
 //! UI-side handle to the engine thread.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
@@ -11,11 +12,13 @@ use super::types::{EngineCommand, EngineParams, EnginePoll, EngineShared};
 
 /// UI-side handle to the engine thread.
 pub struct EngineHandle {
-    cmd_tx: Sender<EngineCommand>,
+    cmd_tx: Option<Sender<EngineCommand>>,
     shared: Arc<Mutex<EngineShared>>,
     params: Arc<Mutex<EngineParams>>,
     connect_cancel: Arc<AtomicBool>,
     join: Option<thread::JoinHandle<()>>,
+    /// Headless UI tests inject polls here instead of running the engine thread.
+    test_polls: Option<Arc<Mutex<VecDeque<EnginePoll>>>>,
 }
 
 impl EngineHandle {
@@ -36,16 +39,41 @@ impl EngineHandle {
             .expect("spawn engine thread");
 
         Self {
-            cmd_tx,
+            cmd_tx: Some(cmd_tx),
             shared,
             params,
             connect_cancel,
             join: Some(join),
+            test_polls: None,
+        }
+    }
+
+    /// Headless UI harness: no engine thread; push [`EnginePoll`] snapshots via [`Self::inject_poll`].
+    pub fn spawn_for_test() -> Self {
+        Self {
+            cmd_tx: None,
+            shared: Arc::new(Mutex::new(EngineShared::default())),
+            params: Arc::new(Mutex::new(EngineParams::default())),
+            connect_cancel: Arc::new(AtomicBool::new(false)),
+            join: None,
+            test_polls: Some(Arc::new(Mutex::new(VecDeque::new()))),
+        }
+    }
+
+    /// Queue a synthetic engine poll (test handles only).
+    pub fn inject_poll(&self, poll: EnginePoll) {
+        let Some(q) = &self.test_polls else {
+            return;
+        };
+        if let Ok(mut guard) = q.lock() {
+            guard.push_back(poll);
         }
     }
 
     pub fn send(&self, cmd: EngineCommand) {
-        let _ = self.cmd_tx.send(cmd);
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.send(cmd);
+        }
     }
 
     /// Abort a blocking `connect()` from the UI thread (must run before or with Disconnect).
@@ -61,6 +89,10 @@ impl EngineHandle {
     }
 
     pub fn try_poll(&self) -> Option<EnginePoll> {
+        if let Some(q) = &self.test_polls {
+            let mut guard = q.lock().ok()?;
+            return guard.pop_front();
+        }
         let mut guard = self.shared.try_lock().ok()?;
         let rows: Vec<Vec<f32>> = guard.new_rows.drain(..).collect();
         Some(EnginePoll {
@@ -88,5 +120,74 @@ impl EngineHandle {
 impl Drop for EngineHandle {
     fn drop(&mut self) {
         self.shutdown_now();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{ConnState, EngineParams, EngineStats, FFT_SIZE};
+
+    fn sample_poll(state: ConnState) -> EnginePoll {
+        EnginePoll {
+            state,
+            stats: EngineStats::default(),
+            spots: Vec::new(),
+            rows: Vec::new(),
+            latest: vec![-90.0; FFT_SIZE],
+            last_error: None,
+            audio_scope: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_handle_inject_and_drain() {
+        let handle = EngineHandle::spawn_for_test();
+        handle.inject_poll(sample_poll(ConnState::Streaming));
+        let poll = handle.try_poll().expect("queued poll");
+        assert!(matches!(poll.state, ConnState::Streaming));
+        assert!(handle.try_poll().is_none());
+    }
+
+    #[test]
+    fn live_handle_ignores_inject() {
+        let mut handle = EngineHandle::spawn();
+        handle.inject_poll(sample_poll(ConnState::Streaming));
+        let poll = handle.try_poll().expect("shared poll");
+        assert!(matches!(poll.state, ConnState::Disconnected));
+        handle.shutdown_now();
+    }
+
+    #[test]
+    fn set_params_roundtrip() {
+        let handle = EngineHandle::spawn_for_test();
+        let mut params = EngineParams::default();
+        params.volume = 0.42;
+        params.rf_gain_db = 6.0;
+        handle.set_params(params.clone());
+        let guard = handle.params.lock().expect("params lock");
+        assert!((guard.volume - 0.42).abs() < f32::EPSILON);
+        assert!((guard.rf_gain_db - 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_handle_fifo_order() {
+        let handle = EngineHandle::spawn_for_test();
+        handle.inject_poll(sample_poll(ConnState::Connecting {
+            label: "a".into(),
+        }));
+        handle.inject_poll(sample_poll(ConnState::Streaming));
+        assert!(matches!(
+            handle.try_poll().unwrap().state,
+            ConnState::Connecting { .. }
+        ));
+        assert!(matches!(handle.try_poll().unwrap().state, ConnState::Streaming));
+    }
+
+    #[test]
+    fn test_handle_send_is_noop() {
+        let handle = EngineHandle::spawn_for_test();
+        handle.send(EngineCommand::Disconnect);
+        assert!(handle.try_poll().is_none());
     }
 }

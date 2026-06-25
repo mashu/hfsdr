@@ -224,4 +224,32 @@ mod tests {
         assert!(!is_wideband_rate(96_000.0));
         assert!(is_wideband_rate(96_001.0));
     }
+
+    #[test]
+    fn catchup_pumps_ring_pressure_without_recording() {
+        assert_eq!(catchup_pumps_max(0.5, false, false), MAX_CATCHUP_PUMPS);
+        assert_eq!(
+            catchup_pumps_max(0.5, false, true),
+            MAX_CATCHUP_PUMPS + 4
+        );
+        assert_eq!(catchup_pumps_max(0.1, false, false), MAX_CATCHUP_PUMPS_LIGHT);
+    }
+
+    #[test]
+    fn max_fft_input_caps_wideband() {
+        let cap = max_fft_input_for(384_000.0, 4096, 8192);
+        assert!(cap <= MAX_FFT_INPUT_WB);
+        assert_eq!(max_fft_input_for(12_000.0, 4096, 8192), usize::MAX);
+    }
+
+    #[test]
+    fn demod_tail_max_wideband_only() {
+        assert_eq!(demod_tail_max(384_000.0), MAX_AUDIO_SAMPLES_WB);
+        assert_eq!(demod_tail_max(12_000.0), usize::MAX);
+    }
+
+    #[test]
+    fn slow_link_ok_when_effective_near_nominal() {
+        assert!(!slow_link(72_000.0, 96_000.0, Some(10.0)));
+    }
 }

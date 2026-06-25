@@ -41,11 +41,35 @@ pub struct WaterfallApp {
 
 impl WaterfallApp {
     pub fn new(autoconnect: Option<ConnectRequest>) -> Self {
+        Self::build(autoconnect, EngineHandle::spawn())
+    }
+
+    /// Headless UI tests: no engine thread; feed [`EnginePoll`] via [`Self::inject_engine_poll`].
+    #[cfg(test)]
+    pub fn new_for_test(autoconnect: Option<ConnectRequest>) -> Self {
+        Self::build(autoconnect, EngineHandle::spawn_for_test())
+    }
+
+    #[cfg(test)]
+    pub fn inject_engine_poll(&self, poll: EnginePoll) {
+        self.engine.inject_poll(poll);
+    }
+
+    #[cfg(test)]
+    pub fn history_labels(&self) -> Vec<String> {
+        self.slow
+            .annotations()
+            .iter()
+            .map(|a| a.label.clone())
+            .collect()
+    }
+
+    fn build(autoconnect: Option<ConnectRequest>, engine: EngineHandle) -> Self {
         let saved = AppSettings::load();
         let audio_devices = AudioOutput::list_output_devices();
 
         let mut app = Self {
-            engine: EngineHandle::spawn(),
+            engine,
             engine_ui: EngineUiState::default(),
             connection: ConnectionState {
                 form: ConnectionFormState {
@@ -209,6 +233,7 @@ impl WaterfallApp {
             app.connection.kiwi.geo = geo;
             app.connection.kiwi.nearby = receivers;
         }
+        #[cfg(not(test))]
         app.start_kiwi_directory_fetch(false);
         app.apply_default_view_zoom();
         app

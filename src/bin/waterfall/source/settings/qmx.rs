@@ -48,3 +48,40 @@ impl QmxSettings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_if_offset_matches_qmx_superhet() {
+        let s = QmxSettings::default();
+        assert_eq!(s.if_offset_hz, 12_000);
+        assert!(s.disable_cat_timeout);
+        assert!(s.force_cw_mode);
+    }
+
+    #[cfg(feature = "qmx")]
+    #[test]
+    fn ingress_decimation_divides_evenly() {
+        let s = QmxSettings {
+            iq_process_hz: 12_000,
+            ..Default::default()
+        };
+        let (factor, rate) = s.ingress_decimation(48_000);
+        assert_eq!(factor, 4);
+        assert!((rate - 12_000.0).abs() < 1.0);
+    }
+
+    #[cfg(feature = "qmx")]
+    #[test]
+    fn ingress_decimation_falls_back_when_not_divisible() {
+        let s = QmxSettings {
+            iq_process_hz: 10_000,
+            ..Default::default()
+        };
+        let (factor, rate) = s.ingress_decimation(48_000);
+        assert_eq!(factor, 1);
+        assert!((rate - 48_000.0).abs() < 1.0);
+    }
+}

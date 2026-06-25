@@ -225,3 +225,47 @@ impl CwChannelSettings {
         self.passband_hz.clamp(50.0, 2_000.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_match_contest_cw_profile() {
+        let s = CwChannelSettings::default();
+        assert_eq!(s.bfo_hz, 500.0);
+        assert_eq!(s.channel_filter, ChannelFilterKind::LinearFir);
+        assert_eq!(s.agc_mode, AgcMode::Envelope);
+        assert!(s.agc.enabled);
+        assert!(!s.diagnostic.any_active());
+    }
+
+    #[test]
+    fn diagnostic_any_active() {
+        assert!(!DiagnosticBypassSettings::default().any_active());
+        assert!(DiagnosticBypassSettings {
+            bfo: true,
+            ..Default::default()
+        }
+        .any_active());
+        assert!(DiagnosticBypassSettings {
+            listen_nco: true,
+            ..Default::default()
+        }
+        .any_active());
+    }
+
+    #[test]
+    fn channel_bandwidth_clamps() {
+        let narrow = CwChannelSettings {
+            passband_hz: 25.0,
+            ..Default::default()
+        };
+        assert_eq!(narrow.channel_bandwidth_hz(), 50.0);
+        let wide = CwChannelSettings {
+            passband_hz: 5_000.0,
+            ..Default::default()
+        };
+        assert_eq!(wide.channel_bandwidth_hz(), 2_000.0);
+    }
+}

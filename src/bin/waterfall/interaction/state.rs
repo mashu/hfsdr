@@ -353,4 +353,42 @@ mod tests {
         view.zoom = 5.0;
         assert!(view.can_pan(12_000.0, 6.0));
     }
+
+    #[test]
+    fn view_span_clamps_to_passband() {
+        let view = PlotViewState {
+            zoom: 0.01,
+            pan_offset_hz: 0.0,
+        };
+        let span = view.view_span_hz(12_000.0, 1.0);
+        assert!((span - 12_000.0 * 0.04).abs() < 1.0);
+
+        let wide = PlotViewState {
+            zoom: 10.0,
+            pan_offset_hz: 0.0,
+        };
+        assert!((wide.view_span_hz(12_000.0, 2.0) - 24_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn clamp_pan_limits_offset() {
+        let mut view = PlotViewState {
+            zoom: 0.25,
+            pan_offset_hz: 50_000.0,
+        };
+        view.clamp_pan(12_000.0, 1.0);
+        assert!(view.pan_offset_hz.abs() < 5_000.0);
+    }
+
+    #[test]
+    fn zoom_by_and_reset_full_span() {
+        let mut view = PlotViewState::new();
+        view.zoom_by(0.5, 12_000.0, 4.0);
+        assert!((view.zoom - 0.5).abs() < 1e-5);
+        view.zoom_to_cw_segment(3_000.0, 12_000.0, 4.0);
+        assert!((view.zoom - 0.25).abs() < 1e-5);
+        assert_eq!(view.pan_offset_hz, 0.0);
+        view.zoom_to_full_span();
+        assert_eq!(view.zoom, 1.0);
+    }
 }

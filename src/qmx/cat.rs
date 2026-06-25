@@ -135,5 +135,13 @@ mod tests {
     fn parse_smeter() {
         assert_eq!(parse_smeter_db("SM045;").unwrap(), Some(45.0));
         assert_eq!(parse_smeter_db("SM;").unwrap(), None);
+        assert_eq!(parse_smeter_db("SM+12;").unwrap(), Some(12.0));
+        assert_eq!(parse_smeter_db("SMabc;").unwrap(), None);
+    }
+
+    #[test]
+    fn parse_smeter_ignores_non_digit_noise() {
+        assert_eq!(parse_smeter_db("SM+12dB;").unwrap(), Some(12.0));
+        assert_eq!(parse_smeter_db("SM.;").unwrap(), None);
     }
 }

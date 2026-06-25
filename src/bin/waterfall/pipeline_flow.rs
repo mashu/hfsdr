@@ -864,4 +864,32 @@ mod tests {
         assert!(decim_factor(0, 384_000.0) > 1);
         assert_eq!(decim_factor(8, 384_000.0), 8);
     }
+
+    #[test]
+    fn all_pipeline_stages_have_labels() {
+        use PipelineStage::*;
+        for stage in [
+            NoiseBlanker,
+            ManualNotches,
+            ListenNco,
+            DecimatorFir,
+            ChannelFir,
+            Agc,
+            Bfo,
+            Apf,
+            AutoNotch,
+            NoiseReduction,
+            Skimmer,
+            AudioOutput,
+        ] {
+            assert!(!stage.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn diagnostic_stages_flagged() {
+        assert!(PipelineStage::Bfo.is_diagnostic());
+        assert!(!PipelineStage::Skimmer.is_diagnostic());
+        assert!(!PipelineStage::Agc.is_diagnostic());
+    }
 }

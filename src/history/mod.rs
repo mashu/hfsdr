@@ -208,4 +208,14 @@ mod tests {
         assert_eq!(wf.rows().len(), 2);
         wf.set_fold(RowFold::Average);
     }
+
+    #[test]
+    fn push_row_resizes_accumulator_on_width_change() {
+        let mut wf = SlowWaterfall::new(1.0, 10.0, RowFold::Peak);
+        wf.push_row(&[1.0, 2.0]);
+        wf.push_row(&[3.0, 4.0, 5.0]);
+        wf.finish_accumulator();
+        assert_eq!(wf.rows()[0].len(), 3);
+        assert_eq!(wf.rows()[0], vec![3.0, 4.0, 5.0]);
+    }
 }

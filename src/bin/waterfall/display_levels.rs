@@ -249,4 +249,17 @@ mod tests {
         assert!(initialized);
         assert!(!should_auto_adjust_display_levels(initialized, auto_track));
     }
+
+    #[test]
+    fn short_row_returns_none() {
+        let row = vec![-82.0; 128];
+        assert!(estimate_levels(&row).is_none());
+    }
+
+    #[test]
+    fn smooth_levels_alpha_clamps_to_one() {
+        let (r, g) = smooth_levels((-65.0, 17.0), (-50.0, 30.0), 2.0);
+        assert!((r + 50.0).abs() < 1e-6);
+        assert!((g - 30.0).abs() < 1e-6);
+    }
 }

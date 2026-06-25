@@ -323,4 +323,82 @@ mod tests {
         );
         assert_eq!(o, ChannelOffsetHz::new(240.0));
     }
+
+    #[test]
+    fn plot_freq_mapping_delegates_to_offset_helpers() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let m = PlotFreqMapping::new(12_000.0, 100.0, 12_000.0);
+        let off = m.x_to_offset(500.0, rect);
+        let x = m.offset_to_x(off, rect);
+        assert!((x - 500.0).abs() < 2.0);
+    }
+
+    #[test]
+    fn filter_edges_span_listen_center() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let (left, right) = filter_edges(rect, 12_000.0, 0.0, 0.0, 200.0);
+        assert!(left < right);
+        assert!(left > 400.0);
+        assert!(right < 600.0);
+    }
+
+    #[test]
+    fn classify_press_tune_off_center() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let mode = classify_press(
+            Pos2::new(100.0, 50.0),
+            rect,
+            12_000.0,
+            0.0,
+            200.0,
+            false,
+            0.0,
+            500.0,
+            false,
+            &[],
+        );
+        assert_eq!(mode, DragMode::Tune);
+    }
+
+    #[test]
+    fn classify_press_pan_with_shift() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let mode = classify_press(
+            Pos2::new(100.0, 50.0),
+            rect,
+            12_000.0,
+            0.0,
+            200.0,
+            false,
+            0.0,
+            500.0,
+            true,
+            &[],
+        );
+        assert_eq!(mode, DragMode::PanView);
+    }
+
+    #[test]
+    fn classify_press_hits_notch_body() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let notches = [NotchMarker {
+            slot: 0,
+            offset_hz: ChannelOffsetHz::ZERO,
+            width_hz: 400.0,
+        }];
+        let x = offset_hz_to_x(0.0, rect, 12_000.0, 0.0);
+        let mode = classify_press(
+            Pos2::new(x, 50.0),
+            rect,
+            12_000.0,
+            0.0,
+            200.0,
+            true,
+            0.0,
+            x,
+            false,
+            &notches,
+        );
+        assert_eq!(mode, DragMode::DragNotch(0));
+    }
 }
