@@ -5,6 +5,19 @@ use std::process::Command;
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(airspyhf_extended_api)");
+    println!("cargo::rustc-check-cfg=cfg(coverage)");
+    println!("cargo::rustc-check-cfg=cfg(mock_hal)");
+    if std::env::var("CARGO_CFG_FEATURE")
+        .unwrap_or_default()
+        .split(',')
+        .any(|f| f == "gui" || f == "gui-core")
+    {
+        println!("cargo:rustc-cfg=mock_hal");
+    }
+    let rustflags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+    if rustflags.contains("coverage") {
+        println!("cargo:rustc-cfg=coverage");
+    }
     println!("cargo:rerun-if-env-changed=HFSDR_DEPS_PREFIX");
     println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
     println!("cargo:rerun-if-env-changed=VCPKG_INSTALLED_DIR");

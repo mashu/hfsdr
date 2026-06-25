@@ -32,6 +32,9 @@ pub use multisource::{select_best, snr_weights, spot_display_snr, spot_primary_s
 pub mod skimmer;
 pub mod source;
 
+#[cfg(any(test, coverage, mock_hal))]
+pub mod mock_hal;
+
 #[cfg(feature = "airspy")]
 pub use airspyhf::AirspyHf;
 #[cfg(feature = "rtlsdr")]

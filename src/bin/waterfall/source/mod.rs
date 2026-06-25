@@ -12,6 +12,9 @@ mod device;
 mod kinds;
 mod settings;
 
+#[cfg(test)]
+mod mock_hal_tests;
+
 pub use cli::request_from_args;
 pub use connection::{connect, ConnectRequest, SourceKind};
 pub use device::Connection;

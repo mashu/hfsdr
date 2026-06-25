@@ -217,6 +217,11 @@ impl KiwiSource {
             return Err(SourceError::InvalidState("already streaming"));
         }
 
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            return self.start_mock(cancel);
+        }
+
         let mut ws = self.connect_ws(cancel)?;
 
         if let MaybeTlsStream::Plain(tcp) = ws.get_ref() {
@@ -278,6 +283,43 @@ impl KiwiSource {
         self.cmd_tx = Some(cmd_tx);
         self.handle = Some(handle);
         self.streaming = true;
+        Ok(cons)
+    }
+
+    #[cfg(any(test, coverage, mock_hal))]
+    fn start_mock(&mut self, cancel: &AtomicBool) -> Result<Consumer<Complex32>> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(SourceError::Backend {
+                op: "kiwi connect cancelled",
+                code: -6,
+            });
+        }
+        let (mut prod, cons) = RingBuffer::<Complex32>::new(1 << 16);
+        let stop_flag = Arc::clone(&self.stop);
+        let stop_loop = Arc::clone(&stop_flag);
+        let dropped = Arc::clone(&self.dropped);
+        let iq_streaming = Arc::clone(&self.iq_streaming);
+        let rssi = Arc::clone(&self.rssi_cdbm);
+        let has_attn = Arc::clone(&self.has_rf_attn);
+        has_attn.store(true, Ordering::Relaxed);
+        let handle = thread::spawn(move || {
+            let mut phase = 0.0f32;
+            while !stop_loop.load(Ordering::Relaxed) {
+                let sample = Complex32::new(phase.cos() * 0.2, phase.sin() * 0.2);
+                if prod.push(sample).is_err() {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                phase += std::f32::consts::TAU * 700.0 / KIWI_IQ_RATE as f32;
+                rssi.store(-7300, Ordering::Relaxed);
+                iq_streaming.store(true, Ordering::Relaxed);
+                thread::sleep(Duration::from_millis(2));
+            }
+        });
+        self.stop = stop_flag;
+        self.cmd_tx = None;
+        self.handle = Some(handle);
+        self.streaming = true;
+        self.iq_streaming.store(true, Ordering::Relaxed);
         Ok(cons)
     }
 }

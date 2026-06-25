@@ -52,6 +52,8 @@ pub struct QmxSource {
     cat_poll_stop: Arc<AtomicBool>,
     audio_stream: Option<Stream>,
     cat_poll_thread: Option<JoinHandle<()>>,
+    #[cfg(any(test, coverage, mock_hal))]
+    mock_stream: Option<crate::mock_hal::MockIqStream>,
 }
 
 impl QmxSource {
@@ -92,6 +94,8 @@ impl QmxSource {
             cat_poll_stop: Arc::new(AtomicBool::new(false)),
             audio_stream: None,
             cat_poll_thread: None,
+            #[cfg(any(test, coverage, mock_hal))]
+            mock_stream: None,
         })
     }
 
@@ -148,6 +152,24 @@ impl IqSource for QmxSource {
     fn start(&mut self) -> Result<Consumer<Complex32>> {
         if self.streaming {
             return Err(SourceError::InvalidState("already streaming"));
+        }
+        #[cfg(any(test, coverage, mock_hal))]
+        if crate::mock_hal::enabled() {
+            let (stream, cons) =
+                crate::mock_hal::MockIqStream::start(SAMPLE_RATE, iq_ring_capacity());
+            self.mock_stream = Some(stream);
+            self.cat_poll_stop.store(false, Ordering::Relaxed);
+            let cat = Arc::clone(&self.cat);
+            let smeter_db = Arc::clone(&self.smeter_db);
+            let transmitting = Arc::clone(&self.transmitting);
+            let cat_poll_stop = Arc::clone(&self.cat_poll_stop);
+            let cat_poll_thread = thread::Builder::new()
+                .name("qmx-cat".into())
+                .spawn(move || cat_poll_loop(cat, smeter_db, transmitting, cat_poll_stop))
+                .map_err(|e| SourceError::Unsupported(e.to_string()))?;
+            self.cat_poll_thread = Some(cat_poll_thread);
+            self.streaming = true;
+            return Ok(cons);
         }
         let (prod, cons) = RingBuffer::<Complex32>::new(iq_ring_capacity());
         let ctx = AudioCtx {
@@ -231,6 +253,10 @@ impl IqSource for QmxSource {
             return Ok(());
         }
         self.cat_poll_stop.store(true, Ordering::Relaxed);
+        #[cfg(any(test, coverage, mock_hal))]
+        {
+            self.mock_stream.take();
+        }
         self.audio_stream = None;
         if let Some(h) = self.cat_poll_thread.take() {
             let _ = h.join();
