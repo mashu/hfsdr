@@ -79,6 +79,7 @@ pub struct FilterDiagnosticView<'a> {
     pub trace_view_span_hz: f32,
     pub trace_pan_hz: f64,
     pub listen_offset_hz: f64,
+    pub filter_shift_hz: f64,
     pub ref_db: f32,
     pub range_db: f32,
     pub streaming: bool,
@@ -203,7 +204,12 @@ fn build_live_curves(view: &FilterDiagnosticView<'_>, theory: &FilterCurve) -> D
             view.trace_view_span_hz,
             view.trace_pan_hz,
         );
-        let ch_db = interp_curve_db(&theory.offsets_hz, &theory.channel_only_db, rel);
+        let filter_rel = view.filter_shift_hz as f32;
+        let ch_db = interp_curve_db(
+            &theory.offsets_hz,
+            &theory.channel_only_db,
+            rel - filter_rel,
+        );
         signal_db.push(raw);
         filtered_db.push(if view.channel_bypass {
             raw
@@ -452,6 +458,7 @@ mod tests {
             trace_view_span_hz: 12_000.0,
             trace_pan_hz: 0.0,
             listen_offset_hz: 0.0,
+            filter_shift_hz: 0.0,
             ref_db: -50.0,
             range_db: 80.0,
             streaming: true,

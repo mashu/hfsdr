@@ -24,7 +24,6 @@ pub const RIT_MAX_HZ: f32 = 800.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DragMode {
     None,
-    DragCenter,
     Tune,
     PanView,
     ResizeLeft,
@@ -65,7 +64,7 @@ pub enum PlotAction {
     /// Move listen offset (RIT) without retuning the carrier.
     SetRitHz(f32),
     /// Move channel bandpass center without changing the VFO / listen point.
-    SetFilterOffsetHz(ChannelOffsetHz),
+    SetFilterShiftHz(ChannelOffsetHz),
     SetNotchOffset {
         slot: usize,
         offset_hz: ChannelOffsetHz,
@@ -140,6 +139,9 @@ impl PlotViewState {
 pub struct PlotInteraction {
     pub drag_mode: DragMode,
     drag_origin: Option<Pos2>,
+    drag_hz_origin: Option<f64>,
+    drag_filter_shift_origin: Option<f32>,
+    drag_notch_offset_origin: Option<ChannelOffsetHz>,
 }
 
 impl PlotInteraction {
@@ -147,6 +149,9 @@ impl PlotInteraction {
         Self {
             drag_mode: DragMode::None,
             drag_origin: None,
+            drag_hz_origin: None,
+            drag_filter_shift_origin: None,
+            drag_notch_offset_origin: None,
         }
     }
 
@@ -173,14 +178,12 @@ impl PlotInteraction {
         filter_settings: &hfsdr::CwChannelSettings,
         filter_editable: bool,
         filter_center_hz: f64,
-        vfo_offset_hz: f64,
         notches: &[NotchMarker],
     ) -> Vec<PlotAction> {
         let mut actions = Vec::new();
         let view_span = display_view_span_hz;
         let pan = display_pan_offset_hz;
         let can_pan = view.can_pan(full_span_hz, max_zoom);
-        let preview_x = offset_hz_to_x(vfo_offset_hz, rect, view_span, pan);
         let shift = ui.input(|i| i.modifiers.shift);
         let filter_modify = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
@@ -214,15 +217,10 @@ impl PlotInteraction {
                     filter_editable,
                     filter_modify,
                     filter_center_hz,
-                    preview_x,
                     shift,
                     notches,
                 );
-                // Tune on spectrum clicks; filter/notch handles need Ctrl/Cmd (see classify_press).
-                if matches!(
-                    mode,
-                    DragMode::Tune | DragMode::PanView | DragMode::DragCenter
-                ) {
+                if matches!(mode, DragMode::Tune | DragMode::PanView) {
                     let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
                     actions.push(PlotAction::CenterOnOffsetHz(offset));
                 }
@@ -232,6 +230,7 @@ impl PlotInteraction {
         if response.drag_started() {
             if let Some(pos) = response.interact_pointer_pos() {
                 self.drag_origin = Some(pos);
+                self.drag_hz_origin = Some(x_to_offset_hz(pos.x, rect, view_span, pan));
                 self.drag_mode = classify_press(
                     pos,
                     rect,
@@ -241,21 +240,30 @@ impl PlotInteraction {
                     filter_editable,
                     filter_modify,
                     filter_center_hz,
-                    preview_x,
                     shift,
                     notches,
                 );
+                match self.drag_mode {
+                    DragMode::ShiftPassband => {
+                        self.drag_filter_shift_origin =
+                            Some(filter_settings.filter_shift_hz.hz());
+                    }
+                    DragMode::DragNotch(slot) => {
+                        self.drag_notch_offset_origin = notches
+                            .iter()
+                            .find(|n| n.slot == slot)
+                            .map(|n| n.offset_hz);
+                    }
+                    _ => {
+                        self.drag_filter_shift_origin = None;
+                        self.drag_notch_offset_origin = None;
+                    }
+                }
             }
         }
 
         if response.dragged() {
             match self.drag_mode {
-                DragMode::DragCenter => {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        actions.push(PlotAction::SetTunePreviewOffsetHz(offset));
-                    }
-                }
                 DragMode::Tune => {
                     // Drag on empty spectrum: pan the view when zoomed, otherwise
                     // walk the carrier. Pure taps are handled by `clicked()` above.
@@ -291,19 +299,32 @@ impl PlotInteraction {
                     }
                 }
                 DragMode::ShiftPassband => {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        actions.push(PlotAction::SetFilterOffsetHz(
-                            ChannelOffsetHz::from_plot_hz(offset as f32),
+                    if let (Some(pos), Some(origin_hz), Some(shift_origin)) = (
+                        response.interact_pointer_pos(),
+                        self.drag_hz_origin,
+                        self.drag_filter_shift_origin,
+                    ) {
+                        let current_hz = x_to_offset_hz(pos.x, rect, view_span, pan);
+                        let delta_hz = (current_hz - origin_hz) as f32;
+                        actions.push(PlotAction::SetFilterShiftHz(
+                            ChannelOffsetHz::from_plot_hz(shift_origin + delta_hz),
                         ));
                     }
                 }
                 DragMode::DragNotch(slot) => {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let offset = ChannelOffsetHz::from_plot_hz(
-                            x_to_offset_hz(pos.x, rect, view_span, pan) as f32,
-                        );
-                        actions.push(PlotAction::SetNotchOffset { slot, offset_hz: offset });
+                    if let (Some(pos), Some(origin_hz), Some(offset_origin)) = (
+                        response.interact_pointer_pos(),
+                        self.drag_hz_origin,
+                        self.drag_notch_offset_origin,
+                    ) {
+                        let current_hz = x_to_offset_hz(pos.x, rect, view_span, pan);
+                        let delta_hz = (current_hz - origin_hz) as f32;
+                        actions.push(PlotAction::SetNotchOffset {
+                            slot,
+                            offset_hz: ChannelOffsetHz::from_plot_hz(
+                                offset_origin.hz() + delta_hz,
+                            ),
+                        });
                     }
                 }
                 DragMode::ResizeNotchLeft(slot) | DragMode::ResizeNotchRight(slot) => {
@@ -328,7 +349,6 @@ impl PlotInteraction {
 
         if response.drag_stopped() {
             match self.drag_mode {
-                DragMode::DragCenter => actions.push(PlotAction::CommitTunePreview),
                 DragMode::ResizeLeft | DragMode::ResizeRight => {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
@@ -342,7 +362,6 @@ impl PlotInteraction {
                         );
                         actions.push(PlotAction::SetPassbandHz(bw));
                     }
-                    actions.push(PlotAction::ClearTunePreview);
                 }
                 DragMode::ResizeNotchLeft(slot) | DragMode::ResizeNotchRight(slot) => {
                     if let (Some(pos), Some(n)) = (
@@ -359,12 +378,14 @@ impl PlotInteraction {
                         );
                         actions.push(PlotAction::SetNotchWidth { slot, width_hz: width });
                     }
-                    actions.push(PlotAction::ClearTunePreview);
                 }
-                _ => actions.push(PlotAction::ClearTunePreview),
+                _ => {}
             }
             self.drag_mode = DragMode::None;
             self.drag_origin = None;
+            self.drag_hz_origin = None;
+            self.drag_filter_shift_origin = None;
+            self.drag_notch_offset_origin = None;
         }
 
         actions

@@ -365,13 +365,8 @@ impl CwChannel {
             self.work_iq.clear();
             self.work_iq.extend_from_slice(&self.work_mix);
         } else {
-            self.apply_channel_filter(
-                &self.work_mix,
-                audio_rate,
-                settings,
-                channel_filter,
-                &mut self.work_iq,
-            );
+            let notched = std::mem::take(&mut self.work_mix);
+            self.apply_channel_filter(&notched, audio_rate, settings, channel_filter);
         }
         for i in 0..self.work_iq.len() {
             let level = self.work_iq[i].norm().max(1e-7);
@@ -466,35 +461,34 @@ impl CwChannel {
     }
 
     /// Lowpass at DC when filter and listen coincide; otherwise a bandpass centered on
-    /// [`CwChannelSettings::filter_offset_hz`] while demod stays at [`CwChannelSettings::listen_offset_hz`].
+    /// `listen + filter_shift` while demod stays at [`CwChannelSettings::listen_offset_hz`].
     fn apply_channel_filter(
         &mut self,
         input: &[Complex32],
         audio_rate: f32,
         settings: &CwChannelSettings,
         channel_filter: ChannelFilterKind,
-        out: &mut Vec<Complex32>,
     ) {
-        let filter_rel =
-            settings.filter_offset_hz.hz() - settings.listen_offset_hz.hz();
+        let filter_rel = settings.filter_shift_hz.hz();
         if filter_rel.abs() < 0.5 {
             match channel_filter {
                 ChannelFilterKind::LinearFir => {
-                    self.channel_fir.process_complex_block(input, out);
+                    self.channel_fir
+                        .process_complex_block(input, &mut self.work_iq);
                 }
                 ChannelFilterKind::Iir2Pole => {
-                    out.clear();
-                    out.reserve(input.len());
+                    self.work_iq.clear();
+                    self.work_iq.reserve(input.len());
                     for &z in input {
-                        out.push(self.channel_iir.process_complex(z));
+                        self.work_iq.push(self.channel_iir.process_complex(z));
                     }
                 }
             }
             return;
         }
 
-        out.clear();
-        out.reserve(input.len());
+        self.work_iq.clear();
+        self.work_iq.reserve(input.len());
         for &sample in input {
             let shifted = self
                 .filter_shift_nco
@@ -503,7 +497,7 @@ impl CwChannel {
                 ChannelFilterKind::LinearFir => self.channel_fir.process_complex(shifted),
                 ChannelFilterKind::Iir2Pole => self.channel_iir.process_complex(shifted),
             };
-            out.push(
+            self.work_iq.push(
                 self.filter_shift_nco
                     .mix_up(filtered, filter_rel, audio_rate),
             );
@@ -635,6 +629,41 @@ mod tests {
         assert!(power_bfo.abs() > 0.1);
     }
 
+    #[test]
+    fn demod_follows_listen_not_filter_center() {
+        let rate = 12_000.0;
+        let listen_hz = 100.0;
+        let n = rate as usize * 3;
+        let iq = tone_iq(rate, listen_hz, n);
+        let mut channel = CwChannel::new(rate);
+        let mut aligned = CwChannelSettings {
+            listen_offset_hz: ChannelOffsetHz::new(listen_hz),
+            filter_shift_hz: ChannelOffsetHz::ZERO,
+            bfo_hz: 650.0,
+            passband_hz: 200.0,
+            ..CwChannelSettings::default()
+        };
+        aligned.agc.enabled = false;
+        let origin = ListenOrigin::from_settings(aligned.listen_offset_hz);
+        let mut loud = Vec::new();
+        channel.process(&iq, rate, &aligned, origin, &mut loud);
+
+        let mut offset_filter = aligned.clone();
+        offset_filter.filter_shift_hz = ChannelOffsetHz::new(400.0);
+        let mut quiet = Vec::new();
+        channel.process(&iq, rate, &offset_filter, origin, &mut quiet);
+
+        let skip = loud.len() / 2;
+        let rms_loud = audio_rms(&loud, skip);
+        let rms_quiet = audio_rms(&quiet, skip);
+        assert!(rms_loud > 0.05, "aligned filter rms={rms_loud}");
+        assert!(
+            rms_loud > rms_quiet * 3.0,
+            "listen at {listen_hz} Hz should demod even when filter center is elsewhere \
+             (loud={rms_loud}, quiet={rms_quiet})"
+        );
+    }
+
     fn audio_rms(audio: &[f32], skip: usize) -> f32 {
         let slice = &audio[skip..];
         if slice.is_empty() {
@@ -755,6 +784,7 @@ mod tests {
         let mut channel = CwChannel::new(rate);
         let settings = CwChannelSettings {
             listen_offset_hz: ChannelOffsetHz::new(120.0),
+            filter_shift_hz: ChannelOffsetHz::ZERO,
             bfo_hz: 650.0,
             passband_hz: 250.0,
             channel_filter: ChannelFilterKind::LinearFir,

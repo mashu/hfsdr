@@ -95,6 +95,8 @@ pub struct AppSettings {
 
     // Receiver controls.
     pub rit_hz: f32,
+    #[serde(default)]
+    pub filter_shift_hz: f32,
     pub pitch_lock: bool,
     pub lock_ham_bands: bool,
     pub agc_rf_on: bool,
@@ -222,6 +224,7 @@ impl Default for AppSettings {
             agc_mode: 0,
             notches: vec![NotchData::default(); 4],
             rit_hz: 0.0,
+            filter_shift_hz: 0.0,
             pitch_lock: false,
             lock_ham_bands: true,
             agc_rf_on: true,

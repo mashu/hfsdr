@@ -23,12 +23,14 @@ impl WaterfallApp {
                     if iq_playback {
                         self.radio.rit_hz = (offset as f32).clamp(RIT_MIN_HZ, RIT_MAX_HZ);
                         self.plot.tune_preview_offset_hz = None;
+                        self.sync_filter_to_listen();
                     } else {
                         self.invalidate_waterfall_history();
                         self.radio.center_khz += offset / 1000.0;
                         self.plot.plot_view.pan_offset_hz = 0.0;
                         self.plot.tune_preview_offset_hz = None;
                         self.clear_rit();
+                        self.sync_filter_to_listen();
                     }
                 }
                 PlotAction::SetTunePreviewOffsetHz(offset) => {
@@ -46,6 +48,7 @@ impl WaterfallApp {
                             self.plot.plot_view.pan_offset_hz = 0.0;
                             self.clear_rit();
                         }
+                        self.sync_filter_to_listen();
                     }
                     self.plot.tune_preview_offset_hz = None;
                 }
@@ -72,6 +75,9 @@ impl WaterfallApp {
                 }
                 PlotAction::SetRitHz(rit) => {
                     self.radio.rit_hz = rit.clamp(RIT_MIN_HZ, RIT_MAX_HZ);
+                }
+                PlotAction::SetFilterShiftHz(shift) => {
+                    self.radio.cw.filter_shift_hz = shift;
                 }
                 PlotAction::SetViewPanHz(pan) => {
                     self.plot.plot_view.pan_offset_hz = pan;

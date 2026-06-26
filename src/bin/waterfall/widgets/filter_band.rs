@@ -48,7 +48,7 @@ pub(crate) fn draw_filter_band(
         painter.text(
             Pos2::new((left + right) * 0.5, rect.bottom() - 4.0),
             Align2::CENTER_BOTTOM,
-            "Ctrl+drag band = RIT · Ctrl+edges = BW",
+            "Ctrl+drag band = filter · Ctrl+edges = BW",
             FontId::proportional(9.0),
             Color32::from_rgba_unmultiplied(125, 211, 252, 140),
         );

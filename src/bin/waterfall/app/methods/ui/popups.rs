@@ -184,6 +184,7 @@ impl WaterfallApp {
         let spectrum = self.spectrum_view();
         let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
         let listen_offset_hz = self.listen_offset_hz();
+        let filter_shift_hz = self.radio.cw.filter_shift_hz.hz() as f64;
         let ref_db = self.display.ref_db;
         let range_db = self.display.range_db;
         let trace_db = self.plot.smoothed_trace.clone();
@@ -230,6 +231,7 @@ impl WaterfallApp {
                         trace_view_span_hz: spectrum.view_span_hz,
                         trace_pan_hz: spectrum.compose_pan_offset_hz,
                         listen_offset_hz,
+                        filter_shift_hz,
                         ref_db,
                         range_db,
                         streaming,
@@ -261,8 +263,8 @@ impl WaterfallApp {
                 );
                 ui.add_space(6.0);
                 for (keys, action) in [
-                    ("Ctrl+drag", "Cyan band = RIT · edges = BW · purple notches"),
-                    ("Click / drag", "Tune RX (Shift+drag = pan view when zoomed)"),
+                    ("Ctrl+drag", "Cyan band = shift filter · edges = BW · purple notches"),
+                    ("Click", "Tune VFO · drag = walk frequency (Shift+drag = pan when zoomed)"),
                     ("Shift / Ctrl", "Fine / fast pan steps"),
                     ("Z", "Zero-beat to strongest carrier"),
                     ("L", "Lock pitch to BFO"),

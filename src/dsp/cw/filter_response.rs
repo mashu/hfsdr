@@ -180,11 +180,29 @@ pub fn channel_half_width_hz(
 pub fn notch_display_half_hz(width_hz: f32, audio_rate: f32, threshold_lin: f32) -> f32 {
     let alpha = notch_dc_alpha(audio_rate, width_hz);
     let max_search = (width_hz * 4.0).clamp(30.0, 800.0);
-    half_width_where(
+    notch_half_width_where(
         |f| dc_block_magnitude_linear(alpha, f, audio_rate),
         max_search,
         threshold_lin,
     )
+}
+
+/// Half-width where a **notch-shaped** response (minimum at 0 Hz) reaches `threshold_lin`.
+fn notch_half_width_where(mag_at: impl Fn(f32) -> f32, max_hz: f32, threshold_lin: f32) -> f32 {
+    if mag_at(max_hz) < threshold_lin {
+        return max_hz;
+    }
+    let mut lo = 0.0f32;
+    let mut hi = max_hz;
+    for _ in 0..28 {
+        let mid = (lo + hi) * 0.5;
+        if mag_at(mid) < threshold_lin {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
 }
 
 fn half_width_where(mag_at: impl Fn(f32) -> f32, max_hz: f32, threshold_lin: f32) -> f32 {
@@ -435,6 +453,16 @@ mod tests {
             rate,
         );
         assert!((check.channel_half_hz - overlay.channel_half_hz).abs() < 2.0);
+    }
+
+    #[test]
+    fn notch_display_half_is_nonzero_for_typical_width() {
+        let rate = 12_000.0;
+        let half = notch_display_half_hz(80.0, rate, db_to_linear(OVERLAY_ATTEN_DB));
+        assert!(
+            half > 20.0,
+            "notch overlay half-width should span a visible band, got {half} Hz"
+        );
     }
 
     #[test]

@@ -143,8 +143,42 @@ pub fn edge_grab_px() -> f32 {
     EDGE_GRAB_PX
 }
 
-fn in_passband_body(x: f32, left: f32, right: f32) -> bool {
-    x > left + EDGE_GRAB_PX && x < right - EDGE_GRAB_PX
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FilterHit {
+    ResizeLeft,
+    ResizeRight,
+    Shift,
+}
+
+fn classify_filter_hit(x: f32, left: f32, right: f32) -> Option<FilterHit> {
+    if right <= left + 1.0 {
+        return None;
+    }
+    let width = right - left;
+    let on_left = x >= left - EDGE_GRAB_PX && x <= left + EDGE_GRAB_PX;
+    let on_right = x >= right - EDGE_GRAB_PX && x <= right + EDGE_GRAB_PX;
+    if width > EDGE_GRAB_PX * 3.0 {
+        if on_left {
+            return Some(FilterHit::ResizeLeft);
+        }
+        if on_right {
+            return Some(FilterHit::ResizeRight);
+        }
+        if x >= left && x <= right {
+            return Some(FilterHit::Shift);
+        }
+    } else {
+        if on_left && x <= left + width * 0.3 {
+            return Some(FilterHit::ResizeLeft);
+        }
+        if on_right && x >= right - width * 0.3 {
+            return Some(FilterHit::ResizeRight);
+        }
+        if x >= left && x <= right {
+            return Some(FilterHit::Shift);
+        }
+    }
+    None
 }
 
 /// `filter_modify` (Ctrl/Cmd): when false, filter/notch handles are ignored so clicks tune.
@@ -158,7 +192,6 @@ pub(super) fn classify_press(
     filter_editable: bool,
     filter_modify: bool,
     filter_center_hz: f64,
-    vfo_x: f32,
     shift: bool,
     notches: &[NotchMarker],
 ) -> DragMode {
@@ -170,27 +203,18 @@ pub(super) fn classify_press(
                 NotchHit::Body => DragMode::DragNotch(slot),
             };
         }
-    }
 
-    let near_center =
-        pos.x >= vfo_x - CENTER_GRAB_PX && pos.x <= vfo_x + CENTER_GRAB_PX;
-
-    if filter_editable && filter_modify {
-        let (left, right) =
-            filter_edges(rect, view_span_hz, pan_offset_hz, filter_center_hz, passband_half_hz);
-        if pos.x >= left - EDGE_GRAB_PX && pos.x <= left + EDGE_GRAB_PX {
-            return DragMode::ResizeLeft;
+        if filter_editable {
+            let (left, right) =
+                filter_edges(rect, view_span_hz, pan_offset_hz, filter_center_hz, passband_half_hz);
+            if let Some(hit) = classify_filter_hit(pos.x, left, right) {
+                return match hit {
+                    FilterHit::ResizeLeft => DragMode::ResizeLeft,
+                    FilterHit::ResizeRight => DragMode::ResizeRight,
+                    FilterHit::Shift => DragMode::ShiftPassband,
+                };
+            }
         }
-        if pos.x >= right - EDGE_GRAB_PX && pos.x <= right + EDGE_GRAB_PX {
-            return DragMode::ResizeRight;
-        }
-        if in_passband_body(pos.x, left, right) {
-            return DragMode::ShiftPassband;
-        }
-    }
-
-    if near_center {
-        return DragMode::DragCenter;
     }
 
     if shift {
@@ -277,9 +301,22 @@ mod tests {
     }
 
     #[test]
-    fn passband_body_between_edges() {
-        assert!(in_passband_body(50.0, 10.0, 90.0));
-        assert!(!in_passband_body(15.0, 10.0, 90.0));
+    fn narrow_filter_band_still_shiftable_with_ctrl() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let center_x = offset_hz_to_x(0.0, rect, 12_000.0, 0.0);
+        let mode = classify_press(
+            Pos2::new(center_x, 50.0),
+            rect,
+            12_000.0,
+            0.0,
+            8.0,
+            true,
+            true,
+            0.0,
+            false,
+            &[],
+        );
+        assert_eq!(mode, DragMode::ShiftPassband);
     }
 
     #[test]
@@ -354,7 +391,6 @@ mod tests {
             false,
             false,
             0.0,
-            500.0,
             false,
             &[],
         );
@@ -373,7 +409,6 @@ mod tests {
             false,
             false,
             0.0,
-            500.0,
             true,
             &[],
         );
@@ -399,7 +434,6 @@ mod tests {
             true,
             true,
             0.0,
-            x,
             false,
             &notches,
         );
@@ -425,11 +459,10 @@ mod tests {
             true,
             false,
             0.0,
-            x,
             false,
             &notches,
         );
-        assert_eq!(mode, DragMode::DragCenter);
+        assert_eq!(mode, DragMode::Tune);
     }
 
     #[test]
@@ -445,7 +478,6 @@ mod tests {
             true,
             false,
             0.0,
-            center_x,
             false,
             &[],
         );
@@ -465,7 +497,25 @@ mod tests {
             true,
             true,
             0.0,
-            center_x,
+            false,
+            &[],
+        );
+        assert_eq!(mode, DragMode::ShiftPassband);
+    }
+
+    #[test]
+    fn classify_press_passband_on_vfo_with_ctrl_shifts() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
+        let center_x = offset_hz_to_x(0.0, rect, 12_000.0, 0.0);
+        let mode = classify_press(
+            Pos2::new(center_x, 50.0),
+            rect,
+            12_000.0,
+            0.0,
+            200.0,
+            true,
+            true,
+            0.0,
             false,
             &[],
         );
