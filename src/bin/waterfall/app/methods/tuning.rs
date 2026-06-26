@@ -37,6 +37,7 @@ impl WaterfallApp {
             self.invalidate_waterfall_history();
             self.clear_rit();
             self.plot.tune_preview_offset_hz = None;
+            self.sync_filter_to_listen();
         }
     }
 
@@ -60,6 +61,13 @@ impl WaterfallApp {
 
     pub(crate) fn listen_offset_hz(&self) -> f64 {
         self.radio.rit_hz as f64 + self.plot.tune_preview_offset_hz.unwrap_or(0.0)
+    }
+
+
+
+    /// Re-center the bandpass on the VFO after an explicit tune (click / center drag).
+    pub(crate) fn sync_filter_to_listen(&mut self) {
+        self.radio.cw.filter_shift_hz = ChannelOffsetHz::ZERO;
     }
 
 
@@ -125,6 +133,7 @@ impl WaterfallApp {
         self.plot.plot_view.pan_offset_hz = 0.0;
         self.plot.tune_preview_offset_hz = None;
         self.clear_rit();
+        self.sync_filter_to_listen();
         self.invalidate_waterfall_history();
         self.apply_radio_settings();
     }
@@ -140,6 +149,7 @@ impl WaterfallApp {
         self.plot.plot_view.pan_offset_hz = 0.0;
         self.plot.tune_preview_offset_hz = None;
         self.clear_rit();
+        self.sync_filter_to_listen();
     }
 
 

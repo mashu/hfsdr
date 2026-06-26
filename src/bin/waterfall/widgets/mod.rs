@@ -138,7 +138,6 @@ impl PanadapterPlot {
             p.filter_settings,
             p.filter_editable,
             p.filter_center_hz,
-            p.vfo_offset_hz,
             p.notches,
         );
 
@@ -214,7 +213,7 @@ fn draw_scope_layer(
         view_span,
         pan,
         p.vfo_offset_hz,
-        true,
+        false,
     );
 
     draw_spot_labels(painter, rect, view_span, pan, p.labels);

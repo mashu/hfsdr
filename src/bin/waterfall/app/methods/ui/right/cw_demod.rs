@@ -112,7 +112,7 @@ impl WaterfallApp {
                 ),
                 ("Plot", ACCENT),
                 (
-                    "Ctrl+scroll: BW · click/drag = tune · Ctrl+drag cyan = RIT · Ctrl+edges = −3 dB BW · Ctrl+purple notches.",
+                    "Ctrl+scroll: BW · click = tune · drag = walk RX · Ctrl+drag cyan = shift filter · Ctrl+edges = BW · Ctrl+purple = notches.",
                     MUTED,
                 ),
             ]),

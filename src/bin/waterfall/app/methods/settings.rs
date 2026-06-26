@@ -38,6 +38,7 @@ impl WaterfallApp {
         }
 
         self.radio.rit_hz = s.rit_hz;
+        self.radio.cw.filter_shift_hz = ChannelOffsetHz::new(s.filter_shift_hz);
         self.radio.pitch_lock = s.pitch_lock;
         self.radio.lock_ham_bands = s.lock_ham_bands;
         self.radio.agc_rf_on = s.agc_rf_on;
@@ -155,6 +156,7 @@ impl WaterfallApp {
                 })
                 .collect(),
             rit_hz: self.radio.rit_hz,
+            filter_shift_hz: self.radio.cw.filter_shift_hz.hz(),
             pitch_lock: self.radio.pitch_lock,
             lock_ham_bands: self.radio.lock_ham_bands,
             agc_rf_on: self.radio.agc_rf_on,

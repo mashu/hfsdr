@@ -44,7 +44,7 @@ pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: Plot
             rect,
             view_span,
             pan,
-            p.listen_center_hz,
+            p.filter_center_hz,
             p.channel_half_hz,
             false,
         );
@@ -68,7 +68,7 @@ pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: Plot
         rect,
         view_span,
         pan,
-        p.tune_preview_offset_hz,
+        p.vfo_offset_hz,
         false,
     );
     draw_freq_vertical_grid(painter, rect, view_span, pan);
