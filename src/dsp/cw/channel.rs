@@ -29,7 +29,8 @@ use super::noisereduction::NoiseReduction;
 use super::notch::IqNotch;
 use super::filter_plan::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
 use super::settings::{
-    ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
+    ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW, IirFilterKind,
+    MAX_NOTCHES,
 };
 
 /// Per-call CPU breakdown for [`CwChannel::process_profiled`] / engine-bench.
@@ -101,6 +102,7 @@ pub struct CwChannel {
     last_kaiser_beta: f32,
     last_passband_flatten: bool,
     last_channel_filter: ChannelFilterKind,
+    last_iir_filter: IirFilterKind,
     last_decim_filter: DecimFilterKind,
 }
 
@@ -141,6 +143,7 @@ impl CwChannel {
             last_kaiser_beta: DEFAULT_KAISER_BETA,
             last_passband_flatten: false,
             last_channel_filter: ChannelFilterKind::LinearFir,
+            last_iir_filter: IirFilterKind::Butterworth,
             last_decim_filter: DecimFilterKind::LinearFir,
         }
     }
@@ -559,7 +562,9 @@ impl CwChannel {
             self.last_channel_filter = eff_filter;
         }
         if eff_filter == ChannelFilterKind::Iir2Pole {
-            self.channel_iir.sync(audio_rate, bandwidth);
+            self.channel_iir
+                .sync(audio_rate, bandwidth, settings.iir_filter);
+            self.last_iir_filter = settings.iir_filter;
         }
         let design = LowpassDesign {
             window: settings.window,
@@ -788,6 +793,7 @@ mod tests {
             bfo_hz: 650.0,
             passband_hz: 250.0,
             channel_filter: ChannelFilterKind::LinearFir,
+            iir_filter: super::super::settings::IirFilterKind::Butterworth,
             decim_filter: DecimFilterKind::LinearFir,
             window: WindowKind::Kaiser,
             kaiser_beta: 8.0,

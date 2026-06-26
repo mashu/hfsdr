@@ -146,6 +146,49 @@ impl WaterfallApp {
                 ],
             );
         }
+        let use_iir = self.radio.cw.channel_filter == ChannelFilterKind::Iir2Pole
+            || self.radio.cw.economy_filter;
+        if use_iir {
+            let iir_sel = match self.radio.cw.iir_filter {
+                IirFilterKind::Butterworth => 0,
+                IirFilterKind::Chebyshev => 1,
+            };
+            ui.horizontal(|ui| {
+                Self::filter_design_label_tip(
+                    ui,
+                    "IIR type",
+                    "IIR filter shape",
+                    &[
+                        ("2-pole prototype", ACCENT),
+                        (
+                            "Sets the biquad Q for the IQ channel lowpass. FIR window types \
+                             do not apply — IIR shape is defined by the analog prototype.",
+                            MUTED,
+                        ),
+                        ("Butterworth", OK),
+                        ("Maximally flat passband — gentle, minimal peaking.", MUTED),
+                        ("Chebyshev", ACCENT),
+                        (
+                            "Steeper stopband with ~2 dB passband ripple — better adjacent \
+                             rejection; may ring more on keying.",
+                            MUTED,
+                        ),
+                    ],
+                );
+                if let Some(i) = segment_choice(
+                    ui,
+                    "ch_filter_iir",
+                    iir_sel,
+                    &["Butterworth", "Chebyshev"],
+                ) {
+                    self.radio.cw.iir_filter = if i == 1 {
+                        IirFilterKind::Chebyshev
+                    } else {
+                        IirFilterKind::Butterworth
+                    };
+                }
+            });
+        }
         let economy = ui.checkbox(
             &mut self.radio.cw.economy_filter,
             "Economy filter (2-pole IIR)",
@@ -253,7 +296,9 @@ impl WaterfallApp {
                         );
                         let audio_rate =
                             hfsdr::audio_sample_rate(self.radio.sample_rate, self.radio.cw.decimation);
-                        let delay_note = if self.radio.cw.channel_filter == ChannelFilterKind::LinearFir {
+                        let delay_note = if self.radio.cw.channel_filter == ChannelFilterKind::LinearFir
+                            && !self.radio.cw.economy_filter
+                        {
                             let delay_ms = channel_group_delay_ms(audio_rate, self.radio.cw.passband_hz);
                             let shape_hint = match self.radio.cw.window {
                                 WindowKind::Gaussian => {
@@ -266,12 +311,19 @@ impl WaterfallApp {
                             };
                             format!("Filter delay ~{delay_ms:.0} ms (linear-phase FIR){shape_hint}")
                         } else {
-                            "IIR 2-pole — minimal delay, non-linear phase (may ring)".to_string()
+                            let kind = match self.radio.cw.iir_filter {
+                                IirFilterKind::Chebyshev => "Chebyshev",
+                                IirFilterKind::Butterworth => "Butterworth",
+                            };
+                            format!(
+                                "{kind} IIR 2-pole — minimal delay, non-linear phase (may ring)"
+                            )
                         };
                         ui.label(egui::RichText::new(delay_note).small().color(MUTED));
 
                         let filter_advanced = self.radio.cw.channel_filter != ChannelFilterKind::LinearFir
                             || self.radio.cw.economy_filter
+                            || self.radio.cw.iir_filter != IirFilterKind::Butterworth
                             || self.radio.cw.window != WindowKind::RaisedCosine
                             || self.radio.cw.passband_flatten
                             || self.radio.cw.window == WindowKind::Kaiser;

@@ -55,8 +55,9 @@ pub use nco::ComplexNco;
 pub use noiseblanker::NoiseBlanker;
 pub use noisereduction::NoiseReduction;
 pub use notch::IqNotch;
+pub use iir_channel::{iir_2pole_lowpass_q, DEFAULT_IIR_CHEBYSHEV_RIPPLE_DB};
 pub use settings::{
     AgcMode, AgcSettings, ApfSettings, AutoNotchSettings, ChannelFilterKind, CwChannelSettings,
-    DecimFilterKind, DiagnosticBypassSettings, NoiseBlankerSettings, NoiseReductionSettings,
-    NotchSpec, DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
+    DecimFilterKind, DiagnosticBypassSettings, IirFilterKind, NoiseBlankerSettings,
+    NoiseReductionSettings, NotchSpec, DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
 };

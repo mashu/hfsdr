@@ -65,6 +65,8 @@ pub struct AppSettings {
     pub channel_filter: u8,
     #[serde(default)]
     pub decim_filter: u8,
+    #[serde(default)]
+    pub iir_filter: u8,
     pub window: u8,
     pub kaiser_beta: f32,
     pub passband_flatten: bool,
@@ -199,6 +201,7 @@ impl Default for AppSettings {
             passband_hz: DEFAULT_CHANNEL_PASSBAND_HZ,
             channel_filter: 0,
             decim_filter: 0,
+            iir_filter: 0,
             window: window_to_persisted(DEFAULT_CHANNEL_WINDOW),
             kaiser_beta: DEFAULT_KAISER_BETA,
             passband_flatten: false,
