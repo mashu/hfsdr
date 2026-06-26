@@ -17,6 +17,7 @@ mod autonotch;
 mod channel;
 mod decimator;
 mod detector;
+mod filter_response;
 mod filter_plan;
 mod fir;
 mod iir_channel;
@@ -34,6 +35,12 @@ pub use autonotch::AutoNotch;
 pub use channel::{CwChannel, CwStageMetrics};
 pub use decimator::{audio_sample_rate, decimation_factor, effective_decimation, Decimator};
 pub use detector::ProductDetector;
+pub use filter_response::{
+    build_filter_overlay, build_listen_filter_curves, channel_half_width_hz, fir_cutoff_hz,
+    gui_passband_edge_hz, notch_display_half_hz, notch_width_for_display_half,
+    passband_hz_for_channel_half, filter_overlay_cache_key, FilterCurve, FilterCurveRequest,
+    FilterOverlay, OVERLAY_ATTEN_DB,
+};
 pub use filter_plan::{
     channel_group_delay_ms, clamp_passband_hz, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
     CHANNEL_PASSBAND_NARROW_MAX_HZ, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA,

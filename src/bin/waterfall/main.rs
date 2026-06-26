@@ -17,6 +17,7 @@ mod ham_bands;
 mod interaction;
 mod iq_panel;
 mod kiwi_directory;
+mod filter_diagnostic;
 mod pipeline_flow;
 mod log;
 mod scp_fetch;

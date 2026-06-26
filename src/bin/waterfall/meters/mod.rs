@@ -1,6 +1,7 @@
 //! RF / AF level meters and oscilloscope widgets.
 
 mod af_scope;
+mod af_scope_display;
 mod agc_loop;
 mod level;
 mod motion;

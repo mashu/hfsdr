@@ -37,11 +37,15 @@ pub struct PlotParams<'a> {
     /// Tuned carrier (Hz) — used for absolute MHz/kHz axis labels.
     pub center_freq_hz: f64,
     pub passband_hz: f32,
+    /// -3 dB channel half-width for plot overlay (from [`hfsdr::build_filter_overlay`]).
+    pub channel_half_hz: f32,
+    pub overlay_audio_rate: f32,
+    pub filter_settings: &'a hfsdr::CwChannelSettings,
     pub passband_min_hz: f32,
     pub passband_max_hz: f32,
     pub filter_editable: bool,
-    pub listen_center_hz: f64,
-    pub tune_preview_offset_hz: f64,
+    pub filter_center_hz: f64,
+    pub vfo_offset_hz: f64,
     pub notches: &'a [NotchMarker],
     pub labels: &'a [SpotLabel],
     pub trace: &'a [f32],
@@ -127,9 +131,14 @@ impl PanadapterPlot {
             p.passband_hz,
             p.passband_min_hz,
             p.passband_max_hz,
+            crate::interaction::FilterOverlayContext {
+                channel_half_hz: p.channel_half_hz,
+                audio_rate: p.overlay_audio_rate,
+            },
+            p.filter_settings,
             p.filter_editable,
-            p.listen_center_hz,
-            p.tune_preview_offset_hz,
+            p.filter_center_hz,
+            p.vfo_offset_hz,
             p.notches,
         );
 
@@ -172,13 +181,13 @@ fn draw_scope_layer(
     draw_plot_background(painter, rect);
 
     if p.filter_editable {
-        draw_filter_band(
+                draw_filter_band(
             painter,
             rect,
             view_span,
             pan,
-            p.listen_center_hz,
-            p.passband_hz,
+            p.filter_center_hz,
+            p.channel_half_hz,
             true,
         );
     }
@@ -191,7 +200,7 @@ fn draw_scope_layer(
             pan,
             notch.slot,
             notch.offset_hz.hz(),
-            notch.width_hz,
+            notch.display_half_hz,
             true,
         );
     }
@@ -204,7 +213,7 @@ fn draw_scope_layer(
         rect,
         view_span,
         pan,
-        p.tune_preview_offset_hz,
+        p.vfo_offset_hz,
         true,
     );
 

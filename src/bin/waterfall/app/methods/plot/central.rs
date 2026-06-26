@@ -67,7 +67,9 @@ impl WaterfallApp {
 
         let tune_preview_offset_hz = self.plot.tune_preview_offset_hz.unwrap_or(0.0);
         let listen_center_hz = self.listen_offset_hz();
-        let notches = self.enabled_notches();
+        let overlay = self.filter_overlay_cached().clone();
+        let notches = self.enabled_notches(&overlay);
+        let audio_rate = self.overlay_audio_rate();
         let labels = if self.skimmer_ui.skimmer_enabled {
             self.spot_labels(self.radio.center_khz * 1000.0)
         } else {
@@ -89,6 +91,9 @@ impl WaterfallApp {
             max_zoom,
             center_freq_hz: self.radio.center_khz * 1000.0,
             passband_hz: self.radio.cw.passband_hz,
+            channel_half_hz: overlay.channel_half_hz,
+            overlay_audio_rate: audio_rate,
+            filter_settings: &self.radio.cw,
             passband_min_hz: CW_PASSBAND_MIN_HZ,
             passband_max_hz: bw_max,
             filter_editable: true,

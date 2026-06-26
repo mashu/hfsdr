@@ -50,6 +50,17 @@ impl ComplexNco {
     ) {
         self.down.mix_block(input, output, freq_hz, sample_rate);
     }
+
+    /// Block mix-up into `output` (efficient counterpart to [`Self::mix_up`]).
+    pub fn mix_up_block(
+        &mut self,
+        input: &[Complex32],
+        output: &mut Vec<Complex32>,
+        freq_hz: f32,
+        sample_rate: f32,
+    ) {
+        self.up.mix_block(input, output, freq_hz, sample_rate);
+    }
 }
 
 #[cfg(test)]

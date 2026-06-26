@@ -163,6 +163,85 @@ impl WaterfallApp {
 
 
 
+    pub(crate) fn filter_popup(&mut self, ctx: &egui::Context) {
+        if !self.chrome.show_filter_drawer {
+            return;
+        }
+        let screen = ctx.content_rect();
+        let max_h = (screen.height() - 12.0).max(280.0);
+        let win_h = 420.0_f32.clamp(320.0, max_h);
+        let mut open = self.chrome.show_filter_drawer;
+        let audio_rate = hfsdr::audio_sample_rate(
+            self.radio.sample_rate.max(self.engine_ui.stats.sample_rate),
+            self.radio.cw.decimation,
+        );
+        let view_span = self.plot.plot_view.view_span_hz(
+            self.plot_full_span_hz(),
+            self.plot_max_zoom_out(),
+        );
+        let span_hz = (view_span * 0.35).clamp(400.0, 3_000.0);
+        let channel_half_hz = self.filter_overlay_cached().channel_half_hz;
+        let spectrum = self.spectrum_view();
+        let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
+        let listen_offset_hz = self.listen_offset_hz();
+        let ref_db = self.display.ref_db;
+        let range_db = self.display.range_db;
+        let trace_db = self.plot.smoothed_trace.clone();
+        let cw_settings = self.radio.cw.clone();
+        let channel_bypass = self.radio.cw.diagnostic.channel_fir;
+        let subtitle = format!(
+            "{:.0} Hz BW · {} notches · {:.0} Hz audio",
+            self.radio.cw.passband_hz,
+            self.radio.cw.notches.iter().filter(|n| n.enabled).count(),
+            audio_rate,
+        );
+        configure_popup_window(
+            "filter_popup",
+            [
+                screen.left() + (screen.width() - 520.0) * 0.5,
+                screen.top() + 48.0,
+            ],
+            520.0,
+            win_h,
+            320.0,
+            max_h,
+        )
+        .show(ctx, |ui| {
+            popup_header(
+                ui,
+                PopupHeader {
+                    title: "Filter response",
+                    subtitle: Some(&subtitle),
+                    status: None,
+                },
+                &mut open,
+            );
+            popup_scroll_body(ui, |ui| {
+                crate::filter_diagnostic::show_filter_diagnostic_panel(
+                    ui,
+                    &mut self.chrome.filter_diagnostic,
+                    &crate::filter_diagnostic::FilterDiagnosticView {
+                        settings: &cw_settings,
+                        audio_rate,
+                        span_hz,
+                        channel_half_hz,
+                        channel_bypass,
+                        trace_db: &trace_db,
+                        trace_view_span_hz: spectrum.view_span_hz,
+                        trace_pan_hz: spectrum.compose_pan_offset_hz,
+                        listen_offset_hz,
+                        ref_db,
+                        range_db,
+                        streaming,
+                    },
+                );
+            });
+        });
+        self.chrome.show_filter_drawer = open;
+    }
+
+
+
     pub(crate) fn shortcuts_popup(&mut self, ctx: &egui::Context) {
         if !self.chrome.show_shortcuts {
             return;
@@ -182,7 +261,8 @@ impl WaterfallApp {
                 );
                 ui.add_space(6.0);
                 for (keys, action) in [
-                    ("← / →", "Pan view (zoomed) or tune RX · hold to accelerate"),
+                    ("Ctrl+drag", "Cyan band = RIT · edges = BW · purple notches"),
+                    ("Click / drag", "Tune RX (Shift+drag = pan view when zoomed)"),
                     ("Shift / Ctrl", "Fine / fast pan steps"),
                     ("Z", "Zero-beat to strongest carrier"),
                     ("L", "Lock pitch to BFO"),

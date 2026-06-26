@@ -77,6 +77,29 @@ impl Biquad {
         self.a2 = (1.0 - alpha) / a0;
     }
 
+    /// Linear magnitude |H(e^jω)| at `freq_hz` (coefficients only — no state).
+    pub fn magnitude_linear(&self, sample_rate: f32, freq_hz: f32) -> f32 {
+        if sample_rate <= 0.0 {
+            return 1.0;
+        }
+        let w = 2.0 * PI * freq_hz / sample_rate;
+        let c1 = w.cos();
+        let s1 = w.sin();
+        let c2 = (2.0 * w).cos();
+        let s2 = (2.0 * w).sin();
+        let num_r = self.b0 + self.b1 * c1 + self.b2 * c2;
+        let num_i = -self.b1 * s1 - self.b2 * s2;
+        let den_r = 1.0 + self.a1 * c1 + self.a2 * c2;
+        let den_i = -self.a1 * s1 - self.a2 * s2;
+        let den_sq = den_r * den_r + den_i * den_i;
+        if den_sq < 1e-20 {
+            return 1.0;
+        }
+        let hr = (num_r * den_r + num_i * den_i) / den_sq;
+        let hi = (num_i * den_r - num_r * den_i) / den_sq;
+        (hr * hr + hi * hi).sqrt()
+    }
+
 }
 
 #[cfg(test)]

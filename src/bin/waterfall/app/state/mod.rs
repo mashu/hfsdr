@@ -17,7 +17,7 @@ pub use connection::{ConnectionFormState, ConnectionState, KiwiDirectoryState};
 pub use display::DisplayState;
 pub use engine_ui::EngineUiState;
 pub use meter::MeterDisplayState;
-pub use plot::PlotState;
+pub use plot::{FilterOverlayCache, PlotState};
 pub use plot_cache::WaterfallTextureCache;
 pub use radio::RadioState;
 pub use skimmer::SkimmerUiState;

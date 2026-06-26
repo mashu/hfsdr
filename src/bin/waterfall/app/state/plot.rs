@@ -27,5 +27,12 @@ pub struct PlotState {
     pub plot_interaction: PlotInteraction,
     pub hover_offset_hz: Option<f64>,
     pub last_plot_interaction_rect: Option<egui::Rect>,
+    pub filter_overlay: FilterOverlayCache,
     pub tune_preview_offset_hz: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FilterOverlayCache {
+    pub overlay: hfsdr::FilterOverlay,
+    pub key: u64,
 }

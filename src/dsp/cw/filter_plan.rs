@@ -18,8 +18,8 @@ pub const DEFAULT_CHANNEL_PASSBAND_HZ: f32 = 200.0;
 /// Ctrl+scroll / keyboard step for passband width (Hz).
 pub const PASSBAND_STEP_HZ: f32 = 25.0;
 
-/// Sinc cutoff as a fraction of GUI passband. Cyan overlay edges sit at ±passband_hz/2;
-/// this places them in the transition/stopband instead of on the -3 dB point.
+/// Sinc cutoff as a fraction of GUI passband width (Hz). Main-plot edges use −3 dB
+/// half-width from [`super::filter_response::build_filter_overlay`].
 pub const PASSBAND_CUTOFF_FRAC: f32 = 0.34;
 
 /// Floor on lowpass cutoff (Hz) for ultra-narrow passbands.

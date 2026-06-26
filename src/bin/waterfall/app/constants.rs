@@ -41,10 +41,11 @@ pub(crate) const BFO_PRESETS: [(&str, f32); 5] =
 
 pub(crate) const SMOOTH_ALPHA: f32 = 0.09;
 
-pub(crate) const FILTER_PRESETS: [(&str, f32); 7] = [
+pub(crate) const FILTER_PRESETS: [(&str, f32); 8] = [
     ("25", CHANNEL_PASSBAND_MIN_HZ),
     ("50", 50.0),
     ("100", 100.0),
+    ("200", 200.0),
     ("250", 250.0),
     ("500", 500.0),
     ("1k", 1_000.0),

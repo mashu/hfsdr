@@ -53,7 +53,7 @@ fn hint_accent(h: AudioLevelHint) -> Color32 {
 }
 
 pub struct AfScopeParams<'a> {
-    pub samples: &'a [f32],
+    pub envelope: &'a [f32],
     pub peak: f32,
     pub peak_display: f32,
     pub rms: f32,
@@ -249,7 +249,7 @@ fn paint_half_scale_guides(painter: &eframe::egui::Painter, rect: Rect) {
 }
 
 fn paint_trace(painter: &eframe::egui::Painter, rect: Rect, p: &AfScopeParams<'_>) {
-    if p.samples.len() < 2 {
+    if p.envelope.len() < 2 {
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
@@ -262,26 +262,17 @@ fn paint_trace(painter: &eframe::egui::Painter, rect: Rect, p: &AfScopeParams<'_
 
     let mid_y = rect.center().y;
     let half_h = rect.height() * 0.44;
-    let cols = (((rect.width() - 4.0) / 2.5).round() as usize).clamp(40, 96);
-    let col_w = (rect.width() - 4.0) / cols as f32;
+    let n = p.envelope.len();
+    let col_w = (rect.width() - 4.0) / n as f32;
     let clip_top = rect.top() + rect.height() * 0.08;
     let clip_bot = rect.bottom() - rect.height() * 0.08;
-    let n = p.samples.len();
     let mut clipped = false;
 
-    for col in 0..cols {
-        let i0 = col * n / cols;
-        let i1 = ((col + 1) * n / cols).max(i0 + 1).min(n);
-        let mut min_s = f32::MAX;
-        let mut max_s = f32::MIN;
-        for &s in &p.samples[i0..i1] {
-            let v = s.clamp(-1.15, 1.15);
-            min_s = min_s.min(v);
-            max_s = max_s.max(v);
-        }
+    for (col, &env) in p.envelope.iter().enumerate() {
+        let e = env.clamp(0.0, 1.15);
         let x = rect.left() + 2.0 + col as f32 * col_w + col_w * 0.5;
-        let y_top = mid_y - max_s * half_h;
-        let y_bot = mid_y - min_s * half_h;
+        let y_top = mid_y - e * half_h;
+        let y_bot = mid_y + e * half_h;
         if y_top <= clip_top || y_bot >= clip_bot {
             clipped = true;
         }

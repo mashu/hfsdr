@@ -77,6 +77,7 @@ impl CwStageMetrics {
 pub struct CwChannel {
     noise_blanker: NoiseBlanker,
     shift_nco: ComplexNco,
+    filter_shift_nco: ComplexNco,
     decimator: Decimator,
     notches: [IqNotch; MAX_NOTCHES],
     channel_fir: FirFilter,
@@ -110,6 +111,7 @@ impl CwChannel {
         Self {
             noise_blanker: NoiseBlanker::new(),
             shift_nco: ComplexNco::new(),
+            filter_shift_nco: ComplexNco::new(),
             decimator,
             notches: std::array::from_fn(|_| IqNotch::new()),
             channel_fir: design_lowpass_with(
@@ -363,19 +365,13 @@ impl CwChannel {
             self.work_iq.clear();
             self.work_iq.extend_from_slice(&self.work_mix);
         } else {
-            match channel_filter {
-                ChannelFilterKind::LinearFir => {
-                    self.channel_fir
-                        .process_complex_block(&self.work_mix, &mut self.work_iq);
-                }
-                ChannelFilterKind::Iir2Pole => {
-                    self.work_iq.clear();
-                    self.work_iq.reserve(self.work_mix.len());
-                    for &z in &self.work_mix {
-                        self.work_iq.push(self.channel_iir.process_complex(z));
-                    }
-                }
-            }
+            self.apply_channel_filter(
+                &self.work_mix,
+                audio_rate,
+                settings,
+                channel_filter,
+                &mut self.work_iq,
+            );
         }
         for i in 0..self.work_iq.len() {
             let level = self.work_iq[i].norm().max(1e-7);
@@ -466,6 +462,51 @@ impl CwChannel {
                 + m.agc_ns
                 + m.detector_ns
                 + m.polish_ns;
+        }
+    }
+
+    /// Lowpass at DC when filter and listen coincide; otherwise a bandpass centered on
+    /// [`CwChannelSettings::filter_offset_hz`] while demod stays at [`CwChannelSettings::listen_offset_hz`].
+    fn apply_channel_filter(
+        &mut self,
+        input: &[Complex32],
+        audio_rate: f32,
+        settings: &CwChannelSettings,
+        channel_filter: ChannelFilterKind,
+        out: &mut Vec<Complex32>,
+    ) {
+        let filter_rel =
+            settings.filter_offset_hz.hz() - settings.listen_offset_hz.hz();
+        if filter_rel.abs() < 0.5 {
+            match channel_filter {
+                ChannelFilterKind::LinearFir => {
+                    self.channel_fir.process_complex_block(input, out);
+                }
+                ChannelFilterKind::Iir2Pole => {
+                    out.clear();
+                    out.reserve(input.len());
+                    for &z in input {
+                        out.push(self.channel_iir.process_complex(z));
+                    }
+                }
+            }
+            return;
+        }
+
+        out.clear();
+        out.reserve(input.len());
+        for &sample in input {
+            let shifted = self
+                .filter_shift_nco
+                .mix_down(sample, filter_rel, audio_rate);
+            let filtered = match channel_filter {
+                ChannelFilterKind::LinearFir => self.channel_fir.process_complex(shifted),
+                ChannelFilterKind::Iir2Pole => self.channel_iir.process_complex(shifted),
+            };
+            out.push(
+                self.filter_shift_nco
+                    .mix_up(filtered, filter_rel, audio_rate),
+            );
         }
     }
 

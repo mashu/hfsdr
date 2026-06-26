@@ -5,8 +5,8 @@ const NEEDLE_PERIOD_S: f32 = 0.62;
 const NEEDLE_ZETA: f32 = 1.28;
 const BAR_PERIOD_S: f32 = 0.34;
 const BAR_ZETA: f32 = 1.18;
-const SCOPE_PEAK_PERIOD_S: f32 = 0.42;
-const SCOPE_PEAK_ZETA: f32 = 1.12;
+const SCOPE_PEAK_PERIOD_S: f32 = 0.55;
+const SCOPE_PEAK_ZETA: f32 = 1.15;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Spring {
@@ -41,10 +41,12 @@ pub struct MeterDisplayState {
     if_fill: Spring,
     af_fill: Spring,
     af_scope_peak: Spring,
+    pub af_scope: super::af_scope_display::AfScopeDisplayState,
     pub display: MeterSmoothed,
 }
 
 /// Raw meter targets for one frame.
+#[derive(Clone, Copy)]
 pub struct MeterTargets {
     pub needle_t: f32,
     pub if_fill: f32,
@@ -69,6 +71,7 @@ impl MeterDisplayState {
             self.if_fill.snap(0.0);
             self.af_fill.snap(0.0);
             self.af_scope_peak.snap(0.0);
+            self.af_scope.reset();
             self.display = MeterSmoothed {
                 needle_t: 0.0,
                 if_fill: 0.0,

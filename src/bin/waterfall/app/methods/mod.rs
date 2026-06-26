@@ -13,6 +13,7 @@ mod plot {
     mod actions;
     mod cache;
     mod central;
+    mod overlay;
     mod waterfall;
 }
 mod radio {
