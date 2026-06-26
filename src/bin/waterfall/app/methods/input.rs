@@ -94,8 +94,50 @@ impl WaterfallApp {
 
 
 
+    pub(crate) fn handle_escape(&mut self, ctx: &egui::Context) -> bool {
+        if self.chrome.show_shortcuts {
+            self.chrome.show_shortcuts = false;
+            return true;
+        }
+        if self.connection.form.show_connection_drawer {
+            self.connection.form.show_connection_drawer = false;
+            return true;
+        }
+        if self.chrome.show_iq_drawer {
+            self.chrome.show_iq_drawer = false;
+            return true;
+        }
+        if self.chrome.show_pipeline_drawer {
+            self.chrome.show_pipeline_drawer = false;
+            return true;
+        }
+        if self.chrome.show_filter_drawer {
+            self.chrome.show_filter_drawer = false;
+            return true;
+        }
+        if self.connection_session_live() {
+            self.cancel_connection();
+            return true;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        true
+    }
+
+
+
     pub(crate) fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.handle_escape(ctx);
+            return;
+        }
         if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter))
+            && matches!(self.engine_ui.conn_state, ConnState::Disconnected)
+            && self.can_quick_connect()
+        {
+            self.quick_connect_last();
             return;
         }
         self.handle_arrow_pan(ctx);

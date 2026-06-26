@@ -9,15 +9,13 @@ impl WaterfallApp {
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(320.0);
-        let win_h = (screen.height() * 0.86).clamp(420.0, max_h);
+        let body_max_h = popup_body_max_height(max_h);
         let mut open = self.connection.form.show_connection_drawer;
         let (status_label, status_color) = self.connection_status_pill();
         configure_popup_window(
             "connection_popup",
             [screen.left() + 12.0, screen.top() + 36.0],
             500.0,
-            win_h,
-            280.0,
             max_h,
         )
         .show(ctx, |ui| {
@@ -30,7 +28,7 @@ impl WaterfallApp {
                 },
                 &mut open,
             );
-            popup_scroll_body(ui, |ui| {
+            popup_scroll_body(ui, body_max_h, |ui| {
                 self.connection_card(ui);
             });
         });
@@ -45,7 +43,7 @@ impl WaterfallApp {
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(200.0);
-        let win_h = 300.0_f32.clamp(200.0, max_h);
+        let body_max_h = popup_body_max_height(max_h);
         let mut open = self.chrome.show_iq_drawer;
         let subtitle = format!(
             "{:.0}% · {:.2}s queued",
@@ -65,8 +63,6 @@ impl WaterfallApp {
             "iq_popup",
             [screen.left() + 200.0, screen.top() + 36.0],
             420.0,
-            win_h,
-            200.0,
             max_h,
         )
         .show(ctx, |ui| {
@@ -79,7 +75,7 @@ impl WaterfallApp {
                 },
                 &mut open,
             );
-            popup_scroll_body(ui, |ui| {
+            popup_scroll_body(ui, body_max_h, |ui| {
                 let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
                 let (cmds, dirty) = self.chrome.iq.show(
                     ui,
@@ -105,7 +101,7 @@ impl WaterfallApp {
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(320.0);
-        let win_h = 640.0_f32.clamp(420.0, max_h);
+        let body_max_h = popup_body_max_height(max_h);
         let mut open = self.chrome.show_pipeline_drawer;
         let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
         let subtitle = format!(
@@ -127,8 +123,6 @@ impl WaterfallApp {
                 screen.top() + 36.0,
             ],
             860.0,
-            win_h,
-            420.0,
             max_h,
         )
         .show(ctx, |ui| {
@@ -141,7 +135,7 @@ impl WaterfallApp {
                 },
                 &mut open,
             );
-            popup_scroll_body(ui, |ui| {
+            popup_scroll_body(ui, body_max_h, |ui| {
                 let snap = PipelineSnapshot {
                     source_label: &self.connection_alias(),
                     streaming,
@@ -170,7 +164,7 @@ impl WaterfallApp {
         }
         let screen = ctx.content_rect();
         let max_h = (screen.height() - 12.0).max(280.0);
-        let win_h = 420.0_f32.clamp(320.0, max_h);
+        let body_max_h = popup_body_max_height(max_h);
         let mut open = self.chrome.show_filter_drawer;
         let audio_rate = hfsdr::audio_sample_rate(
             self.radio.sample_rate.max(self.engine_ui.stats.sample_rate),
@@ -204,8 +198,6 @@ impl WaterfallApp {
                 screen.top() + 48.0,
             ],
             520.0,
-            win_h,
-            320.0,
             max_h,
         )
         .show(ctx, |ui| {
@@ -218,7 +210,7 @@ impl WaterfallApp {
                 },
                 &mut open,
             );
-            popup_scroll_body(ui, |ui| {
+            popup_scroll_body(ui, body_max_h, |ui| {
                 crate::filter_diagnostic::show_filter_diagnostic_panel(
                     ui,
                     &mut self.chrome.filter_diagnostic,
@@ -278,6 +270,8 @@ impl WaterfallApp {
                     ("F / M", "Full IQ span / band overview"),
                     ("Space / - / +", "Mute / volume down / up"),
                     ("`", "Toggle log panel"),
+                    ("Enter", "Quick connect to last receiver"),
+                    ("Esc", "Close panel · disconnect · quit"),
                     ("F11", "Fullscreen"),
                 ] {
                     ui.horizontal(|ui| {

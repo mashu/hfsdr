@@ -73,15 +73,19 @@ pub fn popup_header(ui: &mut Ui, header: PopupHeader<'_>, open: &mut bool) {
     );
 }
 
-pub fn popup_scroll_body<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
-    let body_h = ui.available_height();
+/// Max scrollable body height inside a popup (header chrome is ~48px).
+pub fn popup_body_max_height(window_max_h: f32) -> f32 {
+    (window_max_h - 48.0).max(120.0)
+}
+
+pub fn popup_scroll_body<R>(ui: &mut Ui, max_body_height: f32, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     Frame::new()
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            ui.set_min_height(body_h.max(0.0));
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
             egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
+                .auto_shrink([true, true])
+                .max_height(max_body_height)
                 .show(ui, add_contents)
                 .inner
         })
@@ -381,8 +385,6 @@ pub fn configure_popup_window(
     id: &str,
     default_pos: [f32; 2],
     width: f32,
-    default_height: f32,
-    min_height: f32,
     max_height: f32,
 ) -> egui::Window<'static> {
     egui::Window::new(egui::RichText::new("").size(0.0))
@@ -390,12 +392,11 @@ pub fn configure_popup_window(
         .title_bar(false)
         .frame(popup_window_frame())
         .collapsible(false)
-        .resizable([false, true])
+        .resizable(false)
+        .auto_sized()
         .min_width(width)
         .max_width(width)
-        .min_height(min_height)
         .max_height(max_height)
-        .default_size([width, default_height])
         .default_pos(default_pos)
 }
 
