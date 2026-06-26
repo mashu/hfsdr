@@ -126,7 +126,7 @@ pub fn show_filter_diagnostic_panel(
 
     ui.horizontal(|ui| {
         legend_dot(ui, Color32::from_rgb(148, 163, 184), "Spectrum (unfiltered)");
-        legend_dot(ui, OK, "After channel filter");
+        legend_dot(ui, OK, "After channel filter + notches");
     });
     ui.add_space(6.0);
 
@@ -210,11 +210,19 @@ fn build_live_curves(view: &FilterDiagnosticView<'_>, theory: &FilterCurve) -> D
             &theory.channel_only_db,
             rel - filter_rel,
         );
+        let active_db_at = interp_curve_db(&theory.offsets_hz, &theory.active_db, rel);
+        let ch_db_at_listen = interp_curve_db(
+            &theory.offsets_hz,
+            &theory.channel_only_db,
+            rel,
+        );
+        let notch_lin = db_to_linear(active_db_at) / db_to_linear(ch_db_at_listen).max(1e-9);
+        let combined_db = ch_db + linear_to_db(notch_lin);
         signal_db.push(raw);
         filtered_db.push(if view.channel_bypass {
             raw
         } else {
-            raw + ch_db
+            raw + combined_db
         });
     }
 
@@ -223,6 +231,14 @@ fn build_live_curves(view: &FilterDiagnosticView<'_>, theory: &FilterCurve) -> D
         signal_db,
         filtered_db,
     }
+}
+
+fn linear_to_db(lin: f32) -> f32 {
+    20.0 * lin.max(1e-9).log10()
+}
+
+fn db_to_linear(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
 }
 
 fn sample_trace_db(
@@ -321,7 +337,11 @@ fn paint_filter_curve(painter: &Painter, rect: Rect, live: &DiagnosticCurves, vi
     }
     let _ = floor_db;
 
-    for off in [-view.channel_half_hz, view.channel_half_hz] {
+    let filter_shift = view.filter_shift_hz as f32;
+    for off in [
+        filter_shift - view.channel_half_hz,
+        filter_shift + view.channel_half_hz,
+    ] {
         let x = offset_to_x(off, half_span, inner);
         painter.line_segment(
             [Pos2::new(x, inner.top()), Pos2::new(x, inner.bottom())],
@@ -333,10 +353,12 @@ fn paint_filter_curve(painter: &Painter, rect: Rect, live: &DiagnosticCurves, vi
     }
 
     let overlay = hfsdr::build_filter_overlay(view.settings, view.audio_rate);
+    let listen_hz = view.listen_offset_hz as f32;
     for (slot, n) in view.settings.notches.iter().enumerate().filter(|(_, n)| n.enabled) {
         let half = overlay.notch_half_hz[slot];
-        let left = offset_to_x(n.offset_hz.hz() - half, half_span, inner);
-        let right = offset_to_x(n.offset_hz.hz() + half, half_span, inner);
+        let center = n.offset_hz.hz() - listen_hz;
+        let left = offset_to_x(center - half, half_span, inner);
+        let right = offset_to_x(center + half, half_span, inner);
         let band = Rect::from_min_max(
             Pos2::new(left, inner.top()),
             Pos2::new(right, inner.bottom()),
@@ -346,7 +368,7 @@ fn paint_filter_curve(painter: &Painter, rect: Rect, live: &DiagnosticCurves, vi
             0.0,
             Color32::from_rgba_unmultiplied(192, 132, 252, 18),
         );
-        let cx = offset_to_x(n.offset_hz.hz(), half_span, inner);
+        let cx = offset_to_x(center, half_span, inner);
         painter.line_segment(
             [Pos2::new(cx, inner.top()), Pos2::new(cx, inner.bottom())],
             Stroke::new(1.0, Color32::from_rgba_unmultiplied(192, 132, 252, 120)),

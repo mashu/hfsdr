@@ -252,6 +252,7 @@ pub fn build_listen_filter_curves(req: &FilterCurveRequest) -> FilterCurve {
     }
 
     let channel_bypass = settings.diagnostic.channel_fir;
+    let listen_hz = settings.listen_offset_hz.hz();
     let enabled_notches: Vec<_> = settings
         .notches
         .iter()
@@ -270,7 +271,8 @@ pub fn build_listen_filter_curves(req: &FilterCurveRequest) -> FilterCurve {
 
         let mut notch_mag = 1.0f32;
         for n in &enabled_notches {
-            notch_mag *= notch_magnitude_linear(rate, n.width_hz, offset, n.offset_hz.hz());
+            let tone_hz = listen_hz + offset;
+            notch_mag *= notch_magnitude_linear(rate, n.width_hz, tone_hz, n.offset_hz.hz());
         }
 
         let ch_mag = if channel_bypass {
