@@ -39,7 +39,8 @@ pub(crate) use crate::ham_bands;
 pub(crate) use crate::rf_view;
 pub(crate) use crate::popup::{
     alert_banner, chip_row, configure_popup_window, ghost_button, inline_stats, list_row,
-    popup_header, popup_scroll_body, popup_section, primary_button, secondary_button,
+    popup_body_max_height, popup_header, popup_scroll_body, popup_section, primary_button,
+    secondary_button,
     preset_segment_f32, segment_choice, truncate_middle, PopupHeader,
 };
 pub(crate) use crate::iq_panel::{IqPanel, IqPanelCmd, IqPanelView};

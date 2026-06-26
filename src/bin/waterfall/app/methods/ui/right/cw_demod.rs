@@ -23,6 +23,14 @@ impl WaterfallApp {
         });
     }
 
+    fn filter_design_label_tip(ui: &mut egui::Ui, label: &str, title: &str, lines: &[(&str, Color32)]) {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let label_resp = ui.label(egui::RichText::new(label).small().color(MUTED));
+        let hint_resp = ui.label(egui::RichText::new("(?)").small().color(MUTED));
+        attach_rich_tooltip(&label_resp, Some(title), lines);
+        attach_rich_tooltip(&hint_resp, Some(title), lines);
+    }
+
     fn cw_filter_design_body(&mut self, ui: &mut egui::Ui) {
         let arch_sel = if self.radio.cw.channel_filter == ChannelFilterKind::LinearFir {
             0
@@ -30,7 +38,26 @@ impl WaterfallApp {
             1
         };
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Architecture").small().color(MUTED));
+            Self::filter_design_label_tip(
+                ui,
+                "Architecture",
+                "Channel filter architecture",
+                &[
+                    ("IQ bandpass, pre-demod", ACCENT),
+                    (
+                        "Both options filter complex baseband before the BFO. Only energy \
+                         that passes this bandpass is demodulated into audio.",
+                        MUTED,
+                    ),
+                    ("FIR", OK),
+                    (
+                        "Windowed sinc — linear phase, steep skirts, predictable group delay.",
+                        MUTED,
+                    ),
+                    ("IIR 2-pole", OK),
+                    ("Minimal delay; non-linear phase and may ring on fast CW.", MUTED),
+                ],
+            );
             if let Some(i) = segment_choice(ui, "ch_filter_arch", arch_sel, &["FIR", "IIR 2-pole"]) {
                 self.radio.cw.channel_filter = if i == 0 {
                     ChannelFilterKind::LinearFir
@@ -47,7 +74,33 @@ impl WaterfallApp {
                 WindowKind::Kaiser => 3,
             };
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Window").small().color(MUTED));
+                Self::filter_design_label_tip(
+                    ui,
+                    "Window",
+                    "FIR window (filter shape)",
+                    &[
+                        ("Shapes the channel FIR", ACCENT),
+                        (
+                            "The channel filter is a windowed-sinc bandpass on IQ. The window \
+                             truncates the ideal sinc and sets how sharply energy outside your \
+                             passband is rejected.",
+                            MUTED,
+                        ),
+                        ("Why it affects audio", OK),
+                        (
+                            "This runs before BFO demod — neighbors that leak through the skirts \
+                             are mixed into your sidetone. BW sets passband width; window sets \
+                             skirt steepness vs keying ringing.",
+                            MUTED,
+                        ),
+                        ("Pick", ACCENT),
+                        (
+                            "Blackman/Kaiser: best adjacent-CW rejection · Gaussian: softest · \
+                             RaisedCos: everyday default.",
+                            MUTED,
+                        ),
+                    ],
+                );
                 if let Some(i) =
                     segment_choice(ui, "ch_filter_win", shape_sel, &["Gauss", "RaisedCos", "Blackman", "Kaiser"])
                 {
@@ -60,11 +113,23 @@ impl WaterfallApp {
                 }
             });
             if self.radio.cw.window == WindowKind::Kaiser {
-                scroll_slider_f32(
+                let beta_resp = scroll_slider_f32(
                     ui,
                     &mut self.radio.cw.kaiser_beta,
                     MIN_KAISER_BETA..=MAX_KAISER_BETA,
                     "Kaiser β",
+                );
+                attach_rich_tooltip(
+                    &beta_resp,
+                    Some("Kaiser β"),
+                    &[
+                        ("Stopband steepness", ACCENT),
+                        (
+                            "Higher β sharpens FIR skirts (better adjacent rejection); lower β \
+                             is softer with a shorter impulse.",
+                            MUTED,
+                        ),
+                    ],
                 );
             }
             let flatten_resp =
@@ -107,7 +172,8 @@ impl WaterfallApp {
             Some(&[
                 ("Channel filter", ACCENT),
                 (
-                    "Complex IQ filter before demod — rejects adjacent signals while the carrier is still recoverable.",
+                    "IQ bandpass before demod — BW sets width; Filter design sets how sharply \
+                     skirts reject adjacent carriers (FIR window).",
                     MUTED,
                 ),
                 ("Plot", ACCENT),
@@ -139,7 +205,7 @@ impl WaterfallApp {
                 popup_section(
                     ui,
                     "Channel filter",
-                    Some("Passband width before demodulation"),
+                    Some("IQ bandpass before demod — BW is width; Filter design is skirt shape"),
                     |ui| {
                         let wide_sel = usize::from(self.skimmer_ui.filter_wide);
                         ui.label(egui::RichText::new("Range").small().color(MUTED));
@@ -209,12 +275,28 @@ impl WaterfallApp {
                             || self.radio.cw.window != WindowKind::RaisedCosine
                             || self.radio.cw.passband_flatten
                             || self.radio.cw.window == WindowKind::Kaiser;
-                        egui::CollapsingHeader::new(egui::RichText::new("Filter design").small().color(MUTED))
-                            .id_salt("cw_filter_design")
-                            .default_open(filter_advanced)
-                            .show(ui, |ui| {
-                                self.cw_filter_design_body(ui);
-                            });
+                        let design_hdr = egui::CollapsingHeader::new(
+                            egui::RichText::new("Filter design").small().color(MUTED),
+                        )
+                        .id_salt("cw_filter_design")
+                        .default_open(filter_advanced)
+                        .show(ui, |ui| {
+                            self.cw_filter_design_body(ui);
+                        });
+                        attach_rich_tooltip(
+                            &design_hdr.header_response,
+                            Some("Filter design"),
+                            &[
+                                ("How the bandpass is built", ACCENT),
+                                (
+                                    "BW presets and the slider set passband width. These advanced \
+                                     controls set filter architecture and FIR window shape — \
+                                     they change adjacent-signal rejection and keying character, \
+                                     not just how wide the passband is.",
+                                    MUTED,
+                                ),
+                            ],
+                        );
                     },
                 );
 

@@ -76,7 +76,21 @@ pub fn show_af_tuning_panel(ui: &mut Ui, p: &AfScopeParams<'_>) {
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("AF scope").strong().color(ACCENT));
+                let title = ui.label(egui::RichText::new("AF scope").strong().color(ACCENT));
+                attach_rich_tooltip(
+                    &title,
+                    Some("AF scope"),
+                    &[
+                        ("RF gain aid", ACCENT),
+                        (
+                            "Post-demod audio envelope — tune RF gain so peaks sit near \
+                             ±half scale without clipping.",
+                            MUTED,
+                        ),
+                        ("Shortcut", OK),
+                        ("G toggles this panel (Scope in the status bar).", MUTED),
+                    ],
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     status_badge(ui, p.hint);
                 });
@@ -114,45 +128,155 @@ fn status_badge(ui: &mut Ui, hint: AudioLevelHint) {
     attach_rich_tooltip(&resp, Some("AF level"), hint_tip_lines(hint));
 }
 
-fn metric_chip(ui: &mut Ui, label: &str, value: &str, accent: Color32) {
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new(label).small().color(MUTED));
-        ui.label(egui::RichText::new(value).monospace().color(accent));
-    });
+fn metric_chip_with_tip(
+    ui: &mut Ui,
+    label: &str,
+    value: &str,
+    accent: Color32,
+    tip: &[(&str, Color32)],
+) {
+    let response = ui
+        .vertical(|ui| {
+            ui.label(egui::RichText::new(label).small().color(MUTED));
+            ui.label(egui::RichText::new(value).monospace().color(accent));
+        })
+        .response;
+    attach_rich_tooltip(&response, Some(label), tip);
 }
 
 fn metric_row(ui: &mut Ui, p: &AfScopeParams<'_>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 16.0;
-        metric_chip(ui, "Peak", &format!("{:.3}", p.peak), TRACE);
-        metric_chip(ui, "RMS", &format!("{:.3}", p.rms), MUTED);
+        metric_chip_with_tip(
+            ui,
+            "Peak",
+            &format!("{:.3}", p.peak),
+            TRACE,
+            &[
+                ("Post-AGC audio", TRACE),
+                (
+                    "Instantaneous |audio| peak — aim near half scale (~0.45) when tuning RF gain.",
+                    MUTED,
+                ),
+            ],
+        );
+        metric_chip_with_tip(
+            ui,
+            "RMS",
+            &format!("{:.3}", p.rms),
+            MUTED,
+            &[
+                ("Average level", ACCENT),
+                (
+                    "Short-term RMS of demod audio — steadier than peak between keying edges.",
+                    MUTED,
+                ),
+            ],
+        );
         if p.agc_enabled {
-            metric_chip(ui, "IQ AGC", &format!("{:.1}×", p.agc_gain), ACCENT);
-            metric_chip(
+            metric_chip_with_tip(
+                ui,
+                "IQ AGC",
+                &format!("{:.1}×", p.agc_gain),
+                ACCENT,
+                &[
+                    ("Software IF loop", ACCENT),
+                    (
+                        "Compensates RF level before demod — high × boosts weak signals, \
+                         low × pulls back hot RF. Independent of the S-meter.",
+                        MUTED,
+                    ),
+                ],
+            );
+            metric_chip_with_tip(
                 ui,
                 "Env",
                 &format!("{:.3}", p.agc_envelope),
                 MUTED,
+                &[
+                    ("IQ envelope", ACCENT),
+                    (
+                        "Level the AGC loop is tracking on filtered IQ — rises when RF is strong, \
+                         falls between characters.",
+                        MUTED,
+                    ),
+                ],
             );
-            metric_chip(ui, "Tgt", &format!("{:.2}", p.agc_target), MUTED);
+            metric_chip_with_tip(
+                ui,
+                "Tgt",
+                &format!("{:.2}", p.agc_target),
+                MUTED,
+                &[
+                    ("AGC target", ACCENT),
+                    ("Desired IQ envelope level — set in CW demod → Level (AGC).", MUTED),
+                ],
+            );
         }
         if p.streaming {
             let rf_dbm = rf_level_dbm(p.rssi_dbm, p.iq_rf_level);
-            metric_chip(ui, "RF", &dbm_to_s_reading(rf_dbm), OK);
+            metric_chip_with_tip(
+                ui,
+                "RF",
+                &dbm_to_s_reading(rf_dbm),
+                OK,
+                &[
+                    ("Pre-AGC IQ", OK),
+                    (
+                        "S-unit from IQ level before software AGC — same scale as the S-meter. \
+                         Raise RF gain until RF/peak look healthy without HOT.",
+                        MUTED,
+                    ),
+                ],
+            );
         }
-        metric_chip(
+        metric_chip_with_tip(
             ui,
             "IQ buf",
             &format!("{:.0}%", p.iq_headroom * 100.0),
             MUTED,
+            &[
+                ("Engine buffer", ACCENT),
+                (
+                    "IQ ring-buffer fill — sustained high % means the pump is falling behind \
+                     the sample stream.",
+                    MUTED,
+                ),
+            ],
         );
     });
 }
 
 pub fn show_af_scope(ui: &mut Ui, p: &AfScopeParams<'_>) {
     let h = 96.0;
-    let (outer, _resp) =
+    let (outer, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width().max(220.0), h), Sense::hover());
+    attach_rich_tooltip(
+        &resp,
+        Some("AF trace"),
+        &[
+            ("Waveform", TRACE),
+            (
+                "Recent demod audio envelope, left → right. Symmetric bars show |level| \
+                 above and below zero.",
+                MUTED,
+            ),
+            ("Scale", ACCENT),
+            (
+                "+1 / 0 / −1 = full / zero / inverted full swing. Dashed ± lines and the \
+                 −6 label mark the half-scale target (~−6 dB).",
+                MUTED,
+            ),
+            ("Red bands", WARN),
+            ("Top and bottom clipping zones — trace touching them risks distortion.", MUTED),
+            ("Peak bar", OK),
+            (
+                "Right-edge meter: smoothed peak fill vs accent target tick. \
+                 Match the trace to the dashed guides when tuning RF gain.",
+                MUTED,
+            ),
+        ],
+    );
     let painter = ui.painter_at(outer);
 
     let plot = outer.shrink2(Vec2::new(28.0, 6.0));
