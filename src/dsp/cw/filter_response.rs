@@ -8,7 +8,6 @@ use std::f32::consts::TAU;
 use super::super::biquad::Biquad;
 use super::filter_plan::{
     clamp_passband_hz, passband_cutoff_hz, DEFAULT_CHANNEL_PASSBAND_HZ, CHANNEL_PASSBAND_MAX_HZ,
-    CHANNEL_PASSBAND_MIN_HZ,
 };
 use super::fir::{design_lowpass_with, LowpassDesign};
 use super::settings::{ChannelFilterKind, CwChannelSettings, MAX_NOTCHES};
@@ -358,6 +357,7 @@ fn dc_block_magnitude_linear(alpha: f32, freq_hz: f32, sample_rate: f32) -> f32 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::filter_plan::CHANNEL_PASSBAND_MIN_HZ;
     use super::super::super::freq_offset::ChannelOffsetHz;
     use super::super::notch::IqNotch;
     use super::super::settings::NotchSpec;

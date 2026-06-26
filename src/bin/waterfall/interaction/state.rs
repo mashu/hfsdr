@@ -3,7 +3,7 @@
 use eframe::egui::{Pos2, Rect, Response, Ui};
 use hfsdr::ChannelOffsetHz;
 
-use super::geometry::{classify_press, offset_hz_to_x, x_to_offset_hz};
+use super::geometry::{classify_press, x_to_offset_hz};
 
 const MIN_ZOOM: f32 = 0.04;
 
@@ -38,8 +38,6 @@ pub enum DragMode {
 pub struct NotchMarker {
     pub slot: usize,
     pub offset_hz: ChannelOffsetHz,
-    /// Control parameter (notch DSP `width_hz`).
-    pub width_hz: f32,
     /// Half-width at -3 dB attenuation for plot overlay / hit testing.
     pub display_half_hz: f32,
 }
@@ -55,14 +53,9 @@ pub struct FilterOverlayContext {
 pub enum PlotAction {
     TuneDeltaHz(f64),
     CenterOnOffsetHz(f64),
-    SetTunePreviewOffsetHz(f64),
-    CommitTunePreview,
-    ClearTunePreview,
     PanViewDeltaHz(f64),
     ZoomView(f32),
     SetPassbandHz(f32),
-    /// Move listen offset (RIT) without retuning the carrier.
-    SetRitHz(f32),
     /// Move channel bandpass center without changing the VFO / listen point.
     SetFilterShiftHz(ChannelOffsetHz),
     SetNotchOffset {

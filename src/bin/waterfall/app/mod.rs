@@ -49,7 +49,11 @@ impl WaterfallApp {
     /// Headless UI tests: no engine thread; feed [`EnginePoll`] via [`Self::inject_engine_poll`].
     #[cfg(test)]
     pub fn new_for_test(autoconnect: Option<ConnectRequest>) -> Self {
-        Self::build(autoconnect, EngineHandle::spawn_for_test())
+        let mut app = Self::build(autoconnect, EngineHandle::spawn_for_test());
+        // Deterministic defaults — do not inherit the developer's on-disk settings.
+        app.apply_settings(&AppSettings::default());
+        app.last_settings_snapshot = Some(app.current_settings());
+        app
     }
 
     #[cfg(test)]

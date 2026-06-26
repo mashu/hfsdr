@@ -150,6 +150,7 @@ impl WaterfallApp {
                     cw: &self.radio.cw,
                     skimmer_enabled: self.skimmer_ui.skimmer_enabled,
                     audio_enabled: self.audio.audio_enabled,
+                    rf_gain_db: self.radio.rf_gain_db,
                     stats: &self.engine_ui.stats,
                 };
                 let toggled = self.chrome.pipeline_flow.show(ui, &snap);

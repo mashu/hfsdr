@@ -110,7 +110,6 @@ impl WaterfallApp {
             .map(|(slot, n)| crate::interaction::NotchMarker {
                 slot,
                 offset_hz: n.offset_hz,
-                width_hz: n.width_hz,
                 display_half_hz: overlay.notch_half_hz[slot],
             })
             .collect()
