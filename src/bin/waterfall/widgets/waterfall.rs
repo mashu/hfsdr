@@ -45,7 +45,7 @@ pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: Plot
             view_span,
             pan,
             p.listen_center_hz,
-            p.passband_hz,
+            p.channel_half_hz,
             false,
         );
     }
@@ -58,7 +58,7 @@ pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: Plot
             pan,
             notch.slot,
             notch.offset_hz.hz(),
-            notch.width_hz,
+            notch.display_half_hz,
             false,
         );
     }

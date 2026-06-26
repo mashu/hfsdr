@@ -17,7 +17,7 @@ mod prelude;
 pub(crate) use prelude::*;
 pub(crate) use state::{
     AudioUiState, ChromeState, ConnectionFormState, ConnectionState, DisplayState, EngineUiState,
-    KiwiDirectoryState, MeterDisplayState, PlotState, RadioState, SkimmerUiState,
+    KiwiDirectoryState, MeterDisplayState, FilterOverlayCache, PlotState, RadioState, SkimmerUiState,
     WaterfallTextureCache,
 };
 
@@ -135,6 +135,7 @@ impl WaterfallApp {
                 plot_interaction: PlotInteraction::new(),
                 hover_offset_hz: None,
                 last_plot_interaction_rect: None,
+                filter_overlay: FilterOverlayCache::default(),
                 tune_preview_offset_hz: None,
             },
             display: DisplayState {
@@ -195,7 +196,9 @@ impl WaterfallApp {
                 show_right: true,
                 show_iq_drawer: false,
                 show_pipeline_drawer: false,
+                show_filter_drawer: false,
                 pipeline_flow: PipelineFlow::new(),
+                filter_diagnostic: crate::filter_diagnostic::FilterDiagnosticState::default(),
                 notch_bypass_stash: None,
                 iq: IqPanel::new(hfsdr::default_capture_dir()),
                 themed: false,
@@ -332,6 +335,10 @@ impl eframe::App for WaterfallApp {
         self.connection_popup(&ctx);
         self.iq_popup(&ctx);
         self.pipeline_popup(&ctx);
+        self.filter_popup(&ctx);
+        if self.chrome.show_filter_drawer {
+            ctx.request_repaint();
+        }
         self.shortcuts_popup(&ctx);
 
         self.apply_radio_settings();

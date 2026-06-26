@@ -101,7 +101,7 @@ impl WaterfallApp {
 
 
 
-    pub(crate) fn enabled_notches(&self) -> Vec<crate::interaction::NotchMarker> {
+    pub(crate) fn enabled_notches(&self, overlay: &hfsdr::FilterOverlay) -> Vec<crate::interaction::NotchMarker> {
         self.radio.cw
             .notches
             .iter()
@@ -111,6 +111,7 @@ impl WaterfallApp {
                 slot,
                 offset_hz: n.offset_hz,
                 width_hz: n.width_hz,
+                display_half_hz: overlay.notch_half_hz[slot],
             })
             .collect()
     }

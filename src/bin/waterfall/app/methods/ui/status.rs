@@ -140,6 +140,16 @@ impl WaterfallApp {
             if engine_resp.clicked() {
                 self.chrome.show_pipeline_drawer = !self.chrome.show_pipeline_drawer;
             }
+            let filters_active = self.radio.cw.notches.iter().any(|n| n.enabled)
+                || !self.radio.cw.diagnostic.channel_fir;
+            let filter_resp = crate::status_widgets::filter_diagnostic_chip(
+                ui,
+                self.chrome.show_filter_drawer,
+                filters_active,
+            );
+            if filter_resp.clicked() {
+                self.chrome.show_filter_drawer = !self.chrome.show_filter_drawer;
+            }
             let gauge_resp = crate::status_widgets::iq_buffer_control(
                 ui,
                 self.engine_ui.stats.iq_buffer_fill,

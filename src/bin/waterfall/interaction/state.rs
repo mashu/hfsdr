@@ -3,9 +3,7 @@
 use eframe::egui::{Pos2, Rect, Response, Ui};
 use hfsdr::ChannelOffsetHz;
 
-use super::geometry::{
-    classify_press, notch_width_from_edge, offset_hz_to_x, passband_from_edge, x_to_offset_hz,
-};
+use super::geometry::{classify_press, offset_hz_to_x, x_to_offset_hz};
 
 const MIN_ZOOM: f32 = 0.04;
 
@@ -41,7 +39,17 @@ pub enum DragMode {
 pub struct NotchMarker {
     pub slot: usize,
     pub offset_hz: ChannelOffsetHz,
+    /// Control parameter (notch DSP `width_hz`).
     pub width_hz: f32,
+    /// Half-width at -3 dB attenuation for plot overlay / hit testing.
+    pub display_half_hz: f32,
+}
+
+/// Cached -3 dB overlay edges and inverse mapping for plot drags.
+#[derive(Clone, Copy, Debug)]
+pub struct FilterOverlayContext {
+    pub channel_half_hz: f32,
+    pub audio_rate: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +64,8 @@ pub enum PlotAction {
     SetPassbandHz(f32),
     /// Move listen offset (RIT) without retuning the carrier.
     SetRitHz(f32),
+    /// Move channel bandpass center without changing the VFO / listen point.
+    SetFilterOffsetHz(ChannelOffsetHz),
     SetNotchOffset {
         slot: usize,
         offset_hz: ChannelOffsetHz,
@@ -159,29 +169,31 @@ impl PlotInteraction {
         passband_hz: f32,
         passband_min_hz: f32,
         passband_max_hz: f32,
+        overlay: FilterOverlayContext,
+        filter_settings: &hfsdr::CwChannelSettings,
         filter_editable: bool,
-        listen_center_hz: f64,
-        tune_preview_offset_hz: f64,
+        filter_center_hz: f64,
+        vfo_offset_hz: f64,
         notches: &[NotchMarker],
     ) -> Vec<PlotAction> {
         let mut actions = Vec::new();
         let view_span = display_view_span_hz;
         let pan = display_pan_offset_hz;
         let can_pan = view.can_pan(full_span_hz, max_zoom);
-        let preview_x = offset_hz_to_x(tune_preview_offset_hz, rect, view_span, pan);
+        let preview_x = offset_hz_to_x(vfo_offset_hz, rect, view_span, pan);
         let shift = ui.input(|i| i.modifiers.shift);
-        let ctrl = ui.input(|i| i.modifiers.ctrl);
+        let filter_modify = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                if ctrl && filter_editable {
+                if filter_modify && filter_editable {
                     let factor = if scroll > 0.0 { 0.94 } else { 1.06 };
                     let new_bw = (passband_hz * factor).round();
                     actions.push(PlotAction::SetPassbandHz(
                         new_bw.clamp(passband_min_hz, passband_max_hz),
                     ));
-                } else if !ctrl {
+                } else if !filter_modify {
                     let factor = if scroll > 0.0 { 1.12 } else { 0.88 };
                     actions.push(PlotAction::ZoomView(factor));
                 }
@@ -198,17 +210,18 @@ impl PlotInteraction {
                     rect,
                     view_span,
                     pan,
-                    passband_hz,
+                    overlay.channel_half_hz,
                     filter_editable,
-                    listen_center_hz,
+                    filter_modify,
+                    filter_center_hz,
                     preview_x,
                     shift,
                     notches,
                 );
-                // Tune on empty-spectrum clicks only; handles (edges, center, notches) need drags.
+                // Tune on spectrum clicks; filter/notch handles need Ctrl/Cmd (see classify_press).
                 if matches!(
                     mode,
-                    DragMode::Tune | DragMode::PanView | DragMode::ShiftPassband
+                    DragMode::Tune | DragMode::PanView | DragMode::DragCenter
                 ) {
                     let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
                     actions.push(PlotAction::CenterOnOffsetHz(offset));
@@ -224,9 +237,10 @@ impl PlotInteraction {
                     rect,
                     view_span,
                     pan,
-                    passband_hz,
+                    overlay.channel_half_hz,
                     filter_editable,
-                    listen_center_hz,
+                    filter_modify,
+                    filter_center_hz,
                     preview_x,
                     shift,
                     notches,
@@ -265,9 +279,11 @@ impl PlotInteraction {
                 DragMode::ResizeLeft | DragMode::ResizeRight => {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        let bw = passband_from_edge(
-                            listen_center_hz,
-                            offset,
+                        let half = (offset - filter_center_hz).abs() as f32;
+                        let bw = hfsdr::passband_hz_for_channel_half(
+                            half,
+                            filter_settings,
+                            overlay.audio_rate,
                             passband_min_hz,
                             passband_max_hz,
                         );
@@ -277,8 +293,9 @@ impl PlotInteraction {
                 DragMode::ShiftPassband => {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        let rit = (offset - tune_preview_offset_hz) as f32;
-                        actions.push(PlotAction::SetRitHz(rit.clamp(RIT_MIN_HZ, RIT_MAX_HZ)));
+                        actions.push(PlotAction::SetFilterOffsetHz(
+                            ChannelOffsetHz::from_plot_hz(offset as f32),
+                        ));
                     }
                 }
                 DragMode::DragNotch(slot) => {
@@ -295,7 +312,13 @@ impl PlotInteraction {
                         notches.iter().find(|n| n.slot == slot),
                     ) {
                         let edge = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        let width = notch_width_from_edge(n.offset_hz, edge);
+                        let half = (edge - n.offset_hz.hz() as f64).abs() as f32;
+                        let width = hfsdr::notch_width_for_display_half(
+                            half,
+                            overlay.audio_rate,
+                            NOTCH_WIDTH_MIN_HZ,
+                            NOTCH_WIDTH_MAX_HZ,
+                        );
                         actions.push(PlotAction::SetNotchWidth { slot, width_hz: width });
                     }
                 }
@@ -309,9 +332,11 @@ impl PlotInteraction {
                 DragMode::ResizeLeft | DragMode::ResizeRight => {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        let bw = passband_from_edge(
-                            listen_center_hz,
-                            offset,
+                        let half = (offset - filter_center_hz).abs() as f32;
+                        let bw = hfsdr::passband_hz_for_channel_half(
+                            half,
+                            filter_settings,
+                            overlay.audio_rate,
                             passband_min_hz,
                             passband_max_hz,
                         );
@@ -325,7 +350,13 @@ impl PlotInteraction {
                         notches.iter().find(|n| n.slot == slot),
                     ) {
                         let edge = x_to_offset_hz(pos.x, rect, view_span, pan);
-                        let width = notch_width_from_edge(n.offset_hz, edge);
+                        let half = (edge - n.offset_hz.hz() as f64).abs() as f32;
+                        let width = hfsdr::notch_width_for_display_half(
+                            half,
+                            overlay.audio_rate,
+                            NOTCH_WIDTH_MIN_HZ,
+                            NOTCH_WIDTH_MAX_HZ,
+                        );
                         actions.push(PlotAction::SetNotchWidth { slot, width_hz: width });
                     }
                     actions.push(PlotAction::ClearTunePreview);

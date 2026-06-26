@@ -11,11 +11,11 @@ pub(crate) fn draw_filter_band(
     view_span_hz: f32,
     pan_offset_hz: f64,
     listen_center_hz: f64,
-    passband_hz: f32,
+    half_width_hz: f32,
     fill: bool,
 ) {
     let (mut left, mut right) =
-        filter_edges(rect, view_span_hz, pan_offset_hz, listen_center_hz, passband_hz);
+        filter_edges(rect, view_span_hz, pan_offset_hz, listen_center_hz, half_width_hz);
     left = left.clamp(rect.left(), rect.right());
     right = right.clamp(rect.left(), rect.right());
     if right <= left {
@@ -48,7 +48,7 @@ pub(crate) fn draw_filter_band(
         painter.text(
             Pos2::new((left + right) * 0.5, rect.bottom() - 4.0),
             Align2::CENTER_BOTTOM,
-            "drag band = RIT · edges = BW",
+            "Ctrl+drag band = RIT · Ctrl+edges = BW",
             FontId::proportional(9.0),
             Color32::from_rgba_unmultiplied(125, 211, 252, 140),
         );
@@ -62,10 +62,10 @@ pub(crate) fn draw_notch_marker(
     pan_offset_hz: f64,
     slot: usize,
     notch_offset_hz: f32,
-    notch_width_hz: f32,
+    display_half_hz: f32,
     show_handles: bool,
 ) {
-    let half = notch_width_hz as f64 / 2.0;
+    let half = display_half_hz as f64;
     let center = notch_offset_hz as f64;
     let left = offset_hz_to_x(center - half, rect, view_span_hz, pan_offset_hz);
     let right = offset_hz_to_x(center + half, rect, view_span_hz, pan_offset_hz);

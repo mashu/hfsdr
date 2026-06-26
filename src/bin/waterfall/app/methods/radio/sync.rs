@@ -67,6 +67,9 @@ impl WaterfallApp {
                 live,
             },
         );
+        self.meter_display
+            .af_scope
+            .tick(dt, &self.audio.audio_scope, live);
     }
 
     pub(crate) fn apply_radio_settings(&mut self) {

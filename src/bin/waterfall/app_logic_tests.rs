@@ -532,7 +532,8 @@ fn arm_manual_notch_sets_offset() {
 fn enabled_notches_lists_active_slots() {
     let mut app = test_app();
     app.arm_manual_notch(1, Some(hfsdr::ChannelOffsetHz::new(120.0)));
-    let markers = app.enabled_notches();
+    let overlay = app.filter_overlay_cached().clone();
+    let markers = app.enabled_notches(&overlay);
     assert_eq!(markers.len(), 1);
     assert_eq!(markers[0].slot, 1);
 }

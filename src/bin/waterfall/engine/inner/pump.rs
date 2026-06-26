@@ -317,7 +317,9 @@ impl Engine {
             self.last_iq_dropped = 0;
         }
         if !self.audio_scratch.is_empty() {
-            self.audio_scope.push_block(&self.audio_scratch);
+            let audio_rate = hfsdr::audio_sample_rate(device_rate, params.cw.decimation);
+            self.audio_scope
+                .push_block(&self.audio_scratch, audio_rate);
             self.level_audio_scope = self.audio_scope.ordered();
         }
 

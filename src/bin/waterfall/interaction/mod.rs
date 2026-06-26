@@ -12,7 +12,7 @@ pub use geometry::{
     x_to_offset_hz, PlotFreqMapping,
 };
 pub use state::{
-    NotchMarker, PlotAction, PlotInteraction, PlotViewState, CW_PASSBAND_MAX_HZ,
-    CW_PASSBAND_MIN_HZ, CW_PASSBAND_NARROW_MAX_HZ, NOTCH_WIDTH_MAX_HZ, NOTCH_WIDTH_MIN_HZ,
-    RIT_MAX_HZ, RIT_MIN_HZ,
+    FilterOverlayContext, NotchMarker, PlotAction, PlotInteraction, PlotViewState,
+    CW_PASSBAND_MAX_HZ, CW_PASSBAND_MIN_HZ, CW_PASSBAND_NARROW_MAX_HZ, NOTCH_WIDTH_MAX_HZ,
+    NOTCH_WIDTH_MIN_HZ, RIT_MAX_HZ, RIT_MIN_HZ,
 };

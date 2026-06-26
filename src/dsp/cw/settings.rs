@@ -177,6 +177,8 @@ impl DiagnosticBypassSettings {
 pub struct CwChannelSettings {
     /// RF offset from hardware tune to the signal (channel coordinates); RIT folds in here.
     pub listen_offset_hz: ChannelOffsetHz,
+    /// Channel bandpass center in panadapter coordinates (independent of [`Self::listen_offset_hz`]).
+    pub filter_offset_hz: ChannelOffsetHz,
     pub bfo_hz: f32,
     pub passband_hz: f32,
     pub channel_filter: ChannelFilterKind,
@@ -208,6 +210,7 @@ impl Default for CwChannelSettings {
     fn default() -> Self {
         Self {
             listen_offset_hz: ChannelOffsetHz::ZERO,
+            filter_offset_hz: ChannelOffsetHz::ZERO,
             bfo_hz: 500.0,
             passband_hz: DEFAULT_CHANNEL_PASSBAND_HZ,
             channel_filter: ChannelFilterKind::LinearFir,
