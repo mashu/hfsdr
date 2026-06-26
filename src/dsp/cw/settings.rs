@@ -136,6 +136,16 @@ pub enum ChannelFilterKind {
     Iir2Pole,
 }
 
+/// 2-pole IIR prototype — [`ChannelFilterKind::Iir2Pole`] only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IirFilterKind {
+    /// Maximally flat passband (Q ≈ 0.707).
+    #[default]
+    Butterworth,
+    /// Steeper stopband with controlled passband ripple (~2 dB).
+    Chebyshev,
+}
+
 /// Anti-alias filter for decimators / ingress (same implementations as channel).
 pub type DecimFilterKind = ChannelFilterKind;
 
@@ -182,6 +192,8 @@ pub struct CwChannelSettings {
     pub bfo_hz: f32,
     pub passband_hz: f32,
     pub channel_filter: ChannelFilterKind,
+    /// 2-pole prototype when [`Self::effective_channel_filter`] is IIR.
+    pub iir_filter: IirFilterKind,
     /// Anti-alias filter on IQ decimators (channel + wideband ingress).
     pub decim_filter: DecimFilterKind,
     pub window: WindowKind,
@@ -214,6 +226,7 @@ impl Default for CwChannelSettings {
             bfo_hz: 500.0,
             passband_hz: DEFAULT_CHANNEL_PASSBAND_HZ,
             channel_filter: ChannelFilterKind::LinearFir,
+            iir_filter: IirFilterKind::Butterworth,
             decim_filter: DecimFilterKind::LinearFir,
             window: DEFAULT_CHANNEL_WINDOW,
             kaiser_beta: DEFAULT_KAISER_BETA,

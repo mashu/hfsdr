@@ -10,6 +10,7 @@ use super::filter_plan::{
     clamp_passband_hz, passband_cutoff_hz, DEFAULT_CHANNEL_PASSBAND_HZ, CHANNEL_PASSBAND_MAX_HZ,
 };
 use super::fir::{design_lowpass_with, LowpassDesign};
+use super::iir_channel::iir_2pole_lowpass_q;
 use super::settings::{ChannelFilterKind, CwChannelSettings, MAX_NOTCHES};
 
 /// Main-plot band / notch edge marker — attenuation relative to passband peak.
@@ -64,6 +65,7 @@ pub fn filter_overlay_cache_key(settings: &CwChannelSettings, audio_rate: f32) -
     key ^= settings.kaiser_beta.to_bits() as u64;
     key ^= (settings.passband_flatten as u64) << 1;
     key ^= (settings.channel_filter as u8 as u64) << 2;
+    key ^= (settings.iir_filter as u8 as u64) << 5;
     key ^= (settings.economy_filter as u64) << 3;
     key ^= (settings.diagnostic.channel_fir as u64) << 4;
     for (i, n) in settings.notches.iter().enumerate() {
@@ -157,7 +159,8 @@ pub fn channel_half_width_hz(
     let max_search = (bandwidth * 1.5).max(CHANNEL_PASSBAND_MAX_HZ * 0.5);
     if settings.effective_channel_filter() == ChannelFilterKind::Iir2Pole {
         let mut bq = Biquad::new();
-        bq.set_lowpass(audio_rate, (bandwidth * 0.5).max(10.0), 0.707);
+        let q = iir_2pole_lowpass_q(settings.iir_filter);
+        bq.set_lowpass(audio_rate, (bandwidth * 0.5).max(10.0), q);
         half_width_where(|f| bq.magnitude_linear(audio_rate, f), max_search, threshold_lin)
     } else {
         let design = LowpassDesign {
@@ -247,7 +250,8 @@ pub fn build_listen_filter_curves(req: &FilterCurveRequest) -> FilterCurve {
     let mut iir = Biquad::new();
     let use_iir = settings.effective_channel_filter() == ChannelFilterKind::Iir2Pole;
     if use_iir {
-        iir.set_lowpass(rate, (bandwidth * 0.5).max(10.0), 0.707);
+        let q = iir_2pole_lowpass_q(settings.iir_filter);
+        iir.set_lowpass(rate, (bandwidth * 0.5).max(10.0), q);
     }
 
     let channel_bypass = settings.diagnostic.channel_fir;

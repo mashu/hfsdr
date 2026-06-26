@@ -8,6 +8,7 @@ impl WaterfallApp {
         self.radio.cw.passband_hz = s.passband_hz;
         self.radio.cw.channel_filter = channel_filter_from_u8(s.channel_filter);
         self.radio.cw.decim_filter = channel_filter_from_u8(s.decim_filter);
+        self.radio.cw.iir_filter = iir_filter_from_u8(s.iir_filter);
         self.radio.cw.window = window_from_u8(s.window);
         self.radio.cw.kaiser_beta = s.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
         self.radio.cw.passband_flatten = s.passband_flatten;
@@ -122,6 +123,7 @@ impl WaterfallApp {
             passband_hz: self.radio.cw.passband_hz,
             channel_filter: channel_filter_to_u8(self.radio.cw.channel_filter),
             decim_filter: channel_filter_to_u8(self.radio.cw.decim_filter),
+            iir_filter: iir_filter_to_u8(self.radio.cw.iir_filter),
             window: window_to_u8(self.radio.cw.window),
             kaiser_beta: self.radio.cw.kaiser_beta,
             passband_flatten: self.radio.cw.passband_flatten,

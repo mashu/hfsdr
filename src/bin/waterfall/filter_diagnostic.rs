@@ -55,6 +55,7 @@ fn theory_cache_key(settings: &CwChannelSettings, audio_rate: f32, span_hz: f32)
     key ^= settings.kaiser_beta.to_bits() as u64;
     key ^= (settings.passband_flatten as u64) << 1;
     key ^= (settings.channel_filter as u8 as u64) << 2;
+    key ^= (settings.iir_filter as u8 as u64) << 5;
     key ^= (settings.economy_filter as u64) << 3;
     key ^= (settings.diagnostic.channel_fir as u64) << 4;
     for (i, n) in settings.notches.iter().enumerate() {
@@ -170,9 +171,12 @@ pub fn show_filter_diagnostic_panel(
 }
 
 fn window_label(settings: &CwChannelSettings) -> &'static str {
-    use hfsdr::{ChannelFilterKind, WindowKind};
+    use hfsdr::{ChannelFilterKind, IirFilterKind, WindowKind};
     if settings.economy_filter || settings.effective_channel_filter() == ChannelFilterKind::Iir2Pole {
-        return "IIR 2-pole";
+        return match settings.iir_filter {
+            IirFilterKind::Chebyshev => "Chebyshev IIR",
+            IirFilterKind::Butterworth => "Butterworth IIR",
+        };
     }
     match settings.window {
         WindowKind::Gaussian => "Gaussian FIR",

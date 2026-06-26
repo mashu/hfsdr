@@ -5,6 +5,7 @@ use crate::source::Complex32;
 use super::fir::{design_gaussian_lowpass, design_gaussian_lowpass_compact, FirFilter};
 use super::iir_channel::IirChannelFilter;
 use super::settings::ChannelFilterKind;
+use super::settings::IirFilterKind;
 
 pub fn decim_cutoff_hz(input_rate: f32, factor: usize) -> f32 {
     (input_rate / factor.max(1) as f32 * 0.45).max(100.0)
@@ -35,7 +36,7 @@ impl AntiAliasFilter {
             design_gaussian_lowpass(input_rate, bw)
         };
         let mut iir = IirChannelFilter::new();
-        iir.sync(input_rate, bw);
+        iir.sync(input_rate, bw, IirFilterKind::Butterworth);
         Self {
             kind,
             fir,
@@ -64,7 +65,7 @@ impl AntiAliasFilter {
             } else {
                 design_gaussian_lowpass(input_rate, bw)
             };
-            self.iir.sync(input_rate, bw);
+            self.iir.sync(input_rate, bw, IirFilterKind::Butterworth);
             self.last_rate = input_rate;
             self.last_bw = bw;
         }

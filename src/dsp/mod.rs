@@ -27,6 +27,7 @@ pub use cw::{
     AudioPeakFilter, AutoNotch, AutoNotchSettings, build_filter_overlay, build_listen_filter_curves,
     ChannelFilterKind, ComplexNco, CwAgc, CwChannel, CwChannelSettings, CwStageMetrics,
     DecimFilterKind, Decimator, FilterCurve, FilterCurveRequest, FilterOverlay, FirFilter,
+    IirFilterKind, iir_2pole_lowpass_q, DEFAULT_IIR_CHEBYSHEV_RIPPLE_DB,
     fir_cutoff_hz, gui_passband_edge_hz, notch_display_half_hz, notch_width_for_display_half,
     passband_hz_for_channel_half, filter_overlay_cache_key, LowpassDesign, IqNotch, OVERLAY_ATTEN_DB,
     LmsPredictor,

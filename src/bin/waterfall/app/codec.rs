@@ -1,8 +1,8 @@
 //! Settings serialization helpers and small shared utilities.
 
 use hfsdr::{
-    AgcMode, ChannelFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort, WindowKind,
-    DecoderParams, EnvelopeSettings,
+    AgcMode, ChannelFilterKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
+    WindowKind, DecoderParams, EnvelopeSettings,
 };
 
 use crate::settings::AppSettings;
@@ -44,6 +44,20 @@ pub(crate) fn channel_filter_from_u8(v: u8) -> ChannelFilterKind {
     match v {
         1 => ChannelFilterKind::Iir2Pole,
         _ => ChannelFilterKind::LinearFir,
+    }
+}
+
+pub(crate) const fn iir_filter_to_u8(k: IirFilterKind) -> u8 {
+    match k {
+        IirFilterKind::Butterworth => 0,
+        IirFilterKind::Chebyshev => 1,
+    }
+}
+
+pub(crate) fn iir_filter_from_u8(v: u8) -> IirFilterKind {
+    match v {
+        1 => IirFilterKind::Chebyshev,
+        _ => IirFilterKind::Butterworth,
     }
 }
 
@@ -139,7 +153,7 @@ mod tests {
     use crate::interaction::PlotAction;
     use crate::settings::AppSettings;
     use hfsdr::{
-        AgcMode, ChannelFilterKind, SkimmerDecoderKind, SpotSort, WindowKind,
+        AgcMode, ChannelFilterKind, IirFilterKind, SkimmerDecoderKind, SpotSort, WindowKind,
     };
 
     #[test]
@@ -153,6 +167,14 @@ mod tests {
             assert_eq!(window_from_u8(window_to_u8(w)), w);
         }
         assert_eq!(window_from_u8(99), WindowKind::Gaussian);
+    }
+
+    #[test]
+    fn iir_filter_codec_roundtrip() {
+        for k in [IirFilterKind::Butterworth, IirFilterKind::Chebyshev] {
+            assert_eq!(iir_filter_from_u8(iir_filter_to_u8(k)), k);
+        }
+        assert_eq!(iir_filter_from_u8(9), IirFilterKind::Butterworth);
     }
 
     #[test]
