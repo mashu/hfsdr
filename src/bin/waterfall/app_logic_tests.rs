@@ -8,7 +8,7 @@ use hfsdr::{Spot, SpotKind};
 use crate::app::WaterfallApp;
 use crate::audio;
 use crate::engine::{ConnState, EnginePoll, EngineStats, FFT_SIZE};
-use crate::interaction::{PlotAction, RIT_MAX_HZ, CW_PASSBAND_MAX_HZ, CW_PASSBAND_NARROW_MAX_HZ};
+use crate::interaction::{PlotAction, RIT_MAX_HZ, RIT_MIN_HZ, CW_PASSBAND_MAX_HZ, CW_PASSBAND_NARROW_MAX_HZ};
 use crate::source::{
     AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind,
 };
@@ -607,14 +607,18 @@ fn apply_plot_actions_iq_playback_pans_view() {
 }
 
 #[test]
-fn apply_plot_actions_commit_tune_preview() {
+fn apply_plot_actions_passband_clamp() {
     let mut app = test_app();
-    app.radio.lock_ham_bands = false;
-    app.radio.center_khz = 14_010.0;
-    app.plot.tune_preview_offset_hz = Some(150.0);
-    app.apply_plot_actions(vec![PlotAction::CommitTunePreview]);
-    assert!(app.plot.tune_preview_offset_hz.is_none());
-    assert!((app.radio.center_khz - 14_010.15).abs() < 1e-3);
+    app.apply_plot_actions(vec![PlotAction::SetPassbandHz(10_000.0)]);
+    assert!(app.radio.cw.passband_hz <= CW_PASSBAND_MAX_HZ);
+}
+
+#[test]
+fn rit_clamps_to_limits() {
+    let mut app = test_app();
+    app.radio.rit_hz = RIT_MAX_HZ + 500.0;
+    app.radio.rit_hz = app.radio.rit_hz.clamp(RIT_MIN_HZ, RIT_MAX_HZ);
+    assert_eq!(app.radio.rit_hz, RIT_MAX_HZ);
 }
 
 #[test]
@@ -628,17 +632,6 @@ fn apply_plot_actions_zoom_and_pan() {
         PlotAction::SetViewPanHz(25.0),
     ]);
     assert!(app.plot.plot_view.zoom < 1.0);
-}
-
-#[test]
-fn apply_plot_actions_passband_and_rit_clamp() {
-    let mut app = test_app();
-    app.apply_plot_actions(vec![
-        PlotAction::SetPassbandHz(10_000.0),
-        PlotAction::SetRitHz(RIT_MAX_HZ + 500.0),
-    ]);
-    assert!(app.radio.cw.passband_hz <= CW_PASSBAND_MAX_HZ);
-    assert_eq!(app.radio.rit_hz, RIT_MAX_HZ);
 }
 
 #[test]

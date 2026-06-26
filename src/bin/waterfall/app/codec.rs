@@ -217,7 +217,7 @@ mod tests {
         assert!(plot_action_changes_view(&PlotAction::PanViewDeltaHz(100.0)));
         assert!(plot_action_changes_view(&PlotAction::ZoomView(1.5)));
         assert!(plot_action_changes_view(&PlotAction::SetViewPanHz(500.0)));
-        assert!(!plot_action_changes_view(&PlotAction::ClearTunePreview));
+        assert!(!plot_action_changes_view(&PlotAction::SetPassbandHz(200.0)));
         assert!(!plot_action_changes_view(&PlotAction::TuneDeltaHz(50.0)));
     }
 

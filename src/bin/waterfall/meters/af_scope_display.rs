@@ -90,8 +90,8 @@ mod tests {
     fn envelope_columns_picks_peak_in_bin() {
         let samples = vec![0.0, 0.2, 0.8, 0.1];
         let cols = envelope_columns(&samples, 2);
-        assert!((cols[0] - 0.8).abs() < 1e-5);
-        assert!((cols[1] - 0.1).abs() < 1e-5);
+        assert!((cols[0] - 0.2).abs() < 1e-5);
+        assert!((cols[1] - 0.8).abs() < 1e-5);
     }
 
     #[test]

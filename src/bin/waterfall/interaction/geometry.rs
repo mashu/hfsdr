@@ -3,7 +3,7 @@
 use eframe::egui::{Pos2, Rect};
 use hfsdr::ChannelOffsetHz;
 
-use super::state::{DragMode, NotchMarker, NOTCH_MIN_SEPARATION_HZ, NOTCH_STAGGER_HZ, NOTCH_WIDTH_MAX_HZ, NOTCH_WIDTH_MIN_HZ};
+use super::state::{DragMode, NotchMarker, NOTCH_MIN_SEPARATION_HZ, NOTCH_STAGGER_HZ};
 
 const CENTER_GRAB_PX: f32 = 18.0;
 const EDGE_GRAB_PX: f32 = 12.0;
@@ -65,6 +65,7 @@ pub fn filter_edges(
 }
 
 /// Passband width from dragging a filter edge at `edge_offset_hz` relative to tuned center.
+#[cfg(test)]
 pub fn passband_from_edge(
     listen_center_hz: f64,
     edge_offset_hz: f64,
@@ -75,7 +76,9 @@ pub fn passband_from_edge(
     (half * 2.0).clamp(passband_min_hz, passband_max_hz)
 }
 
+#[cfg(test)]
 pub fn notch_width_from_edge(center: ChannelOffsetHz, edge_offset_hz: f64) -> f32 {
+    use super::state::{NOTCH_WIDTH_MAX_HZ, NOTCH_WIDTH_MIN_HZ};
     (2.0 * (edge_offset_hz - center.hz() as f64).abs() as f32)
         .clamp(NOTCH_WIDTH_MIN_HZ, NOTCH_WIDTH_MAX_HZ)
 }
@@ -421,7 +424,6 @@ mod tests {
         let notches = [NotchMarker {
             slot: 0,
             offset_hz: ChannelOffsetHz::ZERO,
-            width_hz: 400.0,
             display_half_hz: 200.0,
         }];
         let x = offset_hz_to_x(0.0, rect, 12_000.0, 0.0);
@@ -446,7 +448,6 @@ mod tests {
         let notches = [NotchMarker {
             slot: 0,
             offset_hz: ChannelOffsetHz::ZERO,
-            width_hz: 400.0,
             display_half_hz: 200.0,
         }];
         let x = offset_hz_to_x(0.0, rect, 12_000.0, 0.0);
@@ -487,9 +488,11 @@ mod tests {
     #[test]
     fn classify_press_passband_body_with_ctrl_shifts() {
         let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1000.0, 100.0));
-        let center_x = offset_hz_to_x(0.0, rect, 12_000.0, 0.0);
+        let (left, right) = filter_edges(rect, 12_000.0, 0.0, 0.0, 200.0);
+        let body_x = (left + right) * 0.5;
+        assert!(body_x > left + EDGE_GRAB_PX && body_x < right - EDGE_GRAB_PX);
         let mode = classify_press(
-            Pos2::new(center_x + 40.0, 50.0),
+            Pos2::new(body_x, 50.0),
             rect,
             12_000.0,
             0.0,
