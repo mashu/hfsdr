@@ -2,7 +2,7 @@
 
 use hfsdr::{
     AgcMode, ChannelFilterKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
-    WindowKind, DecoderParams, EnvelopeSettings,
+    SidetoneEnvelopeShape, WindowKind, DecoderParams, EnvelopeSettings,
 };
 
 use crate::settings::AppSettings;
@@ -74,6 +74,22 @@ pub(crate) fn agc_mode_from_u8(v: u8) -> AgcMode {
         1 => AgcMode::Hang,
         2 => AgcMode::DualLoop,
         _ => AgcMode::Envelope,
+    }
+}
+
+pub(crate) fn st_envelope_shape_to_u8(s: SidetoneEnvelopeShape) -> u8 {
+    match s {
+        SidetoneEnvelopeShape::Cosine => 0,
+        SidetoneEnvelopeShape::Linear => 1,
+        SidetoneEnvelopeShape::Exponential => 2,
+    }
+}
+
+pub(crate) fn st_envelope_shape_from_u8(v: u8) -> SidetoneEnvelopeShape {
+    match v {
+        1 => SidetoneEnvelopeShape::Linear,
+        2 => SidetoneEnvelopeShape::Exponential,
+        _ => SidetoneEnvelopeShape::Cosine,
     }
 }
 
@@ -194,6 +210,25 @@ mod tests {
             assert_eq!(agc_mode_from_u8(agc_mode_to_u8(m)), m);
         }
         assert_eq!(agc_mode_from_u8(9), AgcMode::Envelope);
+    }
+
+    #[test]
+    fn st_envelope_shape_codec_roundtrip() {
+        use hfsdr::SidetoneEnvelopeShape;
+        for s in [
+            SidetoneEnvelopeShape::Cosine,
+            SidetoneEnvelopeShape::Linear,
+            SidetoneEnvelopeShape::Exponential,
+        ] {
+            assert_eq!(
+                st_envelope_shape_from_u8(st_envelope_shape_to_u8(s)),
+                s
+            );
+        }
+        assert_eq!(
+            st_envelope_shape_from_u8(9),
+            SidetoneEnvelopeShape::Cosine
+        );
     }
 
     #[test]

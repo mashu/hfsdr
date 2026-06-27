@@ -4,7 +4,7 @@
 //! ```text
 //! IQ → [noise blanker] → NCO shift → decimate → [manual IQ notches]
 //!    → channel filter → AGC/manual gain → product detector (BFO demod)
-//!    → [APF] → [auto-notch] → [noise reduction] → audio
+//!    → [sidetone envelope] → [APF] → [auto-notch] → [noise reduction] → audio
 //! ```
 //! Manual notches and the channel filter run on complex IQ before demod.
 //! Auto-notch and NR are post-demod polish: auto-notch uses a BFO guard on audio;
@@ -27,6 +27,7 @@ use super::nco::ComplexNco;
 use super::noiseblanker::NoiseBlanker;
 use super::noisereduction::NoiseReduction;
 use super::notch::IqNotch;
+use super::sidetone_envelope::SidetoneEnvelope;
 use super::filter_plan::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
 use super::settings::{
     ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW, IirFilterKind,
@@ -85,6 +86,7 @@ pub struct CwChannel {
     channel_iir: IirChannelFilter,
     agc: CwAgc,
     detector: ProductDetector,
+    sidetone_envelope: SidetoneEnvelope,
     apf: AudioPeakFilter,
     auto_notch: AutoNotch,
     noise_reduction: NoiseReduction,
@@ -127,6 +129,7 @@ impl CwChannel {
             channel_iir: IirChannelFilter::new(),
             agc: CwAgc::new(),
             detector: ProductDetector::new(),
+            sidetone_envelope: SidetoneEnvelope::new(),
             apf: AudioPeakFilter::new(),
             auto_notch: AutoNotch::new(),
             noise_reduction: NoiseReduction::new(),
@@ -416,11 +419,18 @@ impl CwChannel {
         let t_det = metrics.as_ref().map(|_| std::time::Instant::now());
         out.reserve(out.len() + self.work_mix.len());
         for &scaled in &self.work_mix {
-            out.push(if diag.bfo {
+            let raw = if diag.bfo {
                 scaled.re
             } else {
                 self.detector.process(scaled, settings.bfo_hz, audio_rate)
-            });
+            };
+            let level = scaled.norm().max(1e-7);
+            out.push(self.sidetone_envelope.process(
+                raw,
+                level,
+                audio_rate,
+                &settings.sidetone_envelope,
+            ));
         }
         if let (Some(m), Some(t)) = (metrics.as_mut(), t_det) {
             m.detector_ns = t.elapsed().as_nanos() as u64;
@@ -542,6 +552,7 @@ impl CwChannel {
                 Decimator::with_factor(iq_rate, factor, settings.decim_filter);
             self.shift_nco.reset();
             self.detector.reset_state();
+            self.sidetone_envelope.reset_state();
             for notch in &mut self.notches {
                 notch.reset_state();
             }
@@ -830,6 +841,7 @@ mod tests {
                 ..Default::default()
             },
             agc_mode: AgcMode::Envelope,
+            sidetone_envelope: super::super::settings::SidetoneEnvelopeSettings::default(),
             diagnostic: DiagnosticBypassSettings::default(),
         };
         let mut audio = Vec::new();

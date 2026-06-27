@@ -13,7 +13,7 @@ pub(crate) use hfsdr::{
     strongest_offset_hz, Continent,
     ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, IirFilterKind,
-    WindowKind,
+    SidetoneEnvelopeShape, WindowKind,
     MAX_KAISER_BETA, MAX_NOTCHES, MIN_KAISER_BETA,
 };
 pub(crate) use hfsdr::kiwi::protocol::{man_gain_db_below_max, man_gain_from_db_below_max};
@@ -78,6 +78,7 @@ pub(crate) use crate::app::codec::{
     iir_filter_from_u8, iir_filter_to_u8,
     normalize_waterfall_avg, plot_action_changes_view, skimmer_config_from_settings,
     skimmer_decoder_from_u8, skimmer_decoder_to_u8, spot_sort_from_u8, spot_sort_to_u8,
+    st_envelope_shape_from_u8, st_envelope_shape_to_u8,
     window_from_u8, window_to_u8,
 };
 pub(crate) use crate::app::constants::*;
