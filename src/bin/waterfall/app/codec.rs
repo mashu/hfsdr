@@ -1,7 +1,7 @@
 //! Settings serialization helpers and small shared utilities.
 
 use hfsdr::{
-    AgcMode, ChannelFilterKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
+    AgcMode, ChannelFilterKind, FftWindowKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
     SidetoneEnvelopeShape, WindowKind, DecoderParams, EnvelopeSettings,
 };
 
@@ -30,6 +30,32 @@ pub(crate) fn window_from_u8(v: u8) -> WindowKind {
         2 => WindowKind::Blackman,
         3 => WindowKind::Kaiser,
         _ => WindowKind::Gaussian,
+    }
+}
+
+pub(crate) const fn fft_window_to_u8(w: FftWindowKind) -> u8 {
+    match w {
+        FftWindowKind::Hann => 0,
+        FftWindowKind::Hamming => 1,
+        FftWindowKind::Blackman => 2,
+        FftWindowKind::Rectangular => 3,
+        FftWindowKind::Kaiser => 4,
+        FftWindowKind::BlackmanHarris => 5,
+        FftWindowKind::Bartlett => 6,
+        FftWindowKind::Flattop => 7,
+    }
+}
+
+pub(crate) fn fft_window_from_u8(v: u8) -> FftWindowKind {
+    match v {
+        1 => FftWindowKind::Hamming,
+        2 => FftWindowKind::Blackman,
+        3 => FftWindowKind::Rectangular,
+        4 => FftWindowKind::Kaiser,
+        5 => FftWindowKind::BlackmanHarris,
+        6 => FftWindowKind::Bartlett,
+        7 => FftWindowKind::Flattop,
+        _ => FftWindowKind::Hann,
     }
 }
 
@@ -171,7 +197,7 @@ mod tests {
     use crate::interaction::PlotAction;
     use crate::settings::AppSettings;
     use hfsdr::{
-        AgcMode, ChannelFilterKind, IirFilterKind, SkimmerDecoderKind, SpotSort, WindowKind,
+        AgcMode, ChannelFilterKind, FftWindowKind, IirFilterKind, SkimmerDecoderKind, SpotSort, WindowKind,
     };
 
     #[test]
@@ -185,6 +211,14 @@ mod tests {
             assert_eq!(window_from_u8(window_to_u8(w)), w);
         }
         assert_eq!(window_from_u8(99), WindowKind::Gaussian);
+    }
+
+    #[test]
+    fn fft_window_codec_roundtrip() {
+        for w in FftWindowKind::ALL {
+            assert_eq!(fft_window_from_u8(fft_window_to_u8(w)), w);
+        }
+        assert_eq!(fft_window_from_u8(99), FftWindowKind::Hann);
     }
 
     #[test]

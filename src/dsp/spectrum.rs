@@ -4,6 +4,8 @@
 use crate::source::Complex32;
 
 use super::fft_plan::plan_forward;
+use super::fft_window::{build_fft_window, DEFAULT_FFT_WINDOW, FftWindowKind};
+use super::cw::DEFAULT_KAISER_BETA;
 use rustfft::Fft;
 use std::sync::Arc;
 
@@ -71,17 +73,16 @@ impl SpectrumAnalyzer {
     /// `hop` is how many new samples advance the window each frame: use `n`
     /// for no overlap, `n / 2` for 50% overlap (smoother waterfall).
     pub fn new(n: usize, hop: usize) -> Self {
+        Self::with_window(n, hop, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA)
+    }
+
+    pub fn with_window(n: usize, hop: usize, window_kind: FftWindowKind, kaiser_beta: f32) -> Self {
         assert!(n.is_power_of_two(), "FFT size should be a power of two");
         let hop = hop.clamp(1, n);
         let fft = plan_forward(n);
         let scratch = vec![Complex32::new(0.0, 0.0); fft.get_inplace_scratch_len()];
 
-        let window: Vec<f32> = (0..n)
-            .map(|i| {
-                let x = std::f32::consts::PI * i as f32 / (n as f32 - 1.0);
-                x.sin().powi(2)
-            })
-            .collect();
+        let window = build_fft_window(n, window_kind, kaiser_beta);
         let coherent_gain = window.iter().sum::<f32>() / n as f32;
 
         Self {

@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd};
+use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA};
 
 use crate::skimmer::SkimmerHandle;
 
@@ -51,6 +51,8 @@ impl Engine {
             skimmer_peak_hold: vec![-120.0; FFT_SIZE],
             last_skimmer_center_hz: f64::NAN,
             fft_size: FFT_SIZE,
+            spectrum_window: DEFAULT_FFT_WINDOW,
+            spectrum_kaiser_beta: DEFAULT_KAISER_BETA,
             spectrum_rate: 12_000.0,
             spectrum_decim: 1,
             spectrum_pan_hz: 0.0,

@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use hfsdr::{Complex32, spectrum_hop, spectrum_plan, SpectrumAnalyzer};
+use hfsdr::{Complex32, spectrum_hop, spectrum_plan, SpectrumAnalyzer, MIN_KAISER_BETA, MAX_KAISER_BETA};
 
 use super::Engine;
 use crate::engine::policy::{
@@ -21,10 +21,18 @@ impl Engine {
         self.spectrum_pan_hz = 0.0;
         self.spectrum_front.sync(iq_rate, decim, 0.0);
         let hop = spectrum_hop(fft, iq_rate);
-        if fft != self.fft_size || hop != self.spectrum_hop {
+        let window = params.spectrum_window;
+        let beta = params.spectrum_kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
+        if fft != self.fft_size
+            || hop != self.spectrum_hop
+            || window != self.spectrum_window
+            || beta != self.spectrum_kaiser_beta
+        {
             self.fft_size = fft;
             self.spectrum_hop = hop;
-            self.analyzer = SpectrumAnalyzer::new(fft, hop);
+            self.spectrum_window = window;
+            self.spectrum_kaiser_beta = beta;
+            self.analyzer = SpectrumAnalyzer::with_window(fft, hop, window, beta);
             self.latest = vec![-120.0; fft];
             self.reset_skimmer_peak_hold(fft);
         }

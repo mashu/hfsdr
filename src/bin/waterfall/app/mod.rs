@@ -155,6 +155,8 @@ impl WaterfallApp {
                 arrow_hold: None,
                 smooth_alpha: SMOOTH_ALPHA,
                 waterfall_avg: 1,
+                spectrum_window: FftWindowKind::Hann,
+                spectrum_kaiser_beta: DEFAULT_KAISER_BETA,
                 waterfall_rows: 0,
                 target_fps: 30,
                 fft_size: FFT_SIZE,

@@ -137,6 +137,54 @@ impl WaterfallApp {
                             self.plot.waterfall.textures_dirty = true;
                         }
                     });
+
+                    ui.label(egui::RichText::new("FFT window").small().color(MUTED));
+                    let mut window = self.display.spectrum_window;
+                    let window_resp = egui::ComboBox::from_id_salt("spectrum_fft_window")
+                        .selected_text(window.label())
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            for kind in FftWindowKind::ALL {
+                                ui.selectable_value(&mut window, kind, kind.label());
+                            }
+                        });
+                    attach_rich_tooltip(
+                        &window_resp.response,
+                        Some("FFT window"),
+                        &[
+                            ("Spectral leakage", ACCENT),
+                            (
+                                "Tapers each FFT frame before the transform. Steeper windows \
+                                 (Blackman, Blackman-Harris) reduce sidelobes but widen peaks; \
+                                 Rectangular has the sharpest peaks but most leakage.",
+                                MUTED,
+                            ),
+                            ("Independent of CW filter", OK),
+                            (
+                                "This only affects the panadapter/waterfall display — not the \
+                                 channel bandpass used for demod.",
+                                MUTED,
+                            ),
+                        ],
+                    );
+                    if window != self.display.spectrum_window {
+                        self.display.spectrum_window = window;
+                        self.plot.waterfall.force_texture_full = true;
+                        self.plot.waterfall.textures_dirty = true;
+                    }
+                    if self.display.spectrum_window == FftWindowKind::Kaiser {
+                        if scroll_slider_f32(
+                            ui,
+                            &mut self.display.spectrum_kaiser_beta,
+                            MIN_KAISER_BETA..=MAX_KAISER_BETA,
+                            "Kaiser β",
+                        )
+                        .changed()
+                        {
+                            self.plot.waterfall.force_texture_full = true;
+                            self.plot.waterfall.textures_dirty = true;
+                        }
+                    }
                 });
             },
         );
