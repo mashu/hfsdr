@@ -51,6 +51,7 @@ fn state() -> &'static State {
 
 /// On Windows, check whether the DLL is loadable from the exe directory / PATH.
 /// Elsewhere, compile-time linking already succeeded when the feature is enabled.
+#[cfg_attr(not(any(feature = "airspy", feature = "rtlsdr")), allow(dead_code))]
 fn probe_lib(stem: &str) -> bool {
     #[cfg(windows)]
     {
