@@ -116,7 +116,7 @@ pub(crate) fn draw_notch_marker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eframe::egui::{self, Vec2};
+    use eframe::egui::Vec2;
     use egui_kittest::Harness;
 
     #[test]

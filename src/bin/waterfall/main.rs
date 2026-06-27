@@ -57,11 +57,23 @@ use eframe::egui;
 
 fn main() -> eframe::Result {
     log::init();
+    hfsdr::native_sdr::init();
+    log_native_sdr_availability();
     log::info("hfsdr starting");
     // The source is no longer built here: the GUI opens immediately and the
     // engine thread connects (auto-connecting if CLI args were supplied), so a
     // missing or slow front end never blocks or crashes the app.
-    let autoconnect = source::request_from_args();
+    let autoconnect = source::request_from_args().and_then(|req| {
+        if source::source_kind_available(req.kind) {
+            Some(req)
+        } else {
+            log::warn(format!(
+                "CLI auto-connect to {} skipped: native driver library not found",
+                req.kind
+            ));
+            None
+        }
+    });
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
@@ -79,4 +91,19 @@ fn main() -> eframe::Result {
             Ok(Box::new(WaterfallApp::new(autoconnect)))
         }),
     )
+}
+
+fn log_native_sdr_availability() {
+    #[cfg(feature = "airspy")]
+    if !hfsdr::native_sdr::airspy_available() {
+        log::warn(
+            "Airspy HF+ disabled: airspyhf.dll not found (place it next to hfsdr.exe; KiwiSDR and QMX still work)",
+        );
+    }
+    #[cfg(feature = "rtlsdr")]
+    if !hfsdr::native_sdr::rtlsdr_available() {
+        log::warn(
+            "RTL-SDR disabled: rtlsdr.dll not found (place it next to hfsdr.exe; KiwiSDR and QMX still work)",
+        );
+    }
 }

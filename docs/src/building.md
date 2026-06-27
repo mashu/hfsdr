@@ -57,7 +57,9 @@ into a local prefix. It sets `PKG_CONFIG_PATH`, `VCPKG_ROOT`, and
 building.
 
 [Release builds](https://github.com/mashu/hfsdr/releases) include `hfsdr.exe` and
-the required `.dll` files in the zip.
+the required `.dll` files in the zip. If a driver DLL is missing, the app still
+starts: KiwiSDR and QMX work, and a warning is printed to the console listing
+which local USB sources are disabled.
 
 ---
 

@@ -66,6 +66,7 @@ pub(crate) fn agc_mode_to_u8(m: AgcMode) -> u8 {
         AgcMode::Envelope => 0,
         AgcMode::Hang => 1,
         AgcMode::DualLoop => 2,
+        AgcMode::Lookahead => 3,
     }
 }
 
@@ -73,6 +74,7 @@ pub(crate) fn agc_mode_from_u8(v: u8) -> AgcMode {
     match v {
         1 => AgcMode::Hang,
         2 => AgcMode::DualLoop,
+        3 => AgcMode::Lookahead,
         _ => AgcMode::Envelope,
     }
 }
@@ -206,7 +208,12 @@ mod tests {
 
     #[test]
     fn agc_mode_codec_roundtrip() {
-        for m in [AgcMode::Envelope, AgcMode::Hang, AgcMode::DualLoop] {
+        for m in [
+            AgcMode::Envelope,
+            AgcMode::Hang,
+            AgcMode::DualLoop,
+            AgcMode::Lookahead,
+        ] {
             assert_eq!(agc_mode_from_u8(agc_mode_to_u8(m)), m);
         }
         assert_eq!(agc_mode_from_u8(9), AgcMode::Envelope);

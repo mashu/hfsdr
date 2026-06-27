@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hfsdr::{
-    ChannelOffsetHz, Complex32, CwChannel, CwChannelSettings, CwStageMetrics, DecimFilterKind,
+    ChannelOffsetHz, Complex32, CwChannel, CwChannelSettings, CwStageMetrics,
     IqAudioDemod, IqSource, KiwiSource, ListenOrigin, WidebandCwIngress,
 };
 use rtrb::RingBuffer;
@@ -31,7 +31,7 @@ use engine::{
     demod_tail_max, wideband_tail_len, ConnState, Engine, EngineParams, EngineShared, EngineStats,
     MAX_AUDIO_SAMPLES_NARROW, MAX_AUDIO_SAMPLES_WB,
 };
-use source::{attach_dual_ring, Connection, DeviceSource};
+use source::{Connection, DeviceSource};
 
 #[cfg(feature = "airspy")]
 use hfsdr::AirspyHf;
@@ -248,13 +248,12 @@ fn bench_cw_channel(rate: f32, block_size: usize, iterations: u32, settings: &Cw
     let mut channel = CwChannel::new(rate);
     let mut audio = Vec::new();
     let origin = ListenOrigin::from_settings(settings.listen_offset_hz);
-    let mut accum = CwStageMetrics::default();
     for _ in 0..50 {
         let mut m = CwStageMetrics::default();
         channel.process_profiled(demod_iq, rate, settings, origin, &mut audio, &mut m);
     }
 
-    accum = CwStageMetrics::default();
+    let mut accum = CwStageMetrics::default();
     let t0 = Instant::now();
     for _ in 0..iterations {
         let mut m = CwStageMetrics::default();
@@ -383,7 +382,7 @@ fn run_replay(args: &[String]) {
     let path = args.first().map(String::as_str).unwrap_or_else(|| usage());
     let run_secs: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_SECS);
 
-    let mut playback = hfsdr::IqPlayback::open(std::path::Path::new(path)).unwrap_or_else(|e| {
+    let playback = hfsdr::IqPlayback::open(std::path::Path::new(path)).unwrap_or_else(|e| {
         eprintln!("replay open failed: {e}");
         std::process::exit(1);
     });

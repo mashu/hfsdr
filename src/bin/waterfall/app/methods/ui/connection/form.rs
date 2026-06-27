@@ -5,6 +5,7 @@ impl WaterfallApp {
 
     pub(crate) fn connection_form_section(&mut self, ui: &mut egui::Ui) {
         popup_section(ui, "Connect", None, |ui| {
+            self.connection.form.kind = sanitize_source_kind(self.connection.form.kind);
             let labels = source_kind_labels();
             let selected = source_kind_index(self.connection.form.kind);
             if let Some(i) = segment_choice(ui, "source_kind", selected, &labels) {

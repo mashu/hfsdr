@@ -118,6 +118,19 @@ jobs:
               Copy-Item (Join-Path $dir "*.dll") dist/ -ErrorAction SilentlyContinue
             }
           }
+          # Explicit fallbacks — airspyhf.dll sometimes stays in the CMake build tree.
+          $airspyFallback = Get-ChildItem -Path "$env:RUNNER_TEMP/airspyhf/build" -Recurse -Filter "airspyhf.dll" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\Release\\" } |
+            Select-Object -First 1
+          if ($airspyFallback -and -not (Test-Path "dist/airspyhf.dll")) {
+            Copy-Item $airspyFallback.FullName dist/airspyhf.dll
+          }
+          $listed = Get-ChildItem dist -Name
+          Write-Host "Release zip contents:"
+          $listed | ForEach-Object { Write-Host "  $_" }
+          if (-not (Test-Path "dist/airspyhf.dll")) {
+            Write-Warning "airspyhf.dll missing from dist — app will start but Airspy HF+ is disabled"
+          }
           Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
 
       - name: Upload release asset

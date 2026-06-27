@@ -128,6 +128,10 @@ fn status_badge(ui: &mut Ui, hint: AudioLevelHint) {
     attach_rich_tooltip(&resp, Some("AF level"), hint_tip_lines(hint));
 }
 
+/// Fixed chip size so live metric updates and connect/disconnect do not reflow CW demod below.
+const METRIC_CHIP_W: f32 = 48.0;
+const METRIC_CHIP_H: f32 = 32.0;
+
 fn metric_chip_with_tip(
     ui: &mut Ui,
     label: &str,
@@ -135,116 +139,127 @@ fn metric_chip_with_tip(
     accent: Color32,
     tip: &[(&str, Color32)],
 ) {
-    let response = ui
-        .vertical(|ui| {
+    let response = ui.allocate_ui_with_layout(
+        Vec2::new(METRIC_CHIP_W, METRIC_CHIP_H),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            ui.set_max_width(METRIC_CHIP_W);
             ui.label(egui::RichText::new(label).small().color(MUTED));
             ui.label(egui::RichText::new(value).monospace().color(accent));
-        })
-        .response;
-    attach_rich_tooltip(&response, Some(label), tip);
+        },
+    );
+    attach_rich_tooltip(&response.response, Some(label), tip);
 }
 
 fn metric_row(ui: &mut Ui, p: &AfScopeParams<'_>) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 16.0;
-        metric_chip_with_tip(
-            ui,
-            "Peak",
-            &format!("{:.3}", p.peak),
-            TRACE,
-            &[
-                ("Post-AGC audio", TRACE),
-                (
-                    "Instantaneous |audio| peak — aim near half scale (~0.45) when tuning RF gain.",
+    let rf_value = if p.streaming {
+        dbm_to_s_reading(rf_level_dbm(p.rssi_dbm, p.iq_rf_level))
+    } else {
+        "—".to_string()
+    };
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), METRIC_CHIP_H),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                metric_chip_with_tip(
+                    ui,
+                    "Peak",
+                    &format!("{:.3}", p.peak),
+                    TRACE,
+                    &[
+                        ("Post-AGC audio", TRACE),
+                        (
+                            "Instantaneous |audio| peak — aim near half scale (~0.45) when tuning RF gain.",
+                            MUTED,
+                        ),
+                    ],
+                );
+                metric_chip_with_tip(
+                    ui,
+                    "RMS",
+                    &format!("{:.3}", p.rms),
                     MUTED,
-                ),
-            ],
-        );
-        metric_chip_with_tip(
-            ui,
-            "RMS",
-            &format!("{:.3}", p.rms),
-            MUTED,
-            &[
-                ("Average level", ACCENT),
-                (
-                    "Short-term RMS of demod audio — steadier than peak between keying edges.",
+                    &[
+                        ("Average level", ACCENT),
+                        (
+                            "Short-term RMS of demod audio — steadier than peak between keying edges.",
+                            MUTED,
+                        ),
+                    ],
+                );
+                if p.agc_enabled {
+                    metric_chip_with_tip(
+                        ui,
+                        "IQ AGC",
+                        &format!("{:.1}×", p.agc_gain),
+                        ACCENT,
+                        &[
+                            ("Software IF loop", ACCENT),
+                            (
+                                "Compensates RF level before demod — high × boosts weak signals, \
+                                 low × pulls back hot RF. Independent of the S-meter.",
+                                MUTED,
+                            ),
+                        ],
+                    );
+                    metric_chip_with_tip(
+                        ui,
+                        "Env",
+                        &format!("{:.3}", p.agc_envelope),
+                        MUTED,
+                        &[
+                            ("IQ envelope", ACCENT),
+                            (
+                                "Level the AGC loop is tracking on filtered IQ — rises when RF is strong, \
+                                 falls between characters.",
+                                MUTED,
+                            ),
+                        ],
+                    );
+                    metric_chip_with_tip(
+                        ui,
+                        "Tgt",
+                        &format!("{:.2}", p.agc_target),
+                        MUTED,
+                        &[
+                            ("AGC target", ACCENT),
+                            ("Desired IQ envelope level — set in CW demod → Level (AGC).", MUTED),
+                        ],
+                    );
+                }
+                metric_chip_with_tip(
+                    ui,
+                    "RF",
+                    &rf_value,
+                    if p.streaming { OK } else { MUTED },
+                    &[
+                        ("Pre-AGC IQ", OK),
+                        (
+                            "S-unit from IQ level before software AGC — same scale as the S-meter. \
+                             Raise RF gain until RF/peak look healthy without HOT.",
+                            MUTED,
+                        ),
+                    ],
+                );
+                metric_chip_with_tip(
+                    ui,
+                    "IQ buf",
+                    &format!("{:>3.0}%", p.iq_headroom * 100.0),
                     MUTED,
-                ),
-            ],
-        );
-        if p.agc_enabled {
-            metric_chip_with_tip(
-                ui,
-                "IQ AGC",
-                &format!("{:.1}×", p.agc_gain),
-                ACCENT,
-                &[
-                    ("Software IF loop", ACCENT),
-                    (
-                        "Compensates RF level before demod — high × boosts weak signals, \
-                         low × pulls back hot RF. Independent of the S-meter.",
-                        MUTED,
-                    ),
-                ],
-            );
-            metric_chip_with_tip(
-                ui,
-                "Env",
-                &format!("{:.3}", p.agc_envelope),
-                MUTED,
-                &[
-                    ("IQ envelope", ACCENT),
-                    (
-                        "Level the AGC loop is tracking on filtered IQ — rises when RF is strong, \
-                         falls between characters.",
-                        MUTED,
-                    ),
-                ],
-            );
-            metric_chip_with_tip(
-                ui,
-                "Tgt",
-                &format!("{:.2}", p.agc_target),
-                MUTED,
-                &[
-                    ("AGC target", ACCENT),
-                    ("Desired IQ envelope level — set in CW demod → Level (AGC).", MUTED),
-                ],
-            );
-        }
-        if p.streaming {
-            let rf_dbm = rf_level_dbm(p.rssi_dbm, p.iq_rf_level);
-            metric_chip_with_tip(
-                ui,
-                "RF",
-                &dbm_to_s_reading(rf_dbm),
-                OK,
-                &[
-                    ("Pre-AGC IQ", OK),
-                    (
-                        "S-unit from IQ level before software AGC — same scale as the S-meter. \
-                         Raise RF gain until RF/peak look healthy without HOT.",
-                        MUTED,
-                    ),
-                ],
-            );
-        }
-        metric_chip_with_tip(
-            ui,
-            "IQ buf",
-            &format!("{:.0}%", p.iq_headroom * 100.0),
-            MUTED,
-            &[
-                ("Engine buffer", ACCENT),
-                (
-                    "IQ ring-buffer fill — sustained high % means the pump is falling behind \
-                     the sample stream.",
-                    MUTED,
-                ),
-            ],
-        );
-    });
+                    &[
+                        ("Engine buffer", ACCENT),
+                        (
+                            "IQ ring-buffer fill — sustained high % means the pump is falling behind \
+                             the sample stream.",
+                            MUTED,
+                        ),
+                    ],
+                );
+            });
+        },
+    );
 }
 
 pub fn show_af_scope(ui: &mut Ui, p: &AfScopeParams<'_>) {

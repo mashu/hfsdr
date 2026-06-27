@@ -31,6 +31,7 @@ impl WaterfallApp {
         self.radio.cw.agc.attack_ms = s.agc_attack_ms;
         self.radio.cw.agc.decay_ms = s.agc_decay_ms;
         self.radio.cw.agc.manual_gain = s.agc_manual_gain;
+        self.radio.cw.agc.lookahead_ms = s.agc_lookahead_ms;
         self.radio.cw.agc_mode = agc_mode_from_u8(s.agc_mode);
         self.radio.cw.sidetone_envelope.enabled = s.st_envelope_enabled;
         self.radio.cw.sidetone_envelope.rise_ms = s.st_rise_ms;
@@ -153,6 +154,7 @@ impl WaterfallApp {
             agc_attack_ms: self.radio.cw.agc.attack_ms,
             agc_decay_ms: self.radio.cw.agc.decay_ms,
             agc_manual_gain: self.radio.cw.agc.manual_gain,
+            agc_lookahead_ms: self.radio.cw.agc.lookahead_ms,
             agc_mode: agc_mode_to_u8(self.radio.cw.agc_mode),
             st_envelope_enabled: self.radio.cw.sidetone_envelope.enabled,
             st_rise_ms: self.radio.cw.sidetone_envelope.rise_ms,
