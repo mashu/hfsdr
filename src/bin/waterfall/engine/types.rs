@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use hfsdr::{CwChannelSettings, PipelineMetrics, Spot};
+use hfsdr::{CwChannelSettings, FftWindowKind, PipelineMetrics, Spot, DEFAULT_KAISER_BETA, DEFAULT_FFT_WINDOW};
 use hfsdr::SkimmerConfig;
 
 use crate::skimmer::ScpStatus;
@@ -124,6 +124,9 @@ pub struct EngineParams {
     pub skimmer: SkimmerConfig,
     pub fft_size: usize,
     pub fft_auto: bool,
+    /// FFT analysis window for panadapter / waterfall.
+    pub spectrum_window: FftWindowKind,
+    pub spectrum_kaiser_beta: f32,
     /// Feed the full IQ drain batch to the spectrum analyzer (not just the recent tail).
     pub full_drain_spectrum: bool,
     /// Yaesu-style software RF gain (dB) applied to IQ before spectrum, S-meter, and AGC.
@@ -145,6 +148,8 @@ impl Default for EngineParams {
             skimmer: SkimmerConfig::default(),
             fft_size: FFT_SIZE,
             fft_auto: true,
+            spectrum_window: DEFAULT_FFT_WINDOW,
+            spectrum_kaiser_beta: DEFAULT_KAISER_BETA,
             full_drain_spectrum: false,
             rf_gain_db: 0.0,
             perf_trace: false,

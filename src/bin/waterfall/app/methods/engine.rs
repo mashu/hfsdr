@@ -124,6 +124,8 @@ impl WaterfallApp {
             skimmer: self.effective_skimmer(),
             fft_size: self.display.fft_size,
             fft_auto: self.display.fft_auto,
+            spectrum_window: self.display.spectrum_window,
+            spectrum_kaiser_beta: self.display.spectrum_kaiser_beta,
             full_drain_spectrum: self.display.full_drain_spectrum,
             rf_gain_db: self.radio.rf_gain_db,
             perf_trace: self.display.perf_trace,

@@ -1,5 +1,6 @@
 //! UI evaluation harness — verifies layout landmarks and captures reference screenshots.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use eframe::egui::Vec2;
@@ -36,16 +37,23 @@ fn screenshot_dir() -> PathBuf {
 
 fn save_render(harness: &mut Harness<'_, WaterfallApp>, name: &str) -> Result<(), String> {
     let path = screenshot_dir().join(format!("{name}.png"));
-    let image = harness.render()?;
+    let image = match catch_unwind(AssertUnwindSafe(|| harness.render())) {
+        Ok(result) => result?,
+        Err(_) => return Err("wgpu adapter unavailable (headless runner)".into()),
+    };
     image.save(&path).map_err(|e| e.to_string())
 }
 
 /// Returns false when the runner has no wgpu adapter (typical on headless Linux CI).
 fn wgpu_render_available(harness: &mut Harness<'_, WaterfallApp>) -> bool {
-    match harness.render() {
-        Ok(_) => true,
-        Err(err) => {
+    match catch_unwind(AssertUnwindSafe(|| harness.render())) {
+        Ok(Ok(_)) => true,
+        Ok(Err(err)) => {
             eprintln!("skipping UI screenshot capture: {err}");
+            false
+        }
+        Err(_) => {
+            eprintln!("skipping UI screenshot capture: wgpu adapter unavailable (headless runner)");
             false
         }
     }

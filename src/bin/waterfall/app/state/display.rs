@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use eframe::egui;
+use hfsdr::FftWindowKind;
 
 #[derive(Clone, Debug)]
 pub struct DisplayState {
@@ -14,6 +15,9 @@ pub struct DisplayState {
     pub arrow_hold: Option<(egui::Key, Instant)>,
     pub smooth_alpha: f32,
     pub waterfall_avg: u8,
+    /// FFT analysis window for panadapter / waterfall.
+    pub spectrum_window: FftWindowKind,
+    pub spectrum_kaiser_beta: f32,
     pub waterfall_rows: usize,
     pub target_fps: u32,
     pub fft_size: usize,

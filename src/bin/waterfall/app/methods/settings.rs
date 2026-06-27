@@ -71,6 +71,9 @@ impl WaterfallApp {
         }
         self.display.smooth_alpha = s.smooth_alpha;
         self.display.waterfall_avg = normalize_waterfall_avg(s.waterfall_avg);
+        self.display.spectrum_window = fft_window_from_u8(s.spectrum_window);
+        self.display.spectrum_kaiser_beta =
+            s.spectrum_kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
         self.display.target_fps = s.target_fps.clamp(10, 60);
         self.display.fft_size = s.fft_size.clamp(1024, 65_536);
         self.display.fft_auto = s.fft_auto;
@@ -186,6 +189,8 @@ impl WaterfallApp {
             pan_step_fast_hz: self.display.pan_step_fast_hz,
             smooth_alpha: self.display.smooth_alpha,
             waterfall_avg: self.display.waterfall_avg,
+            spectrum_window: fft_window_to_u8(self.display.spectrum_window),
+            spectrum_kaiser_beta: self.display.spectrum_kaiser_beta,
             target_fps: self.display.target_fps,
             fft_size: self.display.fft_size,
             fft_auto: self.display.fft_auto,

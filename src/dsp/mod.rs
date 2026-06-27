@@ -10,6 +10,7 @@ mod audio;
 mod biquad;
 mod cw;
 mod fft_plan;
+mod fft_window;
 mod freq_offset;
 mod spectrum;
 mod spectrum_front;
@@ -37,6 +38,7 @@ pub use cw::{
     CHANNEL_PASSBAND_NARROW_MAX_HZ, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW,
     DEFAULT_KAISER_BETA, MAX_KAISER_BETA, MIN_KAISER_BETA, PASSBAND_STEP_HZ,
 };
+pub use fft_window::{build_fft_window, DEFAULT_FFT_WINDOW, FftWindowKind};
 pub use spectrum::SpectrumAnalyzer;
 pub use spectrum_front::SpectrumFrontEnd;
 pub use spectrum_plan::{

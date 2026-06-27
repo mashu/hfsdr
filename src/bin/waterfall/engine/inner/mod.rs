@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use hfsdr::{
     Complex32, DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, IqPlayback, IqRecorder,
-    PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd,
+    FftWindowKind, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd,
 };
 
 use crate::audio::AudioOutput;
@@ -58,6 +58,8 @@ pub(crate) struct Engine {
     skimmer_peak_hold: Vec<f32>,
     last_skimmer_center_hz: f64,
     fft_size: usize,
+    spectrum_window: FftWindowKind,
+    spectrum_kaiser_beta: f32,
     spectrum_rate: f32,
     spectrum_decim: usize,
     spectrum_pan_hz: f32,

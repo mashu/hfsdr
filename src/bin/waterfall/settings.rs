@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use hfsdr::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW, DEFAULT_KAISER_BETA, WindowKind};
+use hfsdr::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA, FftWindowKind, WindowKind};
 
 use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings};
 
@@ -19,6 +19,19 @@ const fn window_to_persisted(w: WindowKind) -> u8 {
         WindowKind::Blackman => 2,
         WindowKind::Kaiser => 3,
         WindowKind::Gaussian => 0,
+    }
+}
+
+const fn fft_window_to_persisted(w: FftWindowKind) -> u8 {
+    match w {
+        FftWindowKind::Hann => 0,
+        FftWindowKind::Hamming => 1,
+        FftWindowKind::Blackman => 2,
+        FftWindowKind::Rectangular => 3,
+        FftWindowKind::Kaiser => 4,
+        FftWindowKind::BlackmanHarris => 5,
+        FftWindowKind::Bartlett => 6,
+        FftWindowKind::Flattop => 7,
     }
 }
 
@@ -150,6 +163,11 @@ pub struct AppSettings {
     pub smooth_alpha: f32,
     /// Waterfall time averaging: 1 = none, 2 or 4 = frames per line.
     pub waterfall_avg: u8,
+    /// FFT analysis window (see [`FftWindowKind`]).
+    #[serde(default = "default_spectrum_window")]
+    pub spectrum_window: u8,
+    #[serde(default = "default_spectrum_kaiser_beta")]
+    pub spectrum_kaiser_beta: f32,
     pub target_fps: u32,
     pub fft_size: usize,
     pub fft_auto: bool,
@@ -278,6 +296,8 @@ impl Default for AppSettings {
             pan_step_fast_hz: default_pan_step_fast_hz(),
             smooth_alpha: 0.09,
             waterfall_avg: 1,
+            spectrum_window: default_spectrum_window(),
+            spectrum_kaiser_beta: default_spectrum_kaiser_beta(),
             target_fps: 30,
             fft_size: 2048,
             fft_auto: true,
@@ -347,6 +367,14 @@ fn legacy_settings_format() -> u32 {
 
 fn default_show_smeter() -> bool {
     true
+}
+
+fn default_spectrum_window() -> u8 {
+    fft_window_to_persisted(DEFAULT_FFT_WINDOW)
+}
+
+fn default_spectrum_kaiser_beta() -> f32 {
+    DEFAULT_KAISER_BETA
 }
 
 impl AppSettings {
