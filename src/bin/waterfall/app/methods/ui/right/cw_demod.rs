@@ -283,6 +283,75 @@ impl WaterfallApp {
 
                 popup_section(
                     ui,
+                    "Sidetone envelope",
+                    Some("Softens key-up/key-down edges after the BFO"),
+                    |ui| {
+                        stage_toggle(
+                            ui,
+                            &mut self.radio.cw.sidetone_envelope.enabled,
+                            "Envelope",
+                            Some("Key-edge shaping on demod audio"),
+                            None,
+                            None,
+                        );
+                        if self.radio.cw.sidetone_envelope.enabled {
+                            scroll_slider_f32(
+                                ui,
+                                &mut self.radio.cw.sidetone_envelope.rise_ms,
+                                0.5..=12.0,
+                                "Rise ms",
+                            );
+                            scroll_slider_f32(
+                                ui,
+                                &mut self.radio.cw.sidetone_envelope.fall_ms,
+                                0.5..=20.0,
+                                "Fall ms",
+                            );
+                            let shape_sel = match self.radio.cw.sidetone_envelope.shape {
+                                SidetoneEnvelopeShape::Cosine => 0,
+                                SidetoneEnvelopeShape::Linear => 1,
+                                SidetoneEnvelopeShape::Exponential => 2,
+                            };
+                            if let Some(i) = labeled_segment_choice(
+                                ui,
+                                "st_envelope_shape",
+                                "Edge shape",
+                                shape_sel,
+                                &["Cosine", "Linear", "Exponential"],
+                                36.0,
+                            ) {
+                                self.radio.cw.sidetone_envelope.shape = match i {
+                                    1 => SidetoneEnvelopeShape::Linear,
+                                    2 => SidetoneEnvelopeShape::Exponential,
+                                    _ => SidetoneEnvelopeShape::Cosine,
+                                };
+                            }
+                            let shape_hint = match self.radio.cw.sidetone_envelope.shape {
+                                SidetoneEnvelopeShape::Cosine => {
+                                    "Smooth cosine ramps — least clicky (default)"
+                                }
+                                SidetoneEnvelopeShape::Linear => {
+                                    "Constant slope — sharper attack and release"
+                                }
+                                SidetoneEnvelopeShape::Exponential => {
+                                    "Fast attack ease-out — sharpest edges, most clicky"
+                                }
+                            };
+                            ui.label(egui::RichText::new(shape_hint).small().color(MUTED));
+                        } else {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Off — raw BFO product edges (may click on fast keying)",
+                                )
+                                .small()
+                                .color(MUTED),
+                            );
+                        }
+                    },
+                );
+
+                popup_section(
+                    ui,
                     "Channel filter",
                     Some("IQ bandpass before demod — BW is width; Filter design is skirt shape"),
                     |ui| {

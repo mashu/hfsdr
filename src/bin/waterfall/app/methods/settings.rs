@@ -32,6 +32,11 @@ impl WaterfallApp {
         self.radio.cw.agc.decay_ms = s.agc_decay_ms;
         self.radio.cw.agc.manual_gain = s.agc_manual_gain;
         self.radio.cw.agc_mode = agc_mode_from_u8(s.agc_mode);
+        self.radio.cw.sidetone_envelope.enabled = s.st_envelope_enabled;
+        self.radio.cw.sidetone_envelope.rise_ms = s.st_rise_ms;
+        self.radio.cw.sidetone_envelope.fall_ms = s.st_fall_ms;
+        self.radio.cw.sidetone_envelope.shape =
+            st_envelope_shape_from_u8(s.st_envelope_shape);
         for (slot, data) in self.radio.cw.notches.iter_mut().zip(s.notches.iter()) {
             slot.enabled = data.enabled;
             slot.offset_hz = ChannelOffsetHz::new(data.offset_hz);
@@ -149,6 +154,10 @@ impl WaterfallApp {
             agc_decay_ms: self.radio.cw.agc.decay_ms,
             agc_manual_gain: self.radio.cw.agc.manual_gain,
             agc_mode: agc_mode_to_u8(self.radio.cw.agc_mode),
+            st_envelope_enabled: self.radio.cw.sidetone_envelope.enabled,
+            st_rise_ms: self.radio.cw.sidetone_envelope.rise_ms,
+            st_fall_ms: self.radio.cw.sidetone_envelope.fall_ms,
+            st_envelope_shape: st_envelope_shape_to_u8(self.radio.cw.sidetone_envelope.shape),
             notches: self
                 .radio.cw
                 .notches

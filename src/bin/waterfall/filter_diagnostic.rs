@@ -26,6 +26,10 @@ struct DiagnosticCurves {
     offsets_hz: Vec<f32>,
     signal_db: Vec<f32>,
     filtered_db: Vec<f32>,
+    /// Analytic channel FIR/IIR magnitude (0 dB at passband peak).
+    theory_channel_db: Vec<f32>,
+    /// Analytic channel + manual notches magnitude.
+    theory_active_db: Vec<f32>,
 }
 
 impl FilterDiagnosticState {
@@ -128,6 +132,11 @@ pub fn show_filter_diagnostic_panel(
     ui.horizontal(|ui| {
         legend_dot(ui, Color32::from_rgb(148, 163, 184), "Spectrum (unfiltered)");
         legend_dot(ui, OK, "After channel filter + notches");
+        legend_dot(
+            ui,
+            Color32::from_rgb(125, 211, 252),
+            "Filter magnitude (theory)",
+        );
     });
     ui.add_space(6.0);
 
@@ -195,6 +204,8 @@ fn build_live_curves(view: &FilterDiagnosticView<'_>, theory: &FilterCurve) -> D
     let mut offsets_hz = Vec::with_capacity(CURVE_POINTS);
     let mut signal_db = Vec::with_capacity(CURVE_POINTS);
     let mut filtered_db = Vec::with_capacity(CURVE_POINTS);
+    let mut theory_channel_db = Vec::with_capacity(CURVE_POINTS);
+    let mut theory_active_db = Vec::with_capacity(CURVE_POINTS);
 
     for i in 0..CURVE_POINTS {
         let t = i as f32 / (CURVE_POINTS - 1).max(1) as f32;
@@ -228,12 +239,21 @@ fn build_live_curves(view: &FilterDiagnosticView<'_>, theory: &FilterCurve) -> D
         } else {
             raw + combined_db
         });
+        theory_channel_db.push(
+            view.ref_db
+                + interp_curve_db(&theory.offsets_hz, &theory.channel_only_db, rel),
+        );
+        theory_active_db.push(
+            view.ref_db + interp_curve_db(&theory.offsets_hz, &theory.active_db, rel),
+        );
     }
 
     DiagnosticCurves {
         offsets_hz,
         signal_db,
         filtered_db,
+        theory_channel_db,
+        theory_active_db,
     }
 }
 
@@ -379,6 +399,31 @@ fn paint_filter_curve(painter: &Painter, rect: Rect, live: &DiagnosticCurves, vi
         );
     }
 
+    draw_dashed_curve_line(
+        painter,
+        inner,
+        half_span,
+        &live.theory_channel_db,
+        &live.offsets_hz,
+        ref_db,
+        view.range_db,
+        Color32::from_rgba_unmultiplied(125, 211, 252, 200),
+        1.5,
+    );
+    if view.settings.notches.iter().any(|n| n.enabled) {
+        draw_dashed_curve_line(
+            painter,
+            inner,
+            half_span,
+            &live.theory_active_db,
+            &live.offsets_hz,
+            ref_db,
+            view.range_db,
+            Color32::from_rgba_unmultiplied(192, 132, 252, 170),
+            1.25,
+        );
+    }
+
     draw_curve_line(
         painter,
         inner,
@@ -416,6 +461,65 @@ fn paint_filter_curve(painter: &Painter, rect: Rect, live: &DiagnosticCurves, vi
         FontId::proportional(9.0),
         MUTED,
     );
+}
+
+fn draw_dashed_curve_line(
+    painter: &Painter,
+    inner: Rect,
+    half_span: f32,
+    db: &[f32],
+    offsets: &[f32],
+    ref_db: f32,
+    range_db: f32,
+    color: Color32,
+    width: f32,
+) {
+    if db.len() < 2 || db.len() != offsets.len() {
+        return;
+    }
+    let dash = 5.0f32;
+    let gap = 4.0f32;
+    let mut prev: Option<Pos2> = None;
+    let mut dash_left = dash;
+    let mut drawing = true;
+    for (&off, &val) in offsets.iter().zip(db.iter()) {
+        let pt = Pos2::new(
+            offset_to_x(off, half_span, inner),
+            db_to_y(val, inner, ref_db, range_db),
+        );
+        if let Some(p0) = prev {
+            let seg_len = p0.distance(pt);
+            if seg_len > 1e-3 {
+                let dir = (pt - p0) / seg_len;
+                let mut traveled = 0.0;
+                let mut a = p0;
+                while traveled < seg_len {
+                    let remain = seg_len - traveled;
+                    let step = dash_left.min(remain);
+                    let b = a + dir * step;
+                    if drawing {
+                        painter.line_segment([a, b], Stroke::new(width, color));
+                    }
+                    traveled += step;
+                    a = b;
+                    if drawing {
+                        dash_left -= step;
+                        if dash_left <= 0.0 {
+                            drawing = false;
+                            dash_left = gap;
+                        }
+                    } else {
+                        dash_left -= step;
+                        if dash_left <= 0.0 {
+                            drawing = true;
+                            dash_left = dash;
+                        }
+                    }
+                }
+            }
+        }
+        prev = Some(pt);
+    }
 }
 
 fn draw_curve_line(
@@ -493,5 +597,7 @@ mod tests {
         let center = live.filtered_db[CURVE_POINTS / 2];
         let edge = live.filtered_db[CURVE_POINTS - 1];
         assert!(center > edge + 3.0);
+        assert_eq!(live.theory_channel_db.len(), CURVE_POINTS);
+        assert!(live.theory_channel_db[CURVE_POINTS / 2] > live.theory_channel_db[0] + 3.0);
     }
 }

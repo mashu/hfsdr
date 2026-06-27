@@ -32,7 +32,8 @@ pub use cw::{
     passband_hz_for_channel_half, filter_overlay_cache_key, LowpassDesign, IqNotch, OVERLAY_ATTEN_DB,
     LmsPredictor,
     LmsStep, NoiseBlanker, NoiseBlankerSettings, NoiseReduction, NoiseReductionSettings, NotchSpec,
-    ProductDetector, WindowKind, MAX_NOTCHES, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
+    ProductDetector, SidetoneEnvelope, SidetoneEnvelopeSettings, SidetoneEnvelopeShape, WindowKind,
+    MAX_NOTCHES, CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ,
     CHANNEL_PASSBAND_NARROW_MAX_HZ, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW,
     DEFAULT_KAISER_BETA, MAX_KAISER_BETA, MIN_KAISER_BETA, PASSBAND_STEP_HZ,
 };

@@ -38,6 +38,18 @@ fn default_kiwi_man_gain() -> u8 {
     hfsdr::kiwi::protocol::KIWI_MAN_GAIN_DEFAULT
 }
 
+const fn default_st_envelope_enabled() -> bool {
+    true
+}
+
+const fn default_st_rise_ms() -> f32 {
+    2.5
+}
+
+const fn default_st_fall_ms() -> f32 {
+    4.0
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotchData {
     pub enabled: bool,
@@ -93,6 +105,14 @@ pub struct AppSettings {
     pub agc_manual_gain: f32,
     #[serde(default)]
     pub agc_mode: u8,
+    #[serde(default = "default_st_envelope_enabled")]
+    pub st_envelope_enabled: bool,
+    #[serde(default = "default_st_rise_ms")]
+    pub st_rise_ms: f32,
+    #[serde(default = "default_st_fall_ms")]
+    pub st_fall_ms: f32,
+    #[serde(default)]
+    pub st_envelope_shape: u8,
     pub notches: Vec<NotchData>,
 
     // Receiver controls.
@@ -230,6 +250,10 @@ impl Default for AppSettings {
             agc_decay_ms: 120.0,
             agc_manual_gain: 1.0,
             agc_mode: 0,
+            st_envelope_enabled: default_st_envelope_enabled(),
+            st_rise_ms: default_st_rise_ms(),
+            st_fall_ms: default_st_fall_ms(),
+            st_envelope_shape: 0,
             notches: vec![NotchData::default(); 4],
             rit_hz: 0.0,
             rit_on: false,

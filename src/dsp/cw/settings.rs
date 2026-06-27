@@ -9,6 +9,8 @@ use super::filter_plan::{clamp_passband_hz, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT
 use super::fir::WindowKind;
 use super::super::freq_offset::ChannelOffsetHz;
 
+pub use super::sidetone_envelope::{SidetoneEnvelopeSettings, SidetoneEnvelopeShape};
+
 /// Default channel FIR window for new sessions.
 pub const DEFAULT_CHANNEL_WINDOW: WindowKind = WindowKind::Blackman;
 
@@ -210,6 +212,7 @@ pub struct CwChannelSettings {
     pub noise_reduction: NoiseReductionSettings,
     pub agc: AgcSettings,
     pub agc_mode: AgcMode,
+    pub sidetone_envelope: SidetoneEnvelopeSettings,
     /// Diagnostic bypass (flow diagram / A/B); not saved to disk.
     pub diagnostic: DiagnosticBypassSettings,
     /// Use 2-pole IIR instead of linear FIR for lower CPU (may ring on fast CW).
@@ -239,6 +242,7 @@ impl Default for CwChannelSettings {
             noise_reduction: NoiseReductionSettings::default(),
             agc: AgcSettings::default(),
             agc_mode: AgcMode::Envelope,
+            sidetone_envelope: SidetoneEnvelopeSettings::default(),
             diagnostic: DiagnosticBypassSettings::default(),
             economy_filter: false,
             full_demod: true,

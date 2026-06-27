@@ -26,6 +26,7 @@ mod nco;
 mod noiseblanker;
 mod noisereduction;
 mod notch;
+mod sidetone_envelope;
 mod settings;
 
 pub use anti_alias::AntiAliasFilter;
@@ -59,5 +60,7 @@ pub use iir_channel::{iir_2pole_lowpass_q, DEFAULT_IIR_CHEBYSHEV_RIPPLE_DB};
 pub use settings::{
     AgcMode, AgcSettings, ApfSettings, AutoNotchSettings, ChannelFilterKind, CwChannelSettings,
     DecimFilterKind, DiagnosticBypassSettings, IirFilterKind, NoiseBlankerSettings,
-    NoiseReductionSettings, NotchSpec, DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
+    NoiseReductionSettings, NotchSpec, SidetoneEnvelopeSettings, SidetoneEnvelopeShape,
+    DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
 };
+pub use sidetone_envelope::SidetoneEnvelope;
