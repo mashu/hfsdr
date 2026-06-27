@@ -312,7 +312,7 @@ impl Default for AppSettings {
             show_right: true,
             show_af_scope: true,
             show_smeter: default_show_smeter(),
-            cw_simple_ui: true,
+            cw_simple_ui: false,
             recent_hosts: Vec::new(),
             last_center_mhz: 14.01,
             kiwi: KiwiSettings::default(),
