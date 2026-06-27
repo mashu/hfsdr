@@ -2,12 +2,36 @@
 
 use super::SourceKind;
 
+pub fn source_kind_available(kind: SourceKind) -> bool {
+    match kind {
+        SourceKind::Kiwi => true,
+        #[cfg(feature = "airspy")]
+        SourceKind::Airspy => hfsdr::native_sdr::airspy_available(),
+        #[cfg(feature = "rtlsdr")]
+        SourceKind::RtlSdr => hfsdr::native_sdr::rtlsdr_available(),
+        #[cfg(feature = "qmx")]
+        SourceKind::Qmx => true,
+    }
+}
+
+pub fn sanitize_source_kind(kind: SourceKind) -> SourceKind {
+    if source_kind_available(kind) {
+        kind
+    } else {
+        SourceKind::Kiwi
+    }
+}
+
 pub fn all_source_kinds() -> Vec<SourceKind> {
     let mut kinds = vec![SourceKind::Kiwi];
     #[cfg(feature = "airspy")]
-    kinds.push(SourceKind::Airspy);
+    if hfsdr::native_sdr::airspy_available() {
+        kinds.push(SourceKind::Airspy);
+    }
     #[cfg(feature = "rtlsdr")]
-    kinds.push(SourceKind::RtlSdr);
+    if hfsdr::native_sdr::rtlsdr_available() {
+        kinds.push(SourceKind::RtlSdr);
+    }
     #[cfg(feature = "qmx")]
     kinds.push(SourceKind::Qmx);
     kinds
@@ -61,6 +85,21 @@ pub fn is_local_source(kind: SourceKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kiwi_always_available() {
+        assert!(source_kind_available(SourceKind::Kiwi));
+    }
+
+    #[test]
+    fn sanitize_unavailable_falls_back_to_kiwi() {
+        #[cfg(all(windows, feature = "airspy"))]
+        {
+            if !hfsdr::native_sdr::airspy_available() {
+                assert_eq!(sanitize_source_kind(SourceKind::Airspy), SourceKind::Kiwi);
+            }
+        }
+    }
 
     #[test]
     fn source_kind_index_roundtrip() {

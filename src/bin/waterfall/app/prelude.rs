@@ -70,8 +70,8 @@ pub(crate) use crate::widgets::{
 };
 
 pub(crate) use crate::source::{
-    is_local_source, source_kind_from_index, source_kind_index, source_kind_label,
-    source_kind_labels,
+    is_local_source, sanitize_source_kind, source_kind_from_index, source_kind_index,
+    source_kind_label, source_kind_labels,
 };
 pub(crate) use crate::app::codec::{
     agc_mode_from_u8, agc_mode_to_u8, channel_filter_from_u8, channel_filter_to_u8,

@@ -30,8 +30,8 @@ use super::notch::IqNotch;
 use super::sidetone_envelope::SidetoneEnvelope;
 use super::filter_plan::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
 use super::settings::{
-    ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW, IirFilterKind,
-    MAX_NOTCHES,
+    AgcMode, ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW,
+    IirFilterKind, MAX_NOTCHES,
 };
 
 /// Per-call CPU breakdown for [`CwChannel::process_profiled`] / engine-bench.
@@ -97,6 +97,8 @@ pub struct CwChannel {
     work_iq: Vec<Complex32>,
     work_mix: Vec<Complex32>,
     work_decim: Vec<Complex32>,
+    agc_levels: Vec<f32>,
+    agc_gains: Vec<f32>,
     last_iq_rate: f32,
     last_decimation: u32,
     last_bandwidth: f32,
@@ -139,6 +141,8 @@ impl CwChannel {
             work_iq: Vec::new(),
             work_mix: Vec::new(),
             work_decim: Vec::new(),
+            agc_levels: Vec::new(),
+            agc_gains: Vec::new(),
             last_iq_rate: iq_sample_rate,
             last_decimation: 0,
             last_bandwidth: DEFAULT_CHANNEL_PASSBAND_HZ,
@@ -386,31 +390,59 @@ impl CwChannel {
         let t_agc = metrics.as_ref().map(|_| std::time::Instant::now());
         self.work_mix.clear();
         self.work_mix.reserve(self.work_iq.len());
-        for &filtered in &self.work_iq {
-            let level = filtered.norm().max(1e-7);
-            let gain = if settings.agc.enabled {
-                self.agc.gain_for(
-                    level,
-                    audio_rate,
-                    settings.agc.target,
-                    settings.agc.attack_ms,
-                    settings.agc.decay_ms,
-                    settings.agc_mode,
-                )
-            } else {
-                self.agc.track_envelope(
-                    level,
-                    audio_rate,
-                    settings.agc.attack_ms,
-                    settings.agc.decay_ms,
-                    settings.agc_mode,
-                );
-                settings.agc.manual_gain
-            };
-            self.work_mix.push(Complex32 {
-                re: filtered.re * gain,
-                im: filtered.im * gain,
-            });
+        if settings.agc.enabled && settings.agc_mode == AgcMode::Lookahead {
+            self.agc_levels.clear();
+            self.agc_levels.reserve(self.work_iq.len());
+            self.agc_levels.extend(
+                self.work_iq
+                    .iter()
+                    .map(|z| z.norm().max(1e-7)),
+            );
+            self.agc_gains.clear();
+            self.agc_gains.resize(self.agc_levels.len(), 1.0);
+            self.agc.compute_lookahead_gains(
+                &self.agc_levels,
+                &mut self.agc_gains,
+                audio_rate,
+                settings.agc.target,
+                settings.agc.attack_ms,
+                settings.agc.decay_ms,
+                settings.agc.lookahead_ms,
+            );
+            for (i, &filtered) in self.work_iq.iter().enumerate() {
+                let gain = self.agc_gains[i];
+                self.work_mix.push(Complex32 {
+                    re: filtered.re * gain,
+                    im: filtered.im * gain,
+                });
+            }
+        } else {
+            for &filtered in &self.work_iq {
+                let level = filtered.norm().max(1e-7);
+                let gain = if settings.agc.enabled {
+                    self.agc.gain_for(
+                        level,
+                        audio_rate,
+                        settings.agc.target,
+                        settings.agc.attack_ms,
+                        settings.agc.decay_ms,
+                        settings.agc_mode,
+                    )
+                } else {
+                    self.agc.track_envelope(
+                        level,
+                        audio_rate,
+                        settings.agc.attack_ms,
+                        settings.agc.decay_ms,
+                        settings.agc_mode,
+                    );
+                    settings.agc.manual_gain
+                };
+                self.work_mix.push(Complex32 {
+                    re: filtered.re * gain,
+                    im: filtered.im * gain,
+                });
+            }
         }
         if let (Some(m), Some(t)) = (metrics.as_mut(), t_agc) {
             m.agc_ns = t.elapsed().as_nanos() as u64;

@@ -492,18 +492,20 @@ impl WaterfallApp {
                 AgcMode::Envelope => 0,
                 AgcMode::Hang => 1,
                 AgcMode::DualLoop => 2,
+                AgcMode::Lookahead => 3,
             };
             if let Some(i) = labeled_segment_choice(
                 ui,
                 "agc_mode",
                 "Mode",
                 mode_sel,
-                &["Envelope", "Hang", "Dual-loop"],
+                &["Envelope", "Hang", "Dual-loop", "Lookahead"],
                 36.0,
             ) {
                 self.radio.cw.agc_mode = match i {
                     1 => AgcMode::Hang,
                     2 => AgcMode::DualLoop,
+                    3 => AgcMode::Lookahead,
                     _ => AgcMode::Envelope,
                 };
             }
@@ -511,12 +513,23 @@ impl WaterfallApp {
                 AgcMode::Envelope => "Symmetric attack/decay — general-purpose level riding",
                 AgcMode::Hang => "Fast gain reduction, slow recovery — quieter between dits",
                 AgcMode::DualLoop => "Peak + floor trackers — resists neighbour-signal pumping",
+                AgcMode::Lookahead => {
+                    "Forward peak scan + slow gain ramps — pre-ducks before peaks, fewer clicks"
+                }
             };
             ui.label(egui::RichText::new(mode_hint).small().color(MUTED));
             if advanced {
                 scroll_slider_f32(ui, &mut self.radio.cw.agc.attack_ms, 1.0..=20.0, "Attack ms");
                 scroll_slider_f32(ui, &mut self.radio.cw.agc.decay_ms, 20.0..=600.0, "Decay ms");
                 scroll_slider_f32(ui, &mut self.radio.cw.agc.target, 0.05..=0.6, "Target");
+                if self.radio.cw.agc_mode == AgcMode::Lookahead {
+                    scroll_slider_f32(
+                        ui,
+                        &mut self.radio.cw.agc.lookahead_ms,
+                        1.0..=25.0,
+                        "Lookahead ms",
+                    );
+                }
             }
         } else {
             scroll_slider_f32(ui, &mut self.radio.cw.agc.manual_gain, 0.1..=16.0, "Manual gain");

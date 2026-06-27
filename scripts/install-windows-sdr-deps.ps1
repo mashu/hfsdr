@@ -82,6 +82,18 @@ if (-not $importLib) {
 }
 Copy-Item $importLib.FullName (Join-Path $depsLib "airspyhf.lib") -Force
 
+# CMake install may leave the DLL in the build tree only; ensure bin/ has it for packaging.
+$airspyDllDest = Join-Path $depsBin "airspyhf.dll"
+if (-not (Test-Path $airspyDllDest)) {
+    $builtDll = Get-ChildItem -Path $buildDir -Recurse -Filter "airspyhf.dll" |
+        Where-Object { $_.FullName -match "\\Release\\" } |
+        Select-Object -First 1
+    if (-not $builtDll) {
+        throw "airspyhf.dll not found under $buildDir after build"
+    }
+    Copy-Item $builtDll.FullName $airspyDllDest -Force
+}
+
 $pcFile = Join-Path $depsPkgConfig "libairspyhf.pc"
 if (Test-Path $pcFile) {
     # Generated .pc references -lm (Unix only).
@@ -103,7 +115,9 @@ Add-GithubEnv "PATH" $env:PATH
 
 $required = @(
     (Join-Path $depsLib "airspyhf.lib"),
-    (Join-Path $vcpkgInstalled "lib/rtlsdr.lib")
+    (Join-Path $depsBin "airspyhf.dll"),
+    (Join-Path $vcpkgInstalled "lib/rtlsdr.lib"),
+    (Join-Path $vcpkgInstalled "bin/rtlsdr.dll")
 )
 foreach ($path in $required) {
     if (-not (Test-Path $path)) {

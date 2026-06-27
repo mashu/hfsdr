@@ -18,13 +18,16 @@ mod settings;
 #[cfg(test)]
 mod mock_hal_tests;
 
+#[allow(unused_imports)] // engine-bench binary
 pub use cli::request_from_args;
 pub use connection::{connect, ConnectRequest, SourceKind};
 pub use device::Connection;
 #[allow(unused_imports)] // engine-bench binary
 pub use device::DeviceSource;
+#[allow(unused_imports)] // engine-bench binary
 pub use kinds::{
-    is_local_source, source_kind_from_index, source_kind_index, source_kind_label,
-    source_kind_labels,
+    is_local_source, sanitize_source_kind, source_kind_available, source_kind_from_index,
+    source_kind_index, source_kind_label, source_kind_labels,
 };
+#[allow(unused_imports)] // engine-bench binary
 pub use settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};

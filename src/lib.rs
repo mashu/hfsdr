@@ -19,6 +19,7 @@
 //! When ingress decimation is configured, a bridge thread fans device IQ into raw +
 //! decimated rings before the engine pump.
 
+pub mod native_sdr;
 #[cfg(feature = "airspy")]
 pub mod airspyhf;
 #[cfg(feature = "rtlsdr")]

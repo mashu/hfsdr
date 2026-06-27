@@ -379,6 +379,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
                         AgcMode::Envelope => "envelope",
                         AgcMode::Hang => "hang",
                         AgcMode::DualLoop => "dual-loop",
+                        AgcMode::Lookahead => "lookahead",
                     }
                 )
             } else {

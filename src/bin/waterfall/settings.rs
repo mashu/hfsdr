@@ -50,6 +50,10 @@ const fn default_st_fall_ms() -> f32 {
     4.0
 }
 
+const fn default_agc_lookahead_ms() -> f32 {
+    8.0
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotchData {
     pub enabled: bool,
@@ -105,6 +109,8 @@ pub struct AppSettings {
     pub agc_manual_gain: f32,
     #[serde(default)]
     pub agc_mode: u8,
+    #[serde(default = "default_agc_lookahead_ms")]
+    pub agc_lookahead_ms: f32,
     #[serde(default = "default_st_envelope_enabled")]
     pub st_envelope_enabled: bool,
     #[serde(default = "default_st_rise_ms")]
@@ -250,6 +256,7 @@ impl Default for AppSettings {
             agc_decay_ms: 120.0,
             agc_manual_gain: 1.0,
             agc_mode: 0,
+            agc_lookahead_ms: default_agc_lookahead_ms(),
             st_envelope_enabled: default_st_envelope_enabled(),
             st_rise_ms: default_st_rise_ms(),
             st_fall_ms: default_st_fall_ms(),

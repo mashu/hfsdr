@@ -29,6 +29,9 @@ fn main() {
         println!("cargo:rerun-if-changed={}", methods.display());
     }
 
+    #[cfg(target_os = "windows")]
+    let mut windows_delay_load = false;
+
     if std::env::var_os("CARGO_FEATURE_AIRSPY").is_some() {
         probe_or_panic(
             "libairspyhf",
@@ -41,6 +44,11 @@ fn main() {
         if std::env::var_os("DOCS_RS").is_some() || airspyhf_has_extended_api() {
             println!("cargo:rustc-cfg=airspyhf_extended_api");
         }
+        #[cfg(target_os = "windows")]
+        {
+            println!("cargo:rustc-link-arg=/DELAYLOAD:airspyhf.dll");
+            windows_delay_load = true;
+        }
     }
 
     if std::env::var_os("CARGO_FEATURE_RTLSDR").is_some() {
@@ -52,6 +60,16 @@ fn main() {
             &["librtlsdr", ""],
             &["librtlsdr.dylib", "librtlsdr.a"],
         );
+        #[cfg(target_os = "windows")]
+        {
+            println!("cargo:rustc-link-arg=/DELAYLOAD:rtlsdr.dll");
+            windows_delay_load = true;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    if windows_delay_load {
+        println!("cargo:rustc-link-lib=delayimp");
     }
 }
 

@@ -113,6 +113,8 @@ pub struct AgcSettings {
     pub target: f32,
     pub attack_ms: f32,
     pub decay_ms: f32,
+    /// Forward scan window for [`AgcMode::Lookahead`] only.
+    pub lookahead_ms: f32,
     pub manual_gain: f32,
 }
 
@@ -123,6 +125,7 @@ impl Default for AgcSettings {
             target: 0.25,
             attack_ms: 3.0,
             decay_ms: 120.0,
+            lookahead_ms: 8.0,
             manual_gain: 1.0,
         }
     }
@@ -161,6 +164,8 @@ pub enum AgcMode {
     Hang,
     /// Fast peak + slow floor trackers — RF/IF-style dual loop for CW.
     DualLoop,
+    /// Forward peak scan + slow gain ramps — pre-ducks before known peaks to limit overshoot.
+    Lookahead,
 }
 
 /// Session-only A/B bypass flags (not persisted to settings.json).

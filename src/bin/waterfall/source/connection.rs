@@ -153,6 +153,12 @@ pub fn connect(req: &ConnectRequest, cancel: &std::sync::atomic::AtomicBool) -> 
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("connection cancelled".to_string());
     }
+    if !super::kinds::source_kind_available(req.kind) {
+        return Err(format!(
+            "{} unavailable: native driver library not found (KiwiSDR and QMX still work)",
+            req.kind
+        ));
+    }
     match req.kind {
         SourceKind::Kiwi => connect_kiwi(req, cancel),
         #[cfg(feature = "airspy")]
