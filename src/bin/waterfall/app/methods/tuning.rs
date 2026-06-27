@@ -17,12 +17,25 @@ impl WaterfallApp {
 
 
 
-    /// Snap tuning so the strongest signal near the cursor lands at the BFO pitch.
+    /// Clear RIT listen offset without moving the RX center.
     pub(crate) fn clear_rit(&mut self) {
         self.radio.rit_hz = 0.0;
+        self.radio.rit_on = false;
         if self.radio.pitch_lock {
             self.radio.pitch_lock = false;
         }
+    }
+
+
+
+    pub(crate) fn toggle_rit(&mut self) {
+        self.radio.rit_on = !self.radio.rit_on;
+    }
+
+
+
+    pub(crate) fn clear_filter_shift(&mut self) {
+        self.radio.cw.filter_shift_hz = ChannelOffsetHz::ZERO;
     }
 
 
@@ -54,13 +67,32 @@ impl WaterfallApp {
             let preview = self.plot.tune_preview_offset_hz.unwrap_or(0.0) as f32;
             let target = (peak - preview).clamp(-800.0, 800.0);
             self.radio.rit_hz = 0.85 * self.radio.rit_hz + 0.15 * target;
+            self.radio.rit_on = true;
         }
     }
 
 
 
     pub(crate) fn listen_offset_hz(&self) -> f64 {
-        self.radio.rit_hz as f64 + self.plot.tune_preview_offset_hz.unwrap_or(0.0)
+        self.rit_offset_hz() + self.tune_preview_hz()
+    }
+
+
+
+    /// Classical RIT readout — enabled offset only, excludes waterfall drag preview.
+    pub(crate) fn rit_offset_hz(&self) -> f64 {
+        if self.radio.rit_on {
+            self.radio.rit_hz as f64
+        } else {
+            0.0
+        }
+    }
+
+
+
+    /// Transient offset while dragging on the waterfall (not yet committed to RIT or RX).
+    pub(crate) fn tune_preview_hz(&self) -> f64 {
+        self.plot.tune_preview_offset_hz.unwrap_or(0.0)
     }
 
 
@@ -87,15 +119,21 @@ impl WaterfallApp {
 
 
 
-    pub(crate) fn band_preset_buttons(&mut self, ui: &mut egui::Ui, bands: &[CwBandPreset]) {
-        ui.horizontal_wrapped(|ui| {
-            for band in bands {
-                let selected = (self.radio.center_khz * 1000.0).round() == band.center_hz;
-                if ui.selectable_label(selected, band.label).clicked() {
-                    self.select_cw_band(band);
-                }
+    pub(crate) fn band_preset_selector(&mut self, ui: &mut egui::Ui) {
+        let center_hz = self.radio.center_khz * 1000.0;
+        let presets: Vec<&CwBandPreset> = CW_HF_BAND_PRESETS
+            .iter()
+            .chain(CW_VHF_BAND_PRESETS.iter())
+            .collect();
+        let bands: Vec<(&str, f64)> = presets
+            .iter()
+            .map(|band| (band.label, band.center_hz))
+            .collect();
+        if let Some(i) = band_preset_grid(ui, "cw_bands", center_hz, &bands) {
+            if let Some(band) = presets.get(i) {
+                self.select_cw_band(band);
             }
-        });
+        }
     }
 
 

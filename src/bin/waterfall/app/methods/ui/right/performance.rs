@@ -155,7 +155,7 @@ impl WaterfallApp {
                     1
                 };
                 ui.label(egui::RichText::new("Anti-alias").small().color(MUTED));
-                if let Some(i) = segment_choice(ui, "decim_aa", arch_sel, &["FIR", "IIR"]) {
+                if let Some(i) = segment_choice_sized(ui, "decim_aa", arch_sel, &["FIR", "IIR"], 36.0) {
                     self.radio.cw.decim_filter = if i == 0 {
                         ChannelFilterKind::LinearFir
                     } else {

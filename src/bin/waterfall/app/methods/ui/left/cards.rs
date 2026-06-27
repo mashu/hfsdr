@@ -65,10 +65,10 @@ impl WaterfallApp {
     pub(crate) fn frequency_card(&mut self, ui: &mut egui::Ui) {
         section_card(ui, |ui| {
             section_heading(ui, "Operator");
-            ui.label(egui::RichText::new("HF — all amateur bands 160m–10m").small().color(MUTED));
-            self.band_preset_buttons(ui, &CW_HF_BAND_PRESETS);
-            ui.label(egui::RichText::new("VHF+").small().color(MUTED));
-            self.band_preset_buttons(ui, &CW_VHF_BAND_PRESETS);
+            self.band_preset_selector(ui);
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let mut vfo_changed = false;
                 ui.vertical(|ui| {
@@ -90,21 +90,20 @@ impl WaterfallApp {
                     self.apply_radio_settings();
                 }
             });
+            ui.add_space(6.0);
+            let rit = rit_control(ui, &mut self.radio.rit_on, &mut self.radio.rit_hz, RIT_MIN_HZ..=RIT_MAX_HZ);
+            if rit.clear_clicked {
+                self.clear_rit();
+            }
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                scroll_slider_f32_step(ui, &mut self.radio.rit_hz, -800.0..=800.0, "RIT", 1.0);
-                let rit_on = self.radio.rit_hz.abs() > 0.5;
-                if ui
-                    .add_enabled(
-                        rit_on,
-                        egui::Button::new("Clear").min_size(egui::vec2(0.0, 0.0)),
-                    )
-                    .on_hover_text("Listen offset → 0 Hz without moving RX center (\\)")
-                    .clicked()
-                {
-                    self.clear_rit();
-                }
-            });
+            let mut shift_hz = self.radio.cw.filter_shift_hz.hz();
+            let shift = filter_shift_control(ui, &mut shift_hz, RIT_MIN_HZ..=RIT_MAX_HZ);
+            if shift.changed {
+                self.radio.cw.filter_shift_hz = ChannelOffsetHz::new(shift_hz);
+            }
+            if shift.clear_clicked {
+                self.clear_filter_shift();
+            }
         });
     }
 
@@ -248,7 +247,7 @@ impl WaterfallApp {
                         &mut self.radio.cw.noise_reduction.enabled,
                         "Noise reduction",
                         Some("Light audio LMS polish"),
-                        Some("R"),
+                        None,
                         Some(&[
                             ("Optional polish", ACCENT),
                             (

@@ -230,6 +230,22 @@ pub fn segment_choice(ui: &mut Ui, id: &str, selected: usize, labels: &[&str]) -
     segment_choice_sized(ui, id, selected, labels, 64.0)
 }
 
+/// Label on its own row; segmented control below (fits narrow side panels).
+pub fn labeled_segment_choice(
+    ui: &mut Ui,
+    id: &str,
+    label: &str,
+    selected: usize,
+    options: &[&str],
+    min_button_width: f32,
+) -> Option<usize> {
+    let picked = ui.vertical(|ui| {
+        ui.label(RichText::new(label).small().color(MUTED));
+        segment_choice_sized(ui, id, selected, options, min_button_width)
+    });
+    picked.inner
+}
+
 pub fn segment_choice_sized(
     ui: &mut Ui,
     id: &str,
@@ -284,6 +300,72 @@ pub fn segment_choice_sized(
             }
         });
     let _ = id;
+    picked
+}
+
+/// Compact wrapped band chips (segment-control style). Returns clicked preset index.
+pub fn band_preset_grid(
+    ui: &mut Ui,
+    id: &str,
+    rx_center_hz: f64,
+    bands: &[(&str, f64)],
+) -> Option<usize> {
+    let mut picked = None;
+    ui.push_id(id, |ui| {
+        Frame::new()
+            .fill(Color32::from_rgb(18, 22, 30))
+            .corner_radius(CornerRadius::same(6))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(42, 50, 66)))
+            .inner_margin(2.0)
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(2.0, 2.0);
+                    for (i, (label, center_hz)) in bands.iter().enumerate() {
+                        let selected = (rx_center_hz - center_hz).abs() < 0.5;
+                        let resp = ui.add(
+                            Button::new(
+                                RichText::new(*label)
+                                    .small()
+                                    .color(if selected { ACCENT } else { MUTED }),
+                            )
+                            .fill(if selected {
+                                Color32::from_rgba_unmultiplied(
+                                    ACCENT.r(),
+                                    ACCENT.g(),
+                                    ACCENT.b(),
+                                    40,
+                                )
+                            } else {
+                                Color32::TRANSPARENT
+                            })
+                            // Transparent 1px stroke keeps cell size stable when selection changes.
+                            .stroke(if selected {
+                                Stroke::new(
+                                    1.0,
+                                    Color32::from_rgba_unmultiplied(
+                                        ACCENT.r(),
+                                        ACCENT.g(),
+                                        ACCENT.b(),
+                                        120,
+                                    ),
+                                )
+                            } else {
+                                Stroke::new(1.0, Color32::TRANSPARENT)
+                            })
+                            .corner_radius(CornerRadius::same(5))
+                            .min_size(Vec2::new(0.0, 24.0)),
+                        );
+                        let mhz = center_hz / 1_000_000.0;
+                        let clicked = resp.clicked();
+                        resp.on_hover_text(format!("{mhz:.3} MHz · CW segment"));
+                        if clicked {
+                            picked = Some(i);
+                        }
+                    }
+                });
+            });
+    });
     picked
 }
 

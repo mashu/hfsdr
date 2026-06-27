@@ -6,8 +6,8 @@ use hfsdr::{CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ, SpectrumViewMappin
 pub(crate) const LEFT_PANEL_MIN_W: f32 = 288.0;
 pub(crate) const LEFT_PANEL_MAX_W: f32 = 440.0;
 /// Minimum DSP panel width (AF scope, stage toggles, labeled sliders).
-pub(crate) const RIGHT_PANEL_MIN_W: f32 = 312.0;
-pub(crate) const RIGHT_PANEL_MAX_W: f32 = 480.0;
+pub(crate) const RIGHT_PANEL_MIN_W: f32 = 252.0;
+pub(crate) const RIGHT_PANEL_MAX_W: f32 = 420.0;
 
 /// CW band plan: calling frequency + typical CW segment width for panadapter zoom.
 pub(crate) struct CwBandPreset {

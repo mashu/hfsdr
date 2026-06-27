@@ -25,7 +25,8 @@ pub(crate) use crate::meters::{
 pub(crate) use crate::audio::AudioOutput;
 pub(crate) use crate::colormap::db_to_colour;
 pub(crate) use crate::controls::{
-    preset_combo_f64, preset_combo_u32, scroll_slider_f32, scroll_slider_f32_step,
+    preset_combo_f64, preset_combo_u32, filter_shift_control, rit_control, scroll_slider_f32,
+    scroll_slider_f32_step,
     scroll_slider_log_f32, vfo_wheel_khz,
 };
 pub(crate) use crate::display_levels::{
@@ -39,10 +40,11 @@ pub(crate) use crate::engine::{
 pub(crate) use crate::ham_bands;
 pub(crate) use crate::rf_view;
 pub(crate) use crate::popup::{
-    alert_banner, chip_row, configure_popup_window, ghost_button, inline_stats, list_row,
+    alert_banner, band_preset_grid, chip_row, configure_popup_window, ghost_button, inline_stats, list_row,
     popup_body_max_height, popup_header, popup_scroll_body, popup_section, primary_button,
     secondary_button,
-    preset_segment_f32, segment_choice, truncate_middle, PopupHeader,
+    preset_segment_f32, segment_choice, segment_choice_sized, labeled_segment_choice, status_pill,
+    truncate_middle, PopupHeader,
 };
 pub(crate) use crate::iq_panel::{IqPanel, IqPanelCmd, IqPanelView};
 pub(crate) use crate::interaction::{

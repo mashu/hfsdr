@@ -108,6 +108,7 @@ impl WaterfallApp {
                 is_kiwi: false,
                 cw: CwChannelSettings::default(),
                 rit_hz: 0.0,
+                rit_on: false,
                 pitch_lock: false,
                 lock_ham_bands: true,
                 agc_rf_on: true,
@@ -117,6 +118,7 @@ impl WaterfallApp {
                 last_kiwi_rf_attn_db: 0.0,
                 last_kiwi_has_rf_attn: false,
                 last_snr_db: 0.0,
+                passband_wide: false,
             },
             plot: PlotState {
                 rows: VecDeque::with_capacity(WATERFALL_ROWS),
@@ -187,7 +189,6 @@ impl WaterfallApp {
                 scp_reload_pending: false,
                 scp_reload_deadline: None,
                 last_scp_loaded: false,
-                filter_wide: false,
                 frame_visible_spots: Vec::new(),
             },
             chrome: ChromeState {
@@ -195,6 +196,7 @@ impl WaterfallApp {
                 show_shortcuts: false,
                 show_af_scope: true,
                 show_smeter: true,
+                cw_simple_ui: true,
                 show_history: false,
                 show_left: true,
                 show_right: true,
@@ -310,7 +312,7 @@ impl eframe::App for WaterfallApp {
                 .resizable(true)
                 .frame(side_panel_frame())
                 .size_range(RIGHT_PANEL_MIN_W..=RIGHT_PANEL_MAX_W)
-                .default_size(330.0)
+                .default_size(280.0)
                 .show_inside(ui, |ui| self.right_panel(ui));
         }
 

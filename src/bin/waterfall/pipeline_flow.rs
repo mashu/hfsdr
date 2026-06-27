@@ -478,7 +478,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             NodeId::WidebandIngress,
             "Listen ingress",
             format!(
-                "RIT {:.0} Hz · {decim_filter_label} → {listen_audio_ksps:.1} kS/s",
+                "Listen {:.0} Hz · {decim_filter_label} → {listen_audio_ksps:.1} kS/s",
                 snap.cw.listen_offset_hz.hz(),
             ),
             !snap.cw.diagnostic.listen_nco,
@@ -491,7 +491,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         nodes.push(node_toggle(
             NodeId::Nco,
             "NCO shift",
-            format!("RIT {:.0} Hz", snap.cw.listen_offset_hz.hz()),
+            format!("Listen {:.0} Hz", snap.cw.listen_offset_hz.hz()),
             !snap.cw.diagnostic.listen_nco,
             NodeKind::Process,
             PipelineStage::ListenNco,

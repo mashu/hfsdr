@@ -38,6 +38,7 @@ fn zero_beat_shortcut() {
     let mut harness = streaming_shortcut_harness();
     harness.state_mut().radio.lock_ham_bands = false;
     harness.state_mut().radio.rit_hz = 120.0;
+    harness.state_mut().radio.rit_on = true;
     let mut poll = synthetic_streaming_poll(0);
     let bin = offset_hz_to_bin(400.0, FFT_SIZE, 96_000.0);
     poll.latest[bin] = -35.0;
@@ -45,6 +46,7 @@ fn zero_beat_shortcut() {
     harness.key_press(Key::Z);
     harness.run_steps(2);
     assert_eq!(harness.state().radio.rit_hz, 0.0);
+    assert!(!harness.state().radio.rit_on);
 }
 
 #[test]
@@ -54,6 +56,18 @@ fn pitch_lock_shortcut_toggles() {
     harness.key_press(Key::L);
     harness.run_steps(2);
     assert!(harness.state().radio.pitch_lock);
+}
+
+#[test]
+fn rit_toggle_shortcut() {
+    let mut harness = streaming_shortcut_harness();
+    assert!(!harness.state().radio.rit_on);
+    harness.key_press(Key::R);
+    harness.run_steps(2);
+    assert!(harness.state().radio.rit_on);
+    harness.key_press(Key::R);
+    harness.run_steps(2);
+    assert!(!harness.state().radio.rit_on);
 }
 
 #[test]
@@ -73,11 +87,6 @@ fn dsp_shortcuts_toggle_stages() {
     harness.key_press(Key::B);
     harness.run_steps(2);
     assert_ne!(harness.state().radio.cw.noise_blanker.enabled, blank_before);
-
-    let nr_before = harness.state().radio.cw.noise_reduction.enabled;
-    harness.key_press(Key::R);
-    harness.run_steps(2);
-    assert_ne!(harness.state().radio.cw.noise_reduction.enabled, nr_before);
 }
 
 #[test]
@@ -100,6 +109,7 @@ fn rit_shortcuts_adjust_offset() {
     harness.key_press(Key::Comma);
     harness.run_steps(2);
     assert!(harness.state().radio.rit_hz < 0.0);
+    assert!(harness.state().radio.rit_on);
 
     harness.key_press(Key::Period);
     harness.run_steps(2);
@@ -108,6 +118,7 @@ fn rit_shortcuts_adjust_offset() {
     harness.key_press(Key::Backslash);
     harness.run_steps(2);
     assert_eq!(harness.state().radio.rit_hz, 0.0);
+    assert!(!harness.state().radio.rit_on);
 }
 
 #[test]

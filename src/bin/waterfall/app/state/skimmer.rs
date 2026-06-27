@@ -23,6 +23,5 @@ pub struct SkimmerUiState {
     pub scp_reload_pending: bool,
     pub scp_reload_deadline: Option<Instant>,
     pub last_scp_loaded: bool,
-    pub filter_wide: bool,
     pub frame_visible_spots: Vec<Spot>,
 }

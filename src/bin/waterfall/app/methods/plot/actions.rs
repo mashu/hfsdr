@@ -22,6 +22,7 @@ impl WaterfallApp {
                 PlotAction::CenterOnOffsetHz(offset) => {
                     if iq_playback {
                         self.radio.rit_hz = (offset as f32).clamp(RIT_MIN_HZ, RIT_MAX_HZ);
+                        self.radio.rit_on = true;
                         self.plot.tune_preview_offset_hz = None;
                         self.sync_filter_to_listen();
                     } else {

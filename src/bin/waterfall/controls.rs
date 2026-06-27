@@ -2,7 +2,10 @@
 
 use std::ops::RangeInclusive;
 
-use eframe::egui::{ComboBox, DragValue, FontId, Response, RichText, Slider, Ui, Vec2};
+use eframe::egui::{
+    self, Align, Button, Color32, ComboBox, CornerRadius, DragValue, FontId, Frame, Layout,
+    Margin, Response, RichText, Sense, Slider, Stroke, StrokeKind, Ui, Vec2,
+};
 
 use crate::theme::{chip_hovered, ACCENT, MUTED};
 
@@ -28,6 +31,360 @@ pub fn scroll_slider_f32_step(
         }
     }
     response
+}
+
+pub struct OffsetControlOutput {
+    pub changed: bool,
+    pub clear_clicked: bool,
+}
+
+pub struct RitControlOutput {
+    pub changed: bool,
+    pub clear_clicked: bool,
+    pub toggle_clicked: bool,
+}
+
+/// Bidirectional Hz offset track with readout and ±10 Hz steps.
+pub fn offset_control(
+    ui: &mut Ui,
+    title: &str,
+    subtitle: &str,
+    clear_tooltip: &str,
+    value: &mut f32,
+    range: RangeInclusive<f32>,
+    step_hint: &str,
+) -> OffsetControlOutput {
+    let min_hz = *range.start();
+    let max_hz = *range.end();
+    let mut out = OffsetControlOutput {
+        changed: false,
+        clear_clicked: false,
+    };
+    let active = value.abs() > 0.5;
+    let value_color = if active { ACCENT } else { MUTED };
+
+    Frame::new()
+        .fill(Color32::from_rgb(18, 22, 30))
+        .corner_radius(CornerRadius::same(8))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(42, 50, 66)))
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            let w = ui.available_width();
+            ui.set_min_width(w);
+            ui.set_max_width(w);
+
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(title)
+                        .small()
+                        .strong()
+                        .color(if active { ACCENT } else { MUTED }),
+                );
+                ui.label(RichText::new(subtitle).small().color(MUTED));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let sign = if *value > 0.5 {
+                        "+"
+                    } else if *value < -0.5 {
+                        "−"
+                    } else {
+                        ""
+                    };
+                    let text = if active {
+                        format!("{sign}{:.0} Hz", value.abs())
+                    } else {
+                        "0 Hz".to_string()
+                    };
+                    ui.label(RichText::new(text).monospace().strong().color(value_color));
+                });
+            });
+            ui.add_space(6.0);
+
+            if offset_slider_track(ui, value, min_hz, max_hz, 1.0, step_hint).changed() {
+                out.changed = true;
+            }
+            ui.add_space(6.0);
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if offset_step_button(ui, "−10", false).clicked() {
+                    *value = (*value - 10.0).clamp(min_hz, max_hz);
+                    out.changed = true;
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if offset_step_button(ui, "+10", false).clicked() {
+                        *value = (*value + 10.0).clamp(min_hz, max_hz);
+                        out.changed = true;
+                    }
+                    if offset_step_button(ui, "Clear", active)
+                        .on_hover_text(clear_tooltip)
+                        .clicked()
+                    {
+                        out.clear_clicked = true;
+                    }
+                });
+            });
+        });
+    out
+}
+
+/// Bandpass center offset from the VFO (filter shift).
+pub fn filter_shift_control(
+    ui: &mut Ui,
+    shift_hz: &mut f32,
+    range: RangeInclusive<f32>,
+) -> OffsetControlOutput {
+    offset_control(
+        ui,
+        "SHIFT",
+        "filter vs VFO",
+        "Reset bandpass center to VFO",
+        shift_hz,
+        range,
+        "Drag or scroll",
+    )
+}
+
+/// RIT: listen offset without moving the RX center frequency.
+pub fn rit_control(
+    ui: &mut Ui,
+    rit_on: &mut bool,
+    rit_hz: &mut f32,
+    range: RangeInclusive<f32>,
+) -> RitControlOutput {
+    let min_hz = *range.start();
+    let max_hz = *range.end();
+    let mut out = RitControlOutput {
+        changed: false,
+        clear_clicked: false,
+        toggle_clicked: false,
+    };
+    let active = *rit_on && rit_hz.abs() > 0.5;
+    let value_color = if *rit_on { ACCENT } else { MUTED };
+
+    Frame::new()
+        .fill(Color32::from_rgb(18, 22, 30))
+        .corner_radius(CornerRadius::same(8))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(42, 50, 66)))
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            let w = ui.available_width();
+            ui.set_min_width(w);
+            ui.set_max_width(w);
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let toggle_label = if *rit_on { "RIT on" } else { "RIT off" };
+                if ui
+                    .add(
+                        Button::new(RichText::new(toggle_label).small().strong().color(value_color))
+                            .fill(if *rit_on {
+                                Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 36)
+                            } else {
+                                Color32::from_rgb(28, 33, 44)
+                            })
+                            .stroke(if *rit_on {
+                                Stroke::new(
+                                    1.0,
+                                    Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 120),
+                                )
+                            } else {
+                                Stroke::new(1.0, Color32::from_rgb(48, 56, 72))
+                            })
+                            .corner_radius(CornerRadius::same(5))
+                            .min_size(Vec2::new(0.0, 24.0)),
+                    )
+                    .on_hover_text("Toggle RIT (R) — listen offset; RX MHz unchanged")
+                    .clicked()
+                {
+                    *rit_on = !*rit_on;
+                    out.toggle_clicked = true;
+                }
+                ui.label(
+                    RichText::new("listen offset · RX MHz unchanged")
+                        .small()
+                        .color(MUTED),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let sign = if *rit_hz > 0.5 {
+                        "+"
+                    } else if *rit_hz < -0.5 {
+                        "−"
+                    } else {
+                        ""
+                    };
+                    let text = if active {
+                        format!("{sign}{:.0} Hz", rit_hz.abs())
+                    } else if *rit_on {
+                        "0 Hz".to_string()
+                    } else {
+                        "off".to_string()
+                    };
+                    ui.label(
+                        RichText::new(text)
+                            .monospace()
+                            .strong()
+                            .color(if active { ACCENT } else { MUTED }),
+                    );
+                });
+            });
+            ui.add_space(6.0);
+
+            if offset_slider_track(ui, rit_hz, min_hz, max_hz, 1.0, ", / . ±10 Hz").changed() {
+                out.changed = true;
+                *rit_on = true;
+            }
+            ui.add_space(6.0);
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if offset_step_button(ui, "−10", false).clicked() {
+                    *rit_hz = (*rit_hz - 10.0).clamp(min_hz, max_hz);
+                    *rit_on = true;
+                    out.changed = true;
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if offset_step_button(ui, "+10", false).clicked() {
+                        *rit_hz = (*rit_hz + 10.0).clamp(min_hz, max_hz);
+                        *rit_on = true;
+                        out.changed = true;
+                    }
+                    if offset_step_button(ui, "Clear", active)
+                        .on_hover_text("Clear RIT — reset offset to 0 (\\)")
+                        .clicked()
+                    {
+                        out.clear_clicked = true;
+                    }
+                });
+            });
+        });
+    out
+}
+
+fn offset_slider_track(
+    ui: &mut Ui,
+    value: &mut f32,
+    min_hz: f32,
+    max_hz: f32,
+    scroll_step: f32,
+    hover_hint: &str,
+) -> Response {
+    let height = 28.0;
+    let width = ui.available_width();
+    let (rect, mut response) =
+        ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
+
+    let track_h = 6.0;
+    let track = egui::Rect::from_center_size(
+        rect.center(),
+        Vec2::new(rect.width(), track_h),
+    );
+    let painter = ui.painter_at(rect);
+    painter.rect(
+        track,
+        CornerRadius::same(3),
+        Color32::from_rgb(32, 38, 50),
+        Stroke::NONE,
+        StrokeKind::Inside,
+    );
+
+    let span = max_hz - min_hz;
+    let frac = if span > 0.0 {
+        (*value - min_hz) / span
+    } else {
+        0.5
+    };
+    let zero_frac = (-min_hz / span).clamp(0.0, 1.0);
+    let thumb_x = egui::lerp(track.left()..=track.right(), frac);
+    let zero_x = egui::lerp(track.left()..=track.right(), zero_frac);
+
+    let fill_left = thumb_x.min(zero_x);
+    let fill_right = thumb_x.max(zero_x);
+    if (fill_right - fill_left) > 0.5 {
+        let fill_color = if (*value).abs() > 0.5 {
+            Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 90)
+        } else {
+            Color32::TRANSPARENT
+        };
+        painter.rect(
+            egui::Rect::from_min_max(
+                egui::pos2(fill_left, track.top()),
+                egui::pos2(fill_right, track.bottom()),
+            ),
+            CornerRadius::same(3),
+            fill_color,
+            Stroke::NONE,
+            StrokeKind::Inside,
+        );
+    }
+
+    painter.vline(
+        zero_x,
+        track.top() - 2.0..=track.bottom() + 2.0,
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 120)),
+    );
+
+    let thumb_r = if response.hovered() || response.dragged() { 7.0 } else { 6.0 };
+    let thumb_color = if (*value).abs() > 0.5 { ACCENT } else { MUTED };
+    painter.circle(
+        egui::pos2(thumb_x, track.center().y),
+        thumb_r,
+        thumb_color,
+        Stroke::new(1.5, Color32::from_rgb(14, 17, 24)),
+    );
+
+    if let Some(pos) = response.interact_pointer_pos() {
+        if response.dragged() || response.clicked() {
+            let t = ((pos.x - track.left()) / track.width()).clamp(0.0, 1.0);
+            let next = min_hz + t * span;
+            if (next - *value).abs() > f32::EPSILON {
+                *value = next;
+                response.mark_changed();
+            }
+        }
+    }
+
+    if response.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll.abs() > 2.0 {
+            let delta = if scroll > 0.0 { scroll_step } else { -scroll_step };
+            let next = (*value + delta).clamp(min_hz, max_hz);
+            if (next - *value).abs() > f32::EPSILON {
+                *value = next;
+                response.mark_changed();
+            }
+        }
+        response = response.on_hover_text(format!(
+            "{hover_hint} · {min_hz:.0}…{max_hz:.0} Hz"
+        ));
+    }
+
+    response
+}
+
+fn offset_step_button(ui: &mut Ui, label: &str, accent: bool) -> Response {
+    let (fill, stroke, text) = if accent {
+        (
+            Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28),
+            Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 100),
+            ),
+            ACCENT,
+        )
+    } else {
+        (
+            Color32::from_rgb(28, 33, 44),
+            Stroke::new(1.0, Color32::from_rgb(48, 56, 72)),
+            Color32::from_rgb(190, 198, 214),
+        )
+    };
+    ui.add(
+        Button::new(RichText::new(label).small().color(text))
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(CornerRadius::same(5))
+            .min_size(Vec2::new(0.0, 22.0)),
+    )
 }
 
 pub fn scroll_slider_log_f32(

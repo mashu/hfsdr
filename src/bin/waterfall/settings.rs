@@ -98,6 +98,8 @@ pub struct AppSettings {
     // Receiver controls.
     pub rit_hz: f32,
     #[serde(default)]
+    pub rit_on: bool,
+    #[serde(default)]
     pub filter_shift_hz: f32,
     pub pitch_lock: bool,
     pub lock_ham_bands: bool,
@@ -172,6 +174,9 @@ pub struct AppSettings {
     /// AF tuning scope visible in the CW demod panel.
     #[serde(default)]
     pub show_af_scope: bool,
+    /// Essential CW layout: BFO, BW, AGC only; hides skimmer/IQ/performance chrome.
+    #[serde(default)]
+    pub cw_simple_ui: bool,
     /// S-meter + IF/AF level bars above Operator on the left.
     #[serde(default = "default_show_smeter")]
     pub show_smeter: bool,
@@ -227,6 +232,7 @@ impl Default for AppSettings {
             agc_mode: 0,
             notches: vec![NotchData::default(); 4],
             rit_hz: 0.0,
+            rit_on: false,
             filter_shift_hz: 0.0,
             pitch_lock: false,
             lock_ham_bands: true,
@@ -282,6 +288,7 @@ impl Default for AppSettings {
             show_right: true,
             show_af_scope: true,
             show_smeter: default_show_smeter(),
+            cw_simple_ui: true,
             recent_hosts: Vec::new(),
             last_center_mhz: 14.01,
             kiwi: KiwiSettings::default(),
