@@ -1,7 +1,86 @@
 use crate::app::WaterfallApp;
 use crate::app::prelude::*;
 
+const SPECTRUM_FFT_PRESETS: [usize; 6] = [2048, 4096, 8192, 16_384, 32_768, 65_536];
+
 impl WaterfallApp {
+
+    /// FFT size / RBW controls shared by Display and Performance panels.
+    pub(crate) fn spectrum_fft_resolution_controls(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .checkbox(&mut self.display.fft_auto, "Auto FFT size")
+            .on_hover_text(
+                "Choose FFT size for ~8 Hz bins at the current spectrum rate. \
+                 Disable to pick a fixed size for finer frequency resolution (more CPU).",
+            )
+            .changed()
+        {
+            self.plot.waterfall.force_texture_full = true;
+            self.plot.waterfall.textures_dirty = true;
+        }
+
+        if self.display.fft_auto {
+            let effective = self.engine_ui.stats.spectrum_fft;
+            if effective > 0 {
+                ui.label(
+                    egui::RichText::new(format!("Effective FFT {effective}"))
+                        .small()
+                        .color(MUTED),
+                );
+            }
+        } else {
+            ui.label(egui::RichText::new("FFT size").small().color(MUTED));
+            let mut size = self.display.fft_size;
+            egui::ComboBox::from_id_salt("spectrum_fft_size")
+                .selected_text(size.to_string())
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    for n in SPECTRUM_FFT_PRESETS {
+                        ui.selectable_value(&mut size, n, n.to_string());
+                    }
+                });
+            if size != self.display.fft_size {
+                self.display.fft_size = size;
+                self.plot.waterfall.force_texture_full = true;
+                self.plot.waterfall.textures_dirty = true;
+            }
+        }
+
+        let (fft, rate, hop) = self.spectrum_chain_metrics();
+        let rbw = hfsdr::bin_width_hz(rate, fft);
+        let overlap = if fft > 0 {
+            (1.0 - hop as f32 / fft as f32) * 100.0
+        } else {
+            0.0
+        };
+        let row_s = hop as f32 / rate.max(1.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "RBW {rbw:.1} Hz · Overlap {overlap:.0}% · Row {row_s:.2} s"
+            ))
+            .small()
+            .color(MUTED),
+        );
+    }
+
+    fn spectrum_chain_metrics(&self) -> (usize, f32, usize) {
+        let stats = &self.engine_ui.stats;
+        if matches!(self.engine_ui.conn_state, ConnState::Streaming) {
+            let fft = stats.spectrum_fft.max(1);
+            let rate = stats.spectrum_rate.max(1.0);
+            let hop = hfsdr::spectrum_hop(fft, stats.sample_rate.max(1.0));
+            return (fft, rate, hop);
+        }
+        let iq_rate = self.iq_passband_hz().max(1.0);
+        let (_, fft, eff) = hfsdr::spectrum_plan(
+            iq_rate,
+            self.display.fft_size,
+            self.display.fft_auto,
+            iq_rate,
+        );
+        let hop = hfsdr::spectrum_hop(fft, iq_rate);
+        (fft, eff.max(1.0), hop)
+    }
 
     pub(crate) fn display_section(&mut self, ui: &mut egui::Ui) {
         collapsible_section(
@@ -120,6 +199,8 @@ impl WaterfallApp {
                 });
 
                 popup_section(ui, "Waterfall", None, |ui| {
+                    self.spectrum_fft_resolution_controls(ui);
+
                     let avg_sel = match self.display.waterfall_avg {
                         2 => 1,
                         4 => 2,

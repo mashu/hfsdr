@@ -79,7 +79,7 @@ impl WaterfallApp {
             );
 
             popup_section(ui, "FFT & spectrum", Some("Resolution vs CPU on wideband sources"), |ui| {
-                ui.checkbox(&mut self.display.fft_auto, "Auto FFT size (wideband)");
+                self.spectrum_fft_resolution_controls(ui);
                 ui.checkbox(
                     &mut self.display.full_drain_spectrum,
                     "Full-drain spectrum (wideband, more CPU)",
@@ -92,12 +92,8 @@ impl WaterfallApp {
                     .on_hover_text(
                         "Per-pump stage timings below. Also enabled when HFSDR_PERF=1 is set in the environment.",
                     );
-                if self.display.fft_auto {
-                    let rate = stats.spectrum_rate;
-                    let bin = rate / stats.spectrum_fft.max(1) as f32;
-                    stat_row(ui, "FFT size", stats.spectrum_fft);
-                    stat_row(ui, "Spectrum rate", format!("{:.1} kS/s", rate / 1000.0));
-                    stat_row(ui, "Bin width", format!("{bin:.1} Hz"));
+                if self.display.fft_auto && matches!(self.engine_ui.conn_state, ConnState::Streaming) {
+                    let stats = &self.engine_ui.stats;
                     if stats.spectrum_zoomed {
                         stat_row(
                             ui,
@@ -105,15 +101,11 @@ impl WaterfallApp {
                             format!("×{}", stats.spectrum_decim),
                         );
                     }
-                } else {
-                    ui.label(egui::RichText::new("FFT size").small().color(MUTED));
-                    ui.horizontal_wrapped(|ui| {
-                        for n in [2048usize, 4096, 8192, 16_384, 32_768, 65_536] {
-                            if ui.selectable_label(self.display.fft_size == n, n.to_string()).clicked() {
-                                self.display.fft_size = n;
-                            }
-                        }
-                    });
+                    stat_row(
+                        ui,
+                        "Spectrum rate",
+                        format!("{:.1} kS/s", stats.spectrum_rate / 1000.0),
+                    );
                 }
             });
 
