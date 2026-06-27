@@ -196,7 +196,7 @@ impl WaterfallApp {
                 show_shortcuts: false,
                 show_af_scope: true,
                 show_smeter: true,
-                cw_simple_ui: true,
+                cw_simple_ui: false,
                 show_history: false,
                 show_left: true,
                 show_right: true,

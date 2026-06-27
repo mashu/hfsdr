@@ -46,6 +46,12 @@ mod ui_shortcuts;
 #[cfg(test)]
 mod ui_direct;
 
+#[cfg(test)]
+mod ui_stress;
+
+#[cfg(test)]
+mod ui_eval;
+
 use app::WaterfallApp;
 use eframe::egui;
 

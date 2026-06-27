@@ -9,6 +9,7 @@ pub struct ChromeState {
     pub show_af_scope: bool,
     pub show_smeter: bool,
     /// Essential CW controls only; hides advanced filter design, skimmer, IQ, and performance panels.
+    /// Off by default (full UI).
     pub cw_simple_ui: bool,
     pub show_history: bool,
     pub show_left: bool,
