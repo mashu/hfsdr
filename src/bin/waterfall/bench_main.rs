@@ -8,6 +8,10 @@
 //! cargo run --release --features gui-core --bin engine-bench live-kiwi [host] [port] [center_hz] [seconds]
 //! cargo run --release --features airspy,gui-core --bin engine-bench live-airspy [seconds] [sample_rate]
 //! ```
+//!
+//! Shares waterfall `engine` / `source` modules with the GUI binary but only exercises a
+//! subset — suppress dead-code noise for the rest.
+#![allow(dead_code)]
 
 mod audio;
 mod engine;
