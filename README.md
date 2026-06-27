@@ -11,7 +11,7 @@ A **CW-focused** HF receiver and panadapter for **KiwiSDR**, **Airspy HF+**,
 actually touch: band presets, VFO, RIT, filter chain, and skimmer — without
 phone/AM/FM modes or unrelated clutter.
 
-<img width="3160" height="1920" alt="image" src="https://github.com/user-attachments/assets/cf9b682b-7bd9-4d46-bb32-3821f3975ccb" />
+<img width="3840" height="2400" alt="image" src="https://github.com/user-attachments/assets/db1bf36e-6cb9-4b52-8cd5-80da303921cb" />
 
 ### Platform support
 
