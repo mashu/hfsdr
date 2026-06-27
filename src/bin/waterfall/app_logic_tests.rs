@@ -73,9 +73,11 @@ fn clamp_center_to_ham_bands_snaps_gap() {
 fn clear_rit_clears_pitch_lock() {
     let mut app = test_app();
     app.radio.rit_hz = 120.0;
+    app.radio.rit_on = true;
     app.radio.pitch_lock = true;
     app.clear_rit();
     assert_eq!(app.radio.rit_hz, 0.0);
+    assert!(!app.radio.rit_on);
     assert!(!app.radio.pitch_lock);
 }
 
@@ -83,8 +85,20 @@ fn clear_rit_clears_pitch_lock() {
 fn listen_offset_hz_sums_rit_and_preview() {
     let mut app = test_app();
     app.radio.rit_hz = 100.0;
+    app.radio.rit_on = true;
     app.plot.tune_preview_offset_hz = Some(50.0);
+    assert_eq!(app.rit_offset_hz(), 100.0);
+    assert_eq!(app.tune_preview_hz(), 50.0);
     assert_eq!(app.listen_offset_hz(), 150.0);
+}
+
+#[test]
+fn rit_offset_hz_zero_when_rit_off() {
+    let mut app = test_app();
+    app.radio.rit_hz = 200.0;
+    app.radio.rit_on = false;
+    assert_eq!(app.rit_offset_hz(), 0.0);
+    assert_eq!(app.listen_offset_hz(), 0.0);
 }
 
 #[test]
@@ -102,6 +116,7 @@ fn zero_beat_moves_center_to_peak() {
     let moved_hz = app.radio.center_khz * 1000.0 - 14_010_000.0;
     assert!((moved_hz - peak_hz as f64).abs() < 100.0);
     assert_eq!(app.radio.rit_hz, 0.0);
+    assert!(!app.radio.rit_on);
 }
 
 #[test]
@@ -120,6 +135,7 @@ fn apply_pitch_lock_tracks_offset_peak() {
 
     assert!(app.radio.rit_hz > 50.0);
     assert!(app.radio.rit_hz < 250.0);
+    assert!(app.radio.rit_on);
 }
 
 #[test]
@@ -207,9 +223,9 @@ fn visible_spots_respect_min_snr() {
 #[test]
 fn passband_max_hz_follows_filter_wide() {
     let mut app = test_app();
-    app.skimmer_ui.filter_wide = false;
+    app.radio.passband_wide = false;
     assert_eq!(app.passband_max_hz(), CW_PASSBAND_NARROW_MAX_HZ);
-    app.skimmer_ui.filter_wide = true;
+    app.radio.passband_wide = true;
     assert_eq!(app.passband_max_hz(), CW_PASSBAND_MAX_HZ);
 }
 
@@ -297,11 +313,13 @@ fn can_quick_connect_uses_recent_host() {
 fn select_cw_band_sets_center_and_clears_rit() {
     let mut app = test_app();
     app.radio.rit_hz = 200.0;
+    app.radio.rit_on = true;
     app.radio.pitch_lock = true;
     let band = WaterfallApp::cw_band_for_center(14_010_000.0).expect("20m");
     app.select_cw_band(band);
     assert!((app.radio.center_khz - 14_010.0).abs() < 1e-6);
     assert_eq!(app.radio.rit_hz, 0.0);
+    assert!(!app.radio.rit_on);
     assert!(!app.radio.pitch_lock);
 }
 
@@ -668,11 +686,11 @@ fn estimate_display_levels_from_rows() {
 }
 
 #[test]
-fn passband_max_respects_skimmer_filter_wide() {
+fn passband_max_respects_passband_wide() {
     let mut app = test_app();
-    app.skimmer_ui.filter_wide = false;
+    app.radio.passband_wide = false;
     assert_eq!(app.passband_max_hz(), CW_PASSBAND_NARROW_MAX_HZ);
-    app.skimmer_ui.filter_wide = true;
+    app.radio.passband_wide = true;
     assert_eq!(app.passband_max_hz(), CW_PASSBAND_MAX_HZ);
 }
 

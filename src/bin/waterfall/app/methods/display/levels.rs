@@ -70,7 +70,7 @@ impl WaterfallApp {
     }
 
     pub(crate) fn passband_max_hz(&self) -> f32 {
-        if self.skimmer_ui.filter_wide {
+        if self.radio.passband_wide {
             CW_PASSBAND_MAX_HZ
         } else {
             CW_PASSBAND_NARROW_MAX_HZ

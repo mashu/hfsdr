@@ -87,6 +87,16 @@ impl WaterfallApp {
 
 
 
+    pub(crate) fn on_cw_simple_ui_changed(&mut self) {
+        if self.chrome.cw_simple_ui {
+            self.chrome.show_iq_drawer = false;
+            self.chrome.show_pipeline_drawer = false;
+            self.chrome.show_filter_drawer = false;
+        }
+    }
+
+
+
     pub(crate) fn toggle_af_scope(&mut self) {
         self.chrome.show_af_scope = !self.chrome.show_af_scope;
         self.on_af_scope_panel_changed();
@@ -144,9 +154,9 @@ impl WaterfallApp {
         let (
             zero,
             lock,
+            rit_toggle,
             notch,
             blank,
-            nr,
             agc,
             apf,
             narrow,
@@ -172,9 +182,9 @@ impl WaterfallApp {
             (
                 i.key_pressed(Key::Z),
                 i.key_pressed(Key::L),
+                i.key_pressed(Key::R),
                 i.key_pressed(Key::N),
                 i.key_pressed(Key::B),
-                i.key_pressed(Key::R),
                 i.key_pressed(Key::A),
                 i.key_pressed(Key::P),
                 i.key_pressed(Key::OpenBracket),
@@ -204,14 +214,14 @@ impl WaterfallApp {
         if lock {
             self.radio.pitch_lock = !self.radio.pitch_lock;
         }
+        if rit_toggle {
+            self.toggle_rit();
+        }
         if notch {
             self.radio.cw.auto_notch.enabled = !self.radio.cw.auto_notch.enabled;
         }
         if blank {
             self.radio.cw.noise_blanker.enabled = !self.radio.cw.noise_blanker.enabled;
-        }
-        if nr {
-            self.radio.cw.noise_reduction.enabled = !self.radio.cw.noise_reduction.enabled;
         }
         if agc {
             self.radio.cw.agc.enabled = !self.radio.cw.agc.enabled;
@@ -229,9 +239,11 @@ impl WaterfallApp {
         }
         if rit_dn {
             self.radio.rit_hz = (self.radio.rit_hz - 10.0).clamp(-800.0, 800.0);
+            self.radio.rit_on = true;
         }
         if rit_up {
             self.radio.rit_hz = (self.radio.rit_hz + 10.0).clamp(-800.0, 800.0);
+            self.radio.rit_on = true;
         }
         if rit_clr {
             self.clear_rit();

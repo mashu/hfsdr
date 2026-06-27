@@ -39,7 +39,12 @@ impl WaterfallApp {
         }
 
         self.radio.rit_hz = s.rit_hz;
+        self.radio.rit_on = s.rit_on || s.rit_hz.abs() > 0.5;
         self.radio.cw.filter_shift_hz = ChannelOffsetHz::new(s.filter_shift_hz);
+        self.radio.passband_wide = s.filter_wide;
+        if !self.radio.passband_wide && self.radio.cw.passband_hz > CW_PASSBAND_NARROW_MAX_HZ {
+            self.radio.cw.passband_hz = CW_PASSBAND_NARROW_MAX_HZ;
+        }
         self.radio.pitch_lock = s.pitch_lock;
         self.radio.lock_ham_bands = s.lock_ham_bands;
         self.radio.agc_rf_on = s.agc_rf_on;
@@ -81,15 +86,12 @@ impl WaterfallApp {
         self.skimmer_ui.continent_filter = s.continent_filter;
         self.skimmer_ui.show_continents = s.show_continents;
         self.chrome.show_console = s.show_console;
-        self.skimmer_ui.filter_wide = s.filter_wide;
-        if !self.skimmer_ui.filter_wide && self.radio.cw.passband_hz > CW_PASSBAND_NARROW_MAX_HZ {
-            self.radio.cw.passband_hz = CW_PASSBAND_NARROW_MAX_HZ;
-        }
         self.chrome.show_history = s.show_history;
         self.chrome.show_left = s.show_left;
         self.chrome.show_right = s.show_right;
         self.chrome.show_af_scope = s.show_af_scope;
         self.chrome.show_smeter = s.show_smeter;
+        self.chrome.cw_simple_ui = s.cw_simple_ui;
 
         self.connection.form.recent_hosts = s.recent_hosts.clone();
         self.connection.form.kiwi = s.kiwi.clone();
@@ -158,6 +160,7 @@ impl WaterfallApp {
                 })
                 .collect(),
             rit_hz: self.radio.rit_hz,
+            rit_on: self.radio.rit_on,
             filter_shift_hz: self.radio.cw.filter_shift_hz.hz(),
             pitch_lock: self.radio.pitch_lock,
             lock_ham_bands: self.radio.lock_ham_bands,
@@ -207,12 +210,13 @@ impl WaterfallApp {
             continent_filter: self.skimmer_ui.continent_filter,
             show_continents: self.skimmer_ui.show_continents,
             show_console: self.chrome.show_console,
-            filter_wide: self.skimmer_ui.filter_wide,
+            filter_wide: self.radio.passband_wide,
             show_history: self.chrome.show_history,
             show_left: self.chrome.show_left,
             show_right: self.chrome.show_right,
             show_af_scope: self.chrome.show_af_scope,
             show_smeter: self.chrome.show_smeter,
+            cw_simple_ui: self.chrome.cw_simple_ui,
             recent_hosts: self.connection.form.recent_hosts.clone(),
             last_center_mhz: self.radio.center_khz / 1000.0,
             kiwi: self.connection.form.kiwi.clone(),

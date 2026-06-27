@@ -35,6 +35,12 @@ impl WaterfallApp {
         self.side_panel_scroll(ui, |this, ui| {
             this.af_tuning_card(ui);
             this.cw_demod_card(ui);
+            if this.chrome.cw_simple_ui {
+                collapsible_section(ui, "audio", "Audio", None, false, |ui| {
+                    this.audio_card_body(ui);
+                });
+                return;
+            }
             this.display_section(ui);
             this.spot_display_section(ui);
             collapsible_section(ui, "skimmer-settings", "Skimmer settings", None, false, |ui| {

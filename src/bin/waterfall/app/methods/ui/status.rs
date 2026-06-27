@@ -107,11 +107,41 @@ impl WaterfallApp {
                     .monospace()
                     .color(rx_color),
             );
-            ui.label(
-                egui::RichText::new(format!("listen {:.0} Hz", self.listen_offset_hz()))
-                    .small()
-                    .color(MUTED),
-            );
+            if self.radio.rit_on {
+                ui.label(
+                    egui::RichText::new(format!("RIT {:.0} Hz", self.radio.rit_hz))
+                        .small()
+                        .color(ACCENT),
+                )
+                .on_hover_text("Receiver Incremental Tuning — offset from RX MHz (classical RIT)");
+            }
+            let preview = self.tune_preview_hz();
+            if preview.abs() > 0.5 {
+                let sign = if preview > 0.0 { "+" } else { "" };
+                ui.label(
+                    egui::RichText::new(format!("Preview {sign}{preview:.0} Hz"))
+                        .small()
+                        .color(WARN),
+                )
+                .on_hover_text(format!(
+                    "Drag tune in progress · listen {:.0} Hz from RX center",
+                    self.listen_offset_hz()
+                ));
+            }
+            let shift = self.radio.cw.filter_shift_hz.hz();
+            if shift.abs() > 0.5 {
+                ui.label(
+                    egui::RichText::new(format!("SHIFT {:.0} Hz", shift))
+                        .small()
+                        .color(MUTED),
+                );
+            } else if !self.radio.rit_on && preview.abs() <= 0.5 {
+                ui.label(
+                    egui::RichText::new("VFO at RX center")
+                        .small()
+                        .color(MUTED),
+                );
+            }
 
             ui.separator();
             ui.label(
@@ -132,55 +162,60 @@ impl WaterfallApp {
                 ("Cursor —".to_string(), false)
             };
             crate::status_widgets::cursor_freq_slot(ui, &cursor_label, cursor_active);
-            let engine_resp = crate::status_widgets::engine_pipeline_chip(
-                ui,
-                self.chrome.show_pipeline_drawer,
-                streaming,
-            );
-            if engine_resp.clicked() {
-                self.chrome.show_pipeline_drawer = !self.chrome.show_pipeline_drawer;
-            }
-            let filters_active = self.radio.cw.notches.iter().any(|n| n.enabled)
-                || !self.radio.cw.diagnostic.channel_fir;
-            let filter_resp = crate::status_widgets::filter_diagnostic_chip(
-                ui,
-                self.chrome.show_filter_drawer,
-                filters_active,
-            );
-            if filter_resp.clicked() {
-                self.chrome.show_filter_drawer = !self.chrome.show_filter_drawer;
-            }
-            let gauge_resp = crate::status_widgets::iq_buffer_control(
-                ui,
-                self.engine_ui.stats.iq_buffer_fill,
-                self.engine_ui.stats.iq_buffer_secs,
-                self.chrome.show_iq_drawer,
-            );
-            if gauge_resp.clicked() {
-                self.chrome.show_iq_drawer = !self.chrome.show_iq_drawer;
-            }
-            let rec_secs = self.engine_ui.stats.iq_capture_samples as f32 / self.engine_ui.stats.sample_rate.max(1.0);
-            let rec_resp = crate::status_widgets::iq_record_toggle(
-                ui,
-                self.engine_ui.stats.iq_recording,
-                streaming,
-                rec_secs,
-            );
-            if rec_resp.clicked() {
-                if let Some(cmd) = self.chrome.iq.toggle_recording(self.engine_ui.stats.iq_recording, streaming) {
-                    self.settings_dirty_at = Some(Instant::now());
-                    self.process_iq_cmds(vec![cmd]);
+            if !self.chrome.cw_simple_ui {
+                let engine_resp = crate::status_widgets::engine_pipeline_chip(
+                    ui,
+                    self.chrome.show_pipeline_drawer,
+                    streaming,
+                );
+                if engine_resp.clicked() {
+                    self.chrome.show_pipeline_drawer = !self.chrome.show_pipeline_drawer;
                 }
-            }
-            let has_iq_file = !self.chrome.iq.playback_path.trim().is_empty();
-            let play_resp = crate::status_widgets::iq_playback_chip(
-                ui,
-                self.engine_ui.stats.iq_playback,
-                has_iq_file,
-            );
-            if play_resp.clicked() {
-                if let Some(cmd) = self.chrome.iq.replay_playback() {
-                    self.process_iq_cmds(vec![cmd]);
+                let filters_active = self.radio.cw.notches.iter().any(|n| n.enabled)
+                    || !self.radio.cw.diagnostic.channel_fir;
+                let filter_resp = crate::status_widgets::filter_diagnostic_chip(
+                    ui,
+                    self.chrome.show_filter_drawer,
+                    filters_active,
+                );
+                if filter_resp.clicked() {
+                    self.chrome.show_filter_drawer = !self.chrome.show_filter_drawer;
+                }
+                let gauge_resp = crate::status_widgets::iq_buffer_control(
+                    ui,
+                    self.engine_ui.stats.iq_buffer_fill,
+                    self.engine_ui.stats.iq_buffer_secs,
+                    self.chrome.show_iq_drawer,
+                );
+                if gauge_resp.clicked() {
+                    self.chrome.show_iq_drawer = !self.chrome.show_iq_drawer;
+                }
+                let rec_secs =
+                    self.engine_ui.stats.iq_capture_samples as f32 / self.engine_ui.stats.sample_rate.max(1.0);
+                let rec_resp = crate::status_widgets::iq_record_toggle(
+                    ui,
+                    self.engine_ui.stats.iq_recording,
+                    streaming,
+                    rec_secs,
+                );
+                if rec_resp.clicked() {
+                    if let Some(cmd) =
+                        self.chrome.iq.toggle_recording(self.engine_ui.stats.iq_recording, streaming)
+                    {
+                        self.settings_dirty_at = Some(Instant::now());
+                        self.process_iq_cmds(vec![cmd]);
+                    }
+                }
+                let has_iq_file = !self.chrome.iq.playback_path.trim().is_empty();
+                let play_resp = crate::status_widgets::iq_playback_chip(
+                    ui,
+                    self.engine_ui.stats.iq_playback,
+                    has_iq_file,
+                );
+                if play_resp.clicked() {
+                    if let Some(cmd) = self.chrome.iq.replay_playback() {
+                        self.process_iq_cmds(vec![cmd]);
+                    }
                 }
             }
             ui.label(
@@ -236,8 +271,23 @@ impl WaterfallApp {
                         .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
                 }
                 ui.separator();
-                panel_toggle(ui, &mut self.chrome.show_console, "Log", "Application log (`)");
-                panel_toggle(ui, &mut self.chrome.show_history, "Spots", "Decoded callsign history");
+                if panel_toggle(
+                    ui,
+                    &mut self.chrome.cw_simple_ui,
+                    "Simple",
+                    "Essential CW controls — BFO, BW, AGC only; hides skimmer, IQ, and filter design",
+                ) {
+                    self.on_cw_simple_ui_changed();
+                }
+                if !self.chrome.cw_simple_ui {
+                    panel_toggle(ui, &mut self.chrome.show_console, "Log", "Application log (`)");
+                    panel_toggle(
+                        ui,
+                        &mut self.chrome.show_history,
+                        "Spots",
+                        "Decoded callsign history",
+                    );
+                }
                 if panel_toggle(
                     ui,
                     &mut self.chrome.show_af_scope,

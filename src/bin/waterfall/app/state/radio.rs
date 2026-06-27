@@ -8,6 +8,7 @@ pub struct RadioState {
     pub is_kiwi: bool,
     pub cw: CwChannelSettings,
     pub rit_hz: f32,
+    pub rit_on: bool,
     pub pitch_lock: bool,
     pub lock_ham_bands: bool,
     pub agc_rf_on: bool,
@@ -18,4 +19,6 @@ pub struct RadioState {
     pub last_kiwi_rf_attn_db: f32,
     pub last_kiwi_has_rf_attn: bool,
     pub last_snr_db: f32,
+    /// When true, channel filter BW may extend to 2 kHz; when false, capped at 500 Hz (CW range).
+    pub passband_wide: bool,
 }
