@@ -4,6 +4,8 @@ use std::sync::mpsc::Receiver;
 
 use crate::kiwi_directory::{GeoLocation, KiwiReceiver};
 use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind};
+#[cfg(feature = "soapy")]
+use crate::source::SoapySettings;
 
 #[derive(Debug)]
 pub struct ConnectionFormState {
@@ -19,6 +21,18 @@ pub struct ConnectionFormState {
     pub last_rtlsdr_rf: RtlSdrSettings,
     pub qmx: QmxSettings,
     pub last_qmx_rf: QmxSettings,
+    #[cfg(feature = "soapy")]
+    pub soapy: SoapySettings,
+    #[cfg(feature = "soapy")]
+    pub last_soapy_rf: SoapySettings,
+    #[cfg(feature = "soapy")]
+    pub soapy_device_labels: Vec<String>,
+    #[cfg(feature = "soapy")]
+    pub soapy_device_args_list: Vec<String>,
+    #[cfg(feature = "soapy")]
+    pub soapy_device_index: usize,
+    #[cfg(feature = "soapy")]
+    pub soapy_enumerate_error: Option<String>,
     pub recent_hosts: Vec<ConnectRequest>,
     pub show_connection_drawer: bool,
 }

@@ -8,6 +8,8 @@ use hfsdr::QmxControls;
 use hfsdr::RtlSdrControls;
 
 use hfsdr::KiwiControls;
+#[cfg(feature = "soapy")]
+use hfsdr::SoapyControls;
 
 use super::device::DeviceSource;
 
@@ -103,6 +105,27 @@ pub fn rtlsdr_set_ppm(source: &mut DeviceSource, ppm: i32) {
 pub fn qmx_set_rf_gain_db(source: &mut DeviceSource, db: u8) {
     if let DeviceSource::Qmx(s) = source {
         let _ = QmxControls::set_rf_gain_db(s, db);
+    }
+}
+
+#[cfg(feature = "soapy")]
+pub fn soapy_set_gain_db(source: &mut DeviceSource, db: f64) {
+    if let DeviceSource::Soapy(s) = source {
+        let _ = SoapyControls::set_gain_db(s, db);
+    }
+}
+
+#[cfg(feature = "soapy")]
+pub fn soapy_set_agc(source: &mut DeviceSource, on: bool) {
+    if let DeviceSource::Soapy(s) = source {
+        let _ = SoapyControls::set_agc(s, on);
+    }
+}
+
+#[cfg(feature = "soapy")]
+pub fn soapy_set_antenna(source: &mut DeviceSource, name: &str) {
+    if let DeviceSource::Soapy(s) = source {
+        let _ = SoapyControls::set_antenna(s, name);
     }
 }
 

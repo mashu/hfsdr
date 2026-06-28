@@ -34,6 +34,8 @@ mod ui {
         mod qmx;
         mod recent;
         mod rtlsdr;
+        #[cfg(feature = "soapy")]
+        mod soapy;
     }
     mod console;
     mod display;

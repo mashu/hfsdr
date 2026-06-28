@@ -3,7 +3,7 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    Align2, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Pos2, Rect,
+    Align2, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Label, Pos2, Rect,
     Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2, Visuals,
 };
 
@@ -145,7 +145,7 @@ pub fn section_heading(ui: &mut Ui, title: &str) {
 }
 
 pub fn section_hint(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).small().color(MUTED));
+    ui.add(Label::new(RichText::new(text).small().color(MUTED)).wrap());
 }
 
 fn tooltip_fill() -> Color32 {

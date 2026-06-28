@@ -40,6 +40,17 @@ impl WaterfallApp {
                     format!("QMX ({})", self.connection.form.qmx.serial_port)
                 }
             }
+            #[cfg(feature = "soapy")]
+            SourceKind::Soapy => {
+                let args = self.connection.form.soapy.device_args.trim();
+                if args.is_empty() {
+                    "SoapySDR".to_string()
+                } else if args.len() <= 28 {
+                    format!("Soapy ({args})")
+                } else {
+                    format!("Soapy (…{})", &args[args.len() - 24..])
+                }
+            }
             SourceKind::Kiwi => {
                 let host = self.connection.form.host.trim();
                 if host.is_empty() {

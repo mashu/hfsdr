@@ -91,6 +91,18 @@ impl WaterfallApp {
                     last_rtlsdr_rf: RtlSdrSettings::default(),
                     qmx: QmxSettings::default(),
                     last_qmx_rf: QmxSettings::default(),
+                    #[cfg(feature = "soapy")]
+                    soapy: SoapySettings::default(),
+                    #[cfg(feature = "soapy")]
+                    last_soapy_rf: SoapySettings::default(),
+                    #[cfg(feature = "soapy")]
+                    soapy_device_labels: Vec::new(),
+                    #[cfg(feature = "soapy")]
+                    soapy_device_args_list: Vec::new(),
+                    #[cfg(feature = "soapy")]
+                    soapy_device_index: 0,
+                    #[cfg(feature = "soapy")]
+                    soapy_enumerate_error: None,
                     recent_hosts: Vec::new(),
                     show_connection_drawer: false,
                 },
@@ -239,6 +251,10 @@ impl WaterfallApp {
             app.connection.form.airspy = req.airspy.clone();
             app.connection.form.rtlsdr = req.rtlsdr.clone();
             app.connection.form.qmx = req.qmx.clone();
+            #[cfg(feature = "soapy")]
+            {
+                app.connection.form.soapy = req.soapy.clone();
+            }
             app.radio.center_khz = req.center_hz / 1000.0;
             app.clamp_center_to_ham_bands();
             app.radio.last_center_khz = app.radio.center_khz;
@@ -277,6 +293,10 @@ impl eframe::App for WaterfallApp {
             self.connection.form.airspy = req.airspy.clone();
             self.connection.form.rtlsdr = req.rtlsdr.clone();
             self.connection.form.qmx = req.qmx.clone();
+            #[cfg(feature = "soapy")]
+            {
+                self.connection.form.soapy = req.soapy.clone();
+            }
             self.radio.center_khz = req.center_hz / 1000.0;
             self.clamp_center_to_ham_bands();
             req.center_hz = self.radio.center_khz * 1000.0;

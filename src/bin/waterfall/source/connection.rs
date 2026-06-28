@@ -13,11 +13,18 @@ use hfsdr::{
     rtlsdr::iq_ring_capacity as rtlsdr_ring_capacity,
     RtlSdr,
 };
+#[cfg(feature = "soapy")]
+use hfsdr::{
+    soapy::iq_ring_capacity as soapy_ring_capacity,
+    SoapySource,
+};
 use serde::{Deserialize, Serialize};
 
 use super::device::DeviceSource;
 use super::iq_bridge::attach_dual_ring;
 use super::settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};
+#[cfg(feature = "soapy")]
+use super::settings::{default_soapy_sample_rate, SoapySettings};
 #[cfg(feature = "airspy")]
 use super::settings::default_airspy_sample_rate;
 #[cfg(feature = "rtlsdr")]
@@ -32,6 +39,8 @@ pub enum SourceKind {
     RtlSdr,
     #[cfg(feature = "qmx")]
     Qmx,
+    #[cfg(feature = "soapy")]
+    Soapy,
     Kiwi,
 }
 
@@ -44,6 +53,8 @@ impl fmt::Display for SourceKind {
             SourceKind::RtlSdr => write!(f, "RTL-SDR"),
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => write!(f, "QMX"),
+            #[cfg(feature = "soapy")]
+            SourceKind::Soapy => write!(f, "SoapySDR"),
             SourceKind::Kiwi => write!(f, "KiwiSDR"),
         }
     }
@@ -63,6 +74,8 @@ impl<'de> Deserialize<'de> for SourceKind {
             "RtlSdr" => SourceKind::RtlSdr,
             #[cfg(feature = "qmx")]
             "Qmx" => SourceKind::Qmx,
+            #[cfg(feature = "soapy")]
+            "Soapy" => SourceKind::Soapy,
             _ => SourceKind::Kiwi,
         })
     }
@@ -80,6 +93,8 @@ impl Serialize for SourceKind {
             SourceKind::RtlSdr => "RtlSdr",
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => "Qmx",
+            #[cfg(feature = "soapy")]
+            SourceKind::Soapy => "Soapy",
             SourceKind::Kiwi => "Kiwi",
         };
         serializer.serialize_str(name)
@@ -109,6 +124,10 @@ pub struct ConnectRequest {
     /// QMX CAT port, audio device, IF offset, and optional IQ decimation.
     #[serde(default)]
     pub qmx: QmxSettings,
+    /// SoapySDR driver, device args, gain, and optional IQ decimation.
+    #[cfg(feature = "soapy")]
+    #[serde(default)]
+    pub soapy: SoapySettings,
 }
 
 impl Default for ConnectRequest {
@@ -123,6 +142,8 @@ impl Default for ConnectRequest {
             airspy: AirspySettings::default(),
             rtlsdr: RtlSdrSettings::default(),
             qmx: QmxSettings::default(),
+            #[cfg(feature = "soapy")]
+            soapy: SoapySettings::default(),
         }
     }
 }
@@ -141,6 +162,30 @@ impl ConnectRequest {
             ),
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => format!("QMX @ {:.3} MHz", self.center_hz / 1e6),
+            #[cfg(feature = "soapy")]
+            SourceKind::Soapy => {
+                let tag = self.soapy.device_args.trim();
+                if tag.is_empty() {
+                    format!("SoapySDR @ {:.3} MHz", self.center_hz / 1e6)
+                } else {
+                    let short = if tag.chars().count() <= 28 {
+                        tag.to_string()
+                    } else {
+                        let keep = 13;
+                        let head: String = tag.chars().take(keep).collect();
+                        let tail: String = tag
+                            .chars()
+                            .rev()
+                            .take(keep)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        format!("{head}…{tail}")
+                    };
+                    format!("Soapy {short} @ {:.3} MHz", self.center_hz / 1e6)
+                }
+            }
             SourceKind::Kiwi => format!("{}:{}", self.host, self.port),
         }
     }
@@ -167,6 +212,8 @@ pub fn connect(req: &ConnectRequest, cancel: &std::sync::atomic::AtomicBool) -> 
         SourceKind::RtlSdr => connect_rtlsdr(req, cancel),
         #[cfg(feature = "qmx")]
         SourceKind::Qmx => connect_qmx(req, cancel),
+        #[cfg(feature = "soapy")]
+        SourceKind::Soapy => connect_soapy(req, cancel),
     }
 }
 
@@ -351,6 +398,56 @@ fn connect_qmx(
     })
 }
 
+#[cfg(feature = "soapy")]
+fn connect_soapy(
+    req: &ConnectRequest,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<super::device::Connection, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("connection cancelled".to_string());
+    }
+    let args = req.soapy.device_args.trim();
+    if args.is_empty() {
+        return Err("SoapySDR device not selected — pick a device or enter args".to_string());
+    }
+    let mut src = SoapySource::open(args).map_err(|e| {
+        format!("SoapySDR open failed: {e} ({})", hfsdr::soapy::last_error())
+    })?;
+    let rates = src.sample_rates();
+    let sr = if req.sample_rate != 0 {
+        req.sample_rate
+    } else {
+        default_soapy_sample_rate(&rates)
+    };
+    src.set_sample_rate(sr).map_err(|e| e.to_string())?;
+    if !req.soapy.antenna.is_empty() {
+        src.set_antenna_name(&req.soapy.antenna).ok();
+    }
+    src.set_automatic_gain(req.soapy.agc).map_err(|e| e.to_string())?;
+    if !req.soapy.agc {
+        src.set_overall_gain(req.soapy.gain_db).ok();
+    }
+    src.tune(req.center_hz).map_err(|e| e.to_string())?;
+    let (ingress_decim, eff_sr) = req.soapy.ingress_decimation(sr);
+    let ring_cap = soapy_ring_capacity(sr);
+    let device_iq = src.start().map_err(|e| e.to_string())?;
+    let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
+        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap, DecimFilterKind::LinearFir);
+    Ok(super::device::Connection {
+        device: DeviceSource::Soapy(src),
+        iq,
+        iq_spectrum,
+        bridge,
+        iq_ring_capacity: ring_cap,
+        iq_spectrum_ring_capacity,
+        device_sample_rate: sr as f32,
+        sample_rate: eff_sr,
+        center_hz: req.center_hz,
+        is_kiwi: false,
+        iq_ingress_decim: ingress_decim,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +510,8 @@ mod tests {
         kinds.push(SourceKind::RtlSdr);
         #[cfg(feature = "qmx")]
         kinds.push(SourceKind::Qmx);
+        #[cfg(feature = "soapy")]
+        kinds.push(SourceKind::Soapy);
         for kind in kinds {
             let req = ConnectRequest {
                 kind,
@@ -469,6 +568,22 @@ mod tests {
         assert!(req.label().contains("QMX"));
     }
 
+    #[cfg(feature = "soapy")]
+    #[test]
+    fn soapy_label_includes_device_args() {
+        let req = ConnectRequest {
+            kind: SourceKind::Soapy,
+            center_hz: 7_030_000.0,
+            soapy: SoapySettings {
+                device_args: "driver=rtlsdr,serial=ABC".into(),
+                ..SoapySettings::default()
+            },
+            ..ConnectRequest::default()
+        };
+        assert!(req.label().contains("Soapy"));
+        assert!(req.label().contains("7.030"));
+    }
+
     #[test]
     fn source_kind_display_strings() {
         assert!(SourceKind::Kiwi.to_string().contains("Kiwi"));
@@ -478,5 +593,7 @@ mod tests {
         assert!(SourceKind::RtlSdr.to_string().contains("RTL"));
         #[cfg(feature = "qmx")]
         assert!(SourceKind::Qmx.to_string().contains("QMX"));
+        #[cfg(feature = "soapy")]
+        assert!(SourceKind::Soapy.to_string().contains("Soapy"));
     }
 }

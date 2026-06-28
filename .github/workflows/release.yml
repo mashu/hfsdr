@@ -50,21 +50,22 @@ jobs:
               sudo apt-get install -y \
                 libairspyhf-dev \
                 librtlsdr-dev \
+                libsoapysdr-dev \
                 libasound2-dev \
                 libxkbcommon-dev \
                 libwayland-dev \
                 libxcb-render0-dev \
                 libxcb-shape0-dev \
-                libxcb-xfixes0-dev
+                libxcb-xfixes0-dev \
+                curl \
+                file \
+                fuse3
           - os: macos-latest
             artifact_name: hfsdr-macos-aarch64
             archive: tar.gz
             features: gui
             airspy: true
-            install: |
-              brew install airspyhf librtlsdr pkg-config
-              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
-              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+            install: scripts/install-macos-sdr-deps.sh
           - os: windows-latest
             artifact_name: hfsdr-windows-x86_64
             archive: zip
@@ -93,13 +94,22 @@ jobs:
           fi
         shell: bash
 
-      - name: Package (Unix)
-        if: matrix.archive == 'tar.gz'
+      - name: Package (macOS)
+        if: matrix.archive == 'tar.gz' && runner.os == 'macOS'
         run: |
           mkdir -p dist
           cp target/release/hfsdr dist/
           cp README.md dist/
           tar -czf "${{ matrix.artifact_name }}.tar.gz" -C dist .
+        shell: bash
+
+      - name: Package AppImage (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/build-appimage.sh
+          cp hfsdr-*-x86_64.AppImage "${{ matrix.artifact_name }}.AppImage"
+        env:
+          CI: "true"
         shell: bash
 
       - name: Package (Windows)
@@ -133,11 +143,26 @@ jobs:
           }
           Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
 
-      - name: Upload release asset
+      - name: Upload release asset (Windows)
+        if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          files: ${{ matrix.artifact_name }}.${{ matrix.archive }}
+          files: ${{ matrix.artifact_name }}.zip
+
+      - name: Upload release asset (Linux AppImage)
+        if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          files: ${{ matrix.artifact_name }}.AppImage
+
+      - name: Upload release asset (macOS)
+        if: runner.os == 'macOS'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          files: ${{ matrix.artifact_name }}.tar.gz
 
   build-airspy-probe-linux:
     name: airspy-probe-linux-x86_64

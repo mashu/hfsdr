@@ -20,6 +20,9 @@
 //! decimated rings before the engine pump.
 
 pub mod native_sdr;
+pub mod sdr_ffi;
+#[cfg(feature = "soapy")]
+pub mod soapy;
 #[cfg(feature = "airspy")]
 pub mod airspyhf;
 #[cfg(feature = "rtlsdr")]
@@ -45,6 +48,8 @@ pub mod mock_hal;
 pub use airspyhf::AirspyHf;
 #[cfg(feature = "rtlsdr")]
 pub use rtlsdr::RtlSdr;
+#[cfg(feature = "soapy")]
+pub use soapy::SoapySource;
 #[cfg(feature = "qmx")]
 pub use qmx::QmxSource;
 pub use cty::{Continent, ContinentResolver};

@@ -26,7 +26,8 @@ $vcpkg = Join-Path $vcpkgRoot "vcpkg.exe"
     "pkgconf:$triplet" `
     "libusb:$triplet" `
     "pthreads:$triplet" `
-    "rtlsdr:$triplet"
+    "rtlsdr:$triplet" `
+    "soapysdr:$triplet"
 
 # vcpkg pkg-config + DLLs must be visible before configuring libairspyhf.
 $pkgconfDir = Join-Path $vcpkgInstalled "tools/pkgconf"
@@ -117,7 +118,9 @@ $required = @(
     (Join-Path $depsLib "airspyhf.lib"),
     (Join-Path $depsBin "airspyhf.dll"),
     (Join-Path $vcpkgInstalled "lib/rtlsdr.lib"),
-    (Join-Path $vcpkgInstalled "bin/rtlsdr.dll")
+    (Join-Path $vcpkgInstalled "bin/rtlsdr.dll"),
+    (Join-Path $vcpkgInstalled "lib/SoapySDR.lib"),
+    (Join-Path $vcpkgInstalled "bin/SoapySDR.dll")
 )
 foreach ($path in $required) {
     if (-not (Test-Path $path)) {
@@ -130,3 +133,4 @@ Write-Host "  VCPKG_ROOT=$vcpkgRoot"
 Write-Host "  HFSDR_DEPS_PREFIX=$depsPrefix"
 Write-Host "  airspyhf.lib -> $(Join-Path $depsLib 'airspyhf.lib')"
 Write-Host "  rtlsdr.lib   -> $(Join-Path $vcpkgInstalled 'lib/rtlsdr.lib')"
+Write-Host "  SoapySDR.dll -> $(Join-Path $vcpkgInstalled 'bin/SoapySDR.dll')"

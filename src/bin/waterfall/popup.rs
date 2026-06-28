@@ -84,7 +84,7 @@ pub fn popup_scroll_body<R>(ui: &mut Ui, max_body_height: f32, add_contents: imp
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
             egui::ScrollArea::vertical()
-                .auto_shrink([true, true])
+                .auto_shrink([false, false])
                 .max_height(max_body_height)
                 .show(ui, add_contents)
                 .inner
@@ -109,7 +109,10 @@ pub fn popup_section(ui: &mut Ui, title: &str, hint: Option<&str>, add_contents:
                 ui.label(RichText::new(title).small().strong().color(ACCENT));
             });
             if let Some(text) = hint {
-                ui.label(RichText::new(text).small().color(MUTED));
+                ui.add(
+                    egui::Label::new(RichText::new(text).small().color(MUTED))
+                        .wrap(),
+                );
             }
             ui.add_space(4.0);
             add_contents(ui);
@@ -433,14 +436,20 @@ pub fn list_row(ui: &mut Ui, text: &str, enabled: bool) -> egui::Response {
 pub fn chip_row(ui: &mut Ui, labels: &[String]) -> Option<usize> {
     let mut picked = None;
     ui.horizontal_wrapped(|ui| {
+        ui.set_max_width(ui.available_width());
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
         for (i, label) in labels.iter().enumerate() {
+            let shown = truncate_middle(label, 34);
+            let truncated = shown != *label;
             let resp = ui.add(
-                Button::new(RichText::new(label).small())
+                Button::new(RichText::new(&shown).small())
                     .fill(Color32::from_rgb(32, 38, 50))
                     .stroke(Stroke::new(1.0, Color32::from_rgb(58, 68, 88)))
                     .corner_radius(CornerRadius::same(12)),
             );
+            if truncated {
+                resp.clone().on_hover_text(label);
+            }
             if resp.clicked() {
                 picked = Some(i);
             }
@@ -476,6 +485,7 @@ pub fn configure_popup_window(
         .collapsible(false)
         .resizable(false)
         .auto_sized()
+        .constrain(true)
         .min_width(width)
         .max_width(width)
         .max_height(max_height)

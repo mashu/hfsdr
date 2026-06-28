@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use hfsdr::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_CHANNEL_WINDOW, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA, FftWindowKind, WindowKind};
 
 use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings};
+#[cfg(feature = "soapy")]
+use crate::source::SoapySettings;
 
 const APP_DIR: &str = "hfsdr";
 const FILE: &str = "settings.json";
@@ -242,6 +244,10 @@ pub struct AppSettings {
     pub rtlsdr: RtlSdrSettings,
     pub rtlsdr_sample_rate: u32,
     pub qmx: QmxSettings,
+    #[cfg(feature = "soapy")]
+    pub soapy: SoapySettings,
+    #[cfg(feature = "soapy")]
+    pub soapy_sample_rate: u32,
     /// Bumped when persisted layout or defaults change; used for one-time migrations.
     #[serde(default = "legacy_settings_format")]
     pub settings_format: u32,
@@ -358,6 +364,10 @@ impl Default for AppSettings {
             rtlsdr: RtlSdrSettings::default(),
             rtlsdr_sample_rate: 2_048_000,
             qmx: QmxSettings::default(),
+            #[cfg(feature = "soapy")]
+            soapy: SoapySettings::default(),
+            #[cfg(feature = "soapy")]
+            soapy_sample_rate: 2_048_000,
             settings_format: 1,
             iq_capture_dir: String::new(),
             iq_playback_path: String::new(),

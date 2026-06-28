@@ -32,6 +32,11 @@ impl WaterfallApp {
             self.connection_qmx_section(ui);
         }
 
+        #[cfg(feature = "soapy")]
+        if self.connection.form.kind == SourceKind::Soapy {
+            self.connection_soapy_section(ui);
+        }
+
         if self.connection.form.kind == SourceKind::Kiwi {
             self.connection_kiwi_iq_section(ui);
             self.connection_kiwi_browser_section(ui);

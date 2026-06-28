@@ -129,6 +129,39 @@ pub(crate) const RTLSDR_PROCESS_RATE_PRESETS: &[(&str, u32)] = &[
     ("12 kHz", 12_000),
 ];
 
+#[cfg(feature = "soapy")]
+pub(crate) const SOAPY_DRIVER_PRESETS: &[&str] = &[
+    "rtlsdr",
+    "airspyhf",
+    "hackrf",
+    "plutosdr",
+    "lime",
+    "uhd",
+    "sdrplay",
+];
+
+#[cfg(feature = "soapy")]
+pub(crate) const SOAPY_SAMPLE_RATE_PRESETS: &[(&str, u32)] = &[
+    ("2.048 MHz", 2_048_000),
+    ("1.92 MHz", 1_920_000),
+    ("768 kHz", 768_000),
+    ("384 kHz", 384_000),
+    ("250 kHz", 250_000),
+    ("192 kHz", 192_000),
+    ("96 kHz", 96_000),
+    ("48 kHz", 48_000),
+];
+
+#[cfg(feature = "soapy")]
+pub(crate) const SOAPY_PROCESS_RATE_PRESETS: &[(&str, u32)] = &[
+    ("Native (full rate)", 0),
+    ("192 kHz", 192_000),
+    ("96 kHz", 96_000),
+    ("48 kHz", 48_000),
+    ("24 kHz", 24_000),
+    ("12 kHz", 12_000),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StorageKey {
     tex_width: u32,

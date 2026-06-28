@@ -216,6 +216,12 @@ pub enum EngineCommand {
     SetRtlSdrPpm(i32),
     #[cfg(feature = "qmx")]
     SetQmxRfGain(u8),
+    #[cfg(feature = "soapy")]
+    SetSoapyGain(f64),
+    #[cfg(feature = "soapy")]
+    SetSoapyAgc(bool),
+    #[cfg(feature = "soapy")]
+    SetSoapyAntenna(String),
     SetAudioDevice(Option<String>),
     ClearSkimmerSpots,
     ReloadScp,

@@ -121,7 +121,7 @@ impl RtlSdr {
             return Ok(sdr);
         }
         let mut dev: *mut sys::rtlsdr_dev_t = std::ptr::null_mut();
-        let rc = unsafe { sys::rtlsdr_open(&mut dev, index) };
+        let rc = sys::rtlsdr_open(&mut dev, index);
         if rc != sys::SUCCESS || dev.is_null() {
             return Err(SourceError::NotFound);
         }
@@ -147,7 +147,7 @@ impl RtlSdr {
         if crate::mock_hal::enabled() {
             return 1;
         }
-        unsafe { sys::rtlsdr_get_device_count() }
+        sys::rtlsdr_get_device_count()
     }
 
     pub fn device_name(index: u32) -> String {
@@ -155,7 +155,7 @@ impl RtlSdr {
         if crate::mock_hal::enabled() {
             return format!("Mock RTL-SDR #{index}");
         }
-        let ptr = unsafe { sys::rtlsdr_get_device_name(index) };
+        let ptr = sys::rtlsdr_get_device_name(index);
         if ptr.is_null() {
             return format!("RTL-SDR #{index}");
         }
@@ -183,9 +183,7 @@ impl RtlSdr {
             let _ = on;
             return Ok(());
         }
-        check("rtlsdr_set_agc_mode", unsafe {
-            sys::rtlsdr_set_agc_mode(self.dev, on as c_int)
-        })
+        check("rtlsdr_set_agc_mode", sys::rtlsdr_set_agc_mode(self.dev, on as c_int))
     }
 
     pub fn set_direct_sampling(&mut self, mode: u8) -> Result<()> {
@@ -198,9 +196,7 @@ impl RtlSdr {
         if self.mock_mut().is_some() {
             return Ok(());
         }
-        check("rtlsdr_set_direct_sampling", unsafe {
-            sys::rtlsdr_set_direct_sampling(self.dev, mode as c_int)
-        })
+        check("rtlsdr_set_direct_sampling", sys::rtlsdr_set_direct_sampling(self.dev, mode as c_int))
     }
 
     pub fn set_offset_tuning(&mut self, on: bool) -> Result<()> {
@@ -209,9 +205,7 @@ impl RtlSdr {
             let _ = on;
             return Ok(());
         }
-        check("rtlsdr_set_offset_tuning", unsafe {
-            sys::rtlsdr_set_offset_tuning(self.dev, on as c_int)
-        })
+        check("rtlsdr_set_offset_tuning", sys::rtlsdr_set_offset_tuning(self.dev, on as c_int))
     }
 
     pub fn set_bias_tee(&mut self, on: bool) -> Result<()> {
@@ -220,7 +214,7 @@ impl RtlSdr {
             let _ = on;
             return Ok(());
         }
-        check("rtlsdr_set_bias_tee", unsafe { sys::rtlsdr_set_bias_tee(self.dev, on as c_int) })
+        check("rtlsdr_set_bias_tee", sys::rtlsdr_set_bias_tee(self.dev, on as c_int))
     }
 
     pub fn set_tuner_gain(&mut self, gain_db10: i32) -> Result<()> {
@@ -230,9 +224,7 @@ impl RtlSdr {
             return Ok(());
         }
         let gain = self.clamp_tuner_gain(gain_db10);
-        check("rtlsdr_set_tuner_gain", unsafe {
-            sys::rtlsdr_set_tuner_gain(self.dev, gain)
-        })
+        check("rtlsdr_set_tuner_gain", sys::rtlsdr_set_tuner_gain(self.dev, gain))
     }
 
     pub fn set_tuner_gain_mode(&mut self, manual: bool) -> Result<()> {
@@ -241,9 +233,7 @@ impl RtlSdr {
             let _ = manual;
             return Ok(());
         }
-        check("rtlsdr_set_tuner_gain_mode", unsafe {
-            sys::rtlsdr_set_tuner_gain_mode(self.dev, manual as c_int)
-        })
+        check("rtlsdr_set_tuner_gain_mode", sys::rtlsdr_set_tuner_gain_mode(self.dev, manual as c_int))
     }
 
     pub fn set_freq_correction(&mut self, ppm: i32) -> Result<()> {
@@ -252,9 +242,7 @@ impl RtlSdr {
             let _ = ppm;
             return Ok(());
         }
-        check("rtlsdr_set_freq_correction", unsafe {
-            sys::rtlsdr_set_freq_correction(self.dev, ppm)
-        })
+        check("rtlsdr_set_freq_correction", sys::rtlsdr_set_freq_correction(self.dev, ppm))
     }
 }
 
@@ -276,10 +264,8 @@ impl IqSource for RtlSdr {
             self.sample_rate = sr;
             return Ok(());
         }
-        check("rtlsdr_set_sample_rate", unsafe {
-            sys::rtlsdr_set_sample_rate(self.dev, sr)
-        })?;
-        let actual = unsafe { sys::rtlsdr_get_sample_rate(self.dev) };
+        check("rtlsdr_set_sample_rate", sys::rtlsdr_set_sample_rate(self.dev, sr))?;
+        let actual = sys::rtlsdr_get_sample_rate(self.dev);
         self.sample_rate = if actual == 0 { sr } else { actual };
         Ok(())
     }
@@ -291,9 +277,7 @@ impl IqSource for RtlSdr {
             return Ok(());
         }
         let freq = hz.round().clamp(0.0, u32::MAX as f64) as u32;
-        check("rtlsdr_set_center_freq", unsafe {
-            sys::rtlsdr_set_center_freq(self.dev, freq)
-        })?;
+        check("rtlsdr_set_center_freq", sys::rtlsdr_set_center_freq(self.dev, freq))?;
         self.freq_hz = hz;
         Ok(())
     }
@@ -324,7 +308,7 @@ impl IqSource for RtlSdr {
         });
         let ctx_ptr = (&mut *ctx as *mut StreamCtx) as *mut c_void;
 
-        check("rtlsdr_reset_buffer", unsafe { sys::rtlsdr_reset_buffer(self.dev) })?;
+        check("rtlsdr_reset_buffer", sys::rtlsdr_reset_buffer(self.dev))?;
 
         let dev_addr = self.dev as usize;
         let ctx_addr = ctx_ptr as usize;
@@ -333,7 +317,7 @@ impl IqSource for RtlSdr {
             .spawn(move || {
                 let dev = dev_addr as *mut sys::rtlsdr_dev_t;
                 let ctx = ctx_addr as *mut c_void;
-                let _ = unsafe { sys::rtlsdr_read_async(dev, stream_cb, ctx, 0, 0) };
+                let _ = sys::rtlsdr_read_async(dev, stream_cb, ctx, 0, 0);
             })
             .map_err(|_| SourceError::Backend {
                 op: "spawn rtlsdr async thread",
@@ -358,7 +342,7 @@ impl IqSource for RtlSdr {
             self.async_thread = None;
             return Ok(());
         }
-        let rc = unsafe { sys::rtlsdr_cancel_async(self.dev) };
+        let rc = sys::rtlsdr_cancel_async(self.dev);
         if let Some(handle) = self.async_thread.take() {
             let _ = handle.join();
         }
@@ -406,7 +390,7 @@ impl Drop for RtlSdr {
             return;
         }
         if !self.dev.is_null() {
-            unsafe { sys::rtlsdr_close(self.dev) };
+            sys::rtlsdr_close(self.dev);
             self.dev = std::ptr::null_mut();
         }
     }
@@ -429,12 +413,12 @@ fn clamp_tuner_gain_table(gains: &[i32], gain_db10: i32) -> i32 {
 }
 
 fn read_tuner_gains(dev: *mut sys::rtlsdr_dev_t) -> Vec<i32> {
-    let count = unsafe { sys::rtlsdr_get_tuner_gains(dev, std::ptr::null_mut()) };
+    let count = sys::rtlsdr_get_tuner_gains(dev, std::ptr::null_mut());
     if count <= 0 {
         return Vec::new();
     }
     let mut gains = vec![0i32; count as usize];
-    let got = unsafe { sys::rtlsdr_get_tuner_gains(dev, gains.as_mut_ptr()) };
+    let got = sys::rtlsdr_get_tuner_gains(dev, gains.as_mut_ptr());
     gains.truncate(got.max(0) as usize);
     gains
 }

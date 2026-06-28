@@ -25,6 +25,7 @@ jobs:
               sudo apt-get install -y \
                 libairspyhf-dev \
                 librtlsdr-dev \
+                libsoapysdr-dev \
                 libasound2-dev \
                 libxkbcommon-dev \
                 libwayland-dev \
@@ -33,10 +34,7 @@ jobs:
                 libxcb-xfixes0-dev
           - os: macos-latest
             features: airspy
-            install: |
-              brew install airspyhf pkg-config
-              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
-              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+            install: scripts/install-macos-sdr-deps.sh --no-rtlsdr
           - os: windows-latest
             features: airspy,rtlsdr
             install: pwsh -File scripts/install-windows-sdr-deps.ps1
@@ -78,6 +76,7 @@ jobs:
           sudo apt-get install -y \
             libairspyhf-dev \
             librtlsdr-dev \
+            libsoapysdr-dev \
             libasound2-dev \
             libxkbcommon-dev \
             libwayland-dev \
@@ -114,6 +113,7 @@ jobs:
               sudo apt-get install -y \
                 libairspyhf-dev \
                 librtlsdr-dev \
+                libsoapysdr-dev \
                 libasound2-dev \
                 libxkbcommon-dev \
                 libwayland-dev \
@@ -123,10 +123,7 @@ jobs:
           - os: macos-latest
             label: macos-universal
             features: gui
-            install: |
-              brew install airspyhf librtlsdr pkg-config
-              echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
-              echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+            install: scripts/install-macos-sdr-deps.sh
           - os: windows-latest
             label: windows-x86_64
             features: gui
@@ -158,6 +155,80 @@ jobs:
           esac
         shell: bash
 
+  linux-no-sdr-libs:
+    name: Linux without SDR libraries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install GUI dependencies only
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
+
+      - name: Build without libairspyhf / librtlsdr / libSoapySDR installed
+        run: cargo build --release --features gui
+
+      - name: Verify no hard-linked SDR libraries
+        run: bash scripts/smoke-no-sdr-libs.sh target/release/hfsdr
+
+      - name: Runtime probe tests
+        run: 'cargo test --features gui native_sdr:: --lib'
+
+      - name: Source UI tests without native drivers
+        run: 'cargo test --features gui --bin hfsdr source::kinds::'
+
+  linux-appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libairspyhf-dev \
+            librtlsdr-dev \
+            libsoapysdr-dev \
+            libasound2-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            curl \
+            file \
+            fuse3
+
+      - name: Build release binary
+        run: cargo build --release --features gui
+
+      - name: Build AppImage
+        run: bash scripts/build-appimage.sh
+        env:
+          CI: "true"
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: hfsdr-appimage
+          path: hfsdr-*-x86_64.AppImage
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest
@@ -177,6 +248,7 @@ jobs:
           sudo apt-get install -y \
             libairspyhf-dev \
             librtlsdr-dev \
+            libsoapysdr-dev \
             libasound2-dev \
             libxkbcommon-dev \
             libwayland-dev \

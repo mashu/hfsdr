@@ -113,10 +113,18 @@ impl WaterfallApp {
         self.connection.form.airspy = s.airspy.clone();
         self.connection.form.rtlsdr = s.rtlsdr.clone();
         self.connection.form.qmx = s.qmx.clone();
+        #[cfg(feature = "soapy")]
+        {
+            self.connection.form.soapy = s.soapy.clone();
+        }
         if s.airspy_sample_rate != 0 {
             self.connection.form.sample_rate = s.airspy_sample_rate;
         } else if s.rtlsdr_sample_rate != 0 {
             self.connection.form.sample_rate = s.rtlsdr_sample_rate;
+        }
+        #[cfg(feature = "soapy")]
+        if s.soapy_sample_rate != 0 {
+            self.connection.form.sample_rate = s.soapy_sample_rate;
         }
         self.radio.center_khz = s.last_center_mhz * 1000.0;
         self.clamp_center_to_ham_bands();
@@ -249,6 +257,10 @@ impl WaterfallApp {
             rtlsdr: self.connection.form.rtlsdr.clone(),
             rtlsdr_sample_rate: self.connection.form.sample_rate,
             qmx: self.connection.form.qmx.clone(),
+            #[cfg(feature = "soapy")]
+            soapy: self.connection.form.soapy.clone(),
+            #[cfg(feature = "soapy")]
+            soapy_sample_rate: self.connection.form.sample_rate,
             settings_format: 1,
             iq_capture_dir: self.chrome.iq.capture_dir.display().to_string(),
             iq_playback_path: self.chrome.iq.playback_path.clone(),

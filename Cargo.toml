@@ -1,6 +1,6 @@
 [package]
 name = "hfsdr"
-version = "0.9.2"
+version = "0.9.5"
 edition = "2021"
 description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR, QMX)"
 license = "MIT"
@@ -19,6 +19,7 @@ rtrb = "0.3"
 rustfft = { version = "6", features = ["avx", "sse"] }
 rayon = "1.10"
 tungstenite = "0.29"
+libloading = "0.8"
 cpal = { version = "0.15", optional = true }
 serialport = { version = "4", default-features = false, optional = true }
 eframe = { version = "0.34", optional = true, default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
@@ -32,16 +33,17 @@ ureq = { version = "2.12", optional = true, default-features = false, features =
 
 [features]
 default = ["airspy"]
-# Links libairspyhf (system package). Disable with --no-default-features when the
-# library is unavailable (e.g. Kiwi/QMX-only builds via gui-core).
+# Runtime-loaded libairspyhf on Windows, Linux, and macOS.
 airspy = []
-# Links librtlsdr (system package). Included in `gui`; use `gui-core` without it.
+# Runtime-loaded librtlsdr on Windows, Linux, and macOS.
 rtlsdr = []
 # QRP Labs QMX/QMX+ via USB CAT + audio IQ (pure Rust).
 qmx = ["dep:serialport", "dep:cpal"]
-# GUI without librtlsdr (Kiwi/QMX-only builds without local USB SDR libraries).
+# Runtime-loaded libSoapySDR on Windows, Linux, and macOS.
+soapy = []
+# GUI without librtlsdr / SoapySDR (Kiwi/QMX-only builds).
 gui-core = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd", "qmx"]
-gui = ["gui-core", "rtlsdr"]
+gui = ["gui-core", "rtlsdr", "soapy"]
 
 [[bin]]
 name = "hfsdr"

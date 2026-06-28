@@ -12,6 +12,8 @@ use crate::interaction::{PlotAction, RIT_MAX_HZ, RIT_MIN_HZ, CW_PASSBAND_MAX_HZ,
 use crate::source::{
     AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind,
 };
+#[cfg(feature = "soapy")]
+use crate::source::SoapySettings;
 use crate::iq_panel::IqPanelCmd;
 use crate::settings::AppSettings;
 
@@ -31,6 +33,8 @@ fn kiwi_request(host: &str) -> ConnectRequest {
         airspy: AirspySettings::default(),
         rtlsdr: RtlSdrSettings::default(),
         qmx: QmxSettings::default(),
+        #[cfg(feature = "soapy")]
+        soapy: SoapySettings::default(),
     }
 }
 
