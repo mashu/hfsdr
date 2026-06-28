@@ -1,10 +1,10 @@
 //! Unified engine pipeline benchmark.
 //!
 //! ```text
-//! cargo run --release --features gui-core --bin engine-bench engine [seconds] [device_rate]
+//! cargo run --release --features gui-core --bin engine-bench engine [seconds] [device_rate_hz] [fft_size]
 //! cargo run --release --features gui-core --bin engine-bench demod [rate_hz] [block_size] [iterations]
-//! cargo run --release --features gui-core --bin engine-bench synthetic [seconds] [sample_rate]
-//! cargo run --release --features gui-core --bin engine-bench replay <capture.hfsdr> [seconds]
+//! cargo run --release --features gui-core --bin engine-bench synthetic [seconds] [sample_rate_hz]
+//! cargo run --release --features gui-core --bin engine-bench replay <capture.hiq.gz> [seconds] [fft_size]
 //! cargo run --release --features gui-core --bin engine-bench live-kiwi [host] [port] [center_hz] [seconds]
 //! cargo run --release --features airspy,gui-core --bin engine-bench live-airspy [seconds] [sample_rate]
 //! ```
@@ -130,6 +130,7 @@ fn run_engine_bench(args: &[String]) {
         .get(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(384_000.0);
+    let fft_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
     let ingress_decim = hfsdr::ingress_decimation_from_hz(0, device_rate as u32).0;
 
     let block = tone_iq(65_536, device_rate, 700.0, 0.25);
@@ -142,10 +143,15 @@ fn run_engine_bench(args: &[String]) {
 
     let (_tx, rx) = channel();
     let shared = Arc::new(Mutex::new(EngineShared::default()));
-    let params = Arc::new(Mutex::new(EngineParams {
+    let mut ep = EngineParams {
         perf_trace: true,
         ..EngineParams::default()
-    }));
+    };
+    if fft_size > 0 {
+        ep.fft_size = fft_size;
+        ep.fft_auto = false;
+    }
+    let params = Arc::new(Mutex::new(ep));
     let cancel = Arc::new(AtomicBool::new(false));
     let mut engine = Engine::new(rx, Arc::clone(&shared), Arc::clone(&params), cancel);
     let mut conn = mock_conn(&[], device_rate, ingress_decim);
@@ -385,6 +391,7 @@ fn run_synthetic_legacy(args: &[String]) {
 fn run_replay(args: &[String]) {
     let path = args.first().map(String::as_str).unwrap_or_else(|| usage());
     let run_secs: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_SECS);
+    let fft_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     let playback = hfsdr::IqPlayback::open(std::path::Path::new(path)).unwrap_or_else(|e| {
         eprintln!("replay open failed: {e}");
@@ -393,10 +400,15 @@ fn run_replay(args: &[String]) {
     let meta = playback.meta();
     let (_tx, rx) = channel();
     let shared = Arc::new(Mutex::new(EngineShared::default()));
-    let params = Arc::new(Mutex::new(EngineParams {
+    let mut ep = EngineParams {
         perf_trace: true,
         ..EngineParams::default()
-    }));
+    };
+    if fft_size > 0 {
+        ep.fft_size = fft_size;
+        ep.fft_auto = false;
+    }
+    let params = Arc::new(Mutex::new(ep));
     let cancel = Arc::new(AtomicBool::new(false));
     let mut engine = Engine::new(rx, Arc::clone(&shared), Arc::clone(&params), cancel);
     engine.playback = Some(playback);

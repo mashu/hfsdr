@@ -39,6 +39,10 @@ const fn default_full_demod() -> bool {
     true
 }
 
+const fn default_cw_sideband_auto() -> bool {
+    true
+}
+
 fn default_pan_step_hz() -> f32 {
     500.0
 }
@@ -89,6 +93,10 @@ impl Default for NotchData {
 pub struct AppSettings {
     // CW demod / filter chain.
     pub bfo_hz: f32,
+    #[serde(default)]
+    pub cw_sideband: u8,
+    #[serde(default = "default_cw_sideband_auto")]
+    pub cw_sideband_auto: bool,
     pub passband_hz: f32,
     #[serde(default)]
     pub channel_filter: u8,
@@ -247,6 +255,8 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             bfo_hz: 500.0,
+            cw_sideband: 0,
+            cw_sideband_auto: true,
             passband_hz: DEFAULT_CHANNEL_PASSBAND_HZ,
             channel_filter: 0,
             decim_filter: 0,

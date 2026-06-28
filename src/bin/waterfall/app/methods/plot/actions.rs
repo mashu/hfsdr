@@ -144,14 +144,6 @@ impl WaterfallApp {
 
 
 
-    pub(crate) fn storage_row_width(&self, storage: &SpectrumViewMapping, row_len: usize) -> usize {
-        panadapter_output_bins(row_len, storage.view_span_hz, storage.data_span_hz).max(1)
-    }
-
-
-
-
-
     pub(crate) fn update_plot_hover(&mut self, ctx: &egui::Context) {
         let Some(rect) = self.plot.last_plot_interaction_rect else {
             self.plot.hover_offset_hz = None;

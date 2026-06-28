@@ -216,9 +216,7 @@ impl WaterfallApp {
                 self.plot.rows.push_front(stored);
             }
             self.display.waterfall_rows = self.plot.rows.len();
-            self.plot.waterfall.pending_row_appends += n_new;
             self.plot.waterfall.pending_viewport_row_appends += n_new;
-            self.plot.waterfall.textures_dirty = true;
             let levels_due = self
                 .plot.last_display_levels_at
                 .map(|t| t.elapsed() >= Duration::from_millis(300))

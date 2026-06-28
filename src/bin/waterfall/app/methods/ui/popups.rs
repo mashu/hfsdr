@@ -237,6 +237,65 @@ impl WaterfallApp {
 
 
 
+    pub(crate) fn envelope_popup(&mut self, ctx: &egui::Context) {
+        if !self.chrome.show_envelope_drawer {
+            return;
+        }
+        let screen = ctx.content_rect();
+        let max_h = (screen.height() - 12.0).max(280.0);
+        let body_max_h = popup_body_max_height(max_h);
+        let mut open = self.chrome.show_envelope_drawer;
+        let audio_rate = hfsdr::audio_sample_rate(
+            self.radio.sample_rate.max(self.engine_ui.stats.sample_rate),
+            self.radio.cw.decimation,
+        );
+        let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
+        let st = self.radio.cw.sidetone_envelope;
+        let subtitle = if st.enabled {
+            format!(
+                "rise {:.1} ms · fall {:.1} ms · {:.0} Hz audio",
+                st.rise_ms,
+                st.fall_ms,
+                audio_rate,
+            )
+        } else {
+            format!("Off · {:.0} Hz audio", audio_rate)
+        };
+        configure_popup_window(
+            "envelope_popup",
+            [
+                screen.left() + (screen.width() - 520.0) * 0.5,
+                screen.top() + 48.0,
+            ],
+            520.0,
+            max_h,
+        )
+        .show(ctx, |ui| {
+            popup_header(
+                ui,
+                PopupHeader {
+                    title: "Sidetone envelope",
+                    subtitle: Some(&subtitle),
+                    status: None,
+                },
+                &mut open,
+            );
+            popup_scroll_body(ui, body_max_h, |ui| {
+                crate::envelope_diagnostic::show_envelope_diagnostic_panel(
+                    ui,
+                    &crate::envelope_diagnostic::EnvelopeDiagnosticView {
+                        settings: &self.radio.cw.sidetone_envelope,
+                        audio_rate,
+                        streaming,
+                    },
+                );
+            });
+        });
+        self.chrome.show_envelope_drawer = open;
+    }
+
+
+
     pub(crate) fn shortcuts_popup(&mut self, ctx: &egui::Context) {
         if !self.chrome.show_shortcuts {
             return;

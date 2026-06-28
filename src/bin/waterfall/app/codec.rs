@@ -1,7 +1,7 @@
 //! Settings serialization helpers and small shared utilities.
 
 use hfsdr::{
-    AgcMode, ChannelFilterKind, FftWindowKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
+    AgcMode, ChannelFilterKind, CwSideband, FftWindowKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
     SidetoneEnvelopeShape, WindowKind, DecoderParams, EnvelopeSettings,
 };
 
@@ -102,6 +102,20 @@ pub(crate) fn agc_mode_from_u8(v: u8) -> AgcMode {
         2 => AgcMode::DualLoop,
         3 => AgcMode::Lookahead,
         _ => AgcMode::Envelope,
+    }
+}
+
+pub(crate) const fn sideband_to_u8(s: CwSideband) -> u8 {
+    match s {
+        CwSideband::Lower => 0,
+        CwSideband::Upper => 1,
+    }
+}
+
+pub(crate) fn sideband_from_u8(v: u8) -> CwSideband {
+    match v {
+        1 => CwSideband::Upper,
+        _ => CwSideband::Lower,
     }
 }
 
@@ -238,6 +252,14 @@ mod tests {
             channel_filter_from_u8(9),
             ChannelFilterKind::LinearFir
         );
+    }
+
+    #[test]
+    fn sideband_codec_roundtrip() {
+        for s in [CwSideband::Lower, CwSideband::Upper] {
+            assert_eq!(sideband_from_u8(sideband_to_u8(s)), s);
+        }
+        assert_eq!(sideband_from_u8(9), CwSideband::Lower);
     }
 
     #[test]

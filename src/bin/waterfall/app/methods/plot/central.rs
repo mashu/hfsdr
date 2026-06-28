@@ -35,19 +35,6 @@ impl WaterfallApp {
         let view = self.spectrum_view();
         let plot_full_span = self.plot_full_span_hz();
         let max_zoom = self.plot_max_zoom_out();
-        update_trace(
-            &self.plot.latest,
-            &mut self.plot.smoothed_trace,
-            &mut self.plot.trace_composed,
-            &mut self.plot.trace_view_key,
-            view.row_rate_hz,
-            view.view_span_hz,
-            view.data_span_hz,
-            view.compose_pan_offset_hz,
-            view.allow_band_padding,
-            self.display.smooth_alpha,
-            self.plot.latest_frame_tick,
-        );
         if self.display.show_band_overview && self.radio.is_kiwi {
             update_trace(
                 &self.plot.latest,
@@ -78,9 +65,32 @@ impl WaterfallApp {
         };
 
         let bw_max = self.passband_max_hz();
-        let plot_width = ui.available_width().round() as usize;
-        self.sync_waterfall_storage(ui.ctx());
+        let plot_width = stable_plot_width(ui.available_width());
         self.sync_waterfall_viewport(ui.ctx(), plot_width);
+        let trace_tick = self.plot.latest_frame_tick || self.plot.waterfall.trace_refresh;
+        if trace_tick {
+            let idx = self.waterfall_trace_row_index();
+            let trace_row = self
+                .plot
+                .rows
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| self.plot.latest.clone());
+            update_trace(
+                &trace_row,
+                &mut self.plot.smoothed_trace,
+                &mut self.plot.trace_composed,
+                &mut self.plot.trace_view_key,
+                view.row_rate_hz,
+                view.view_span_hz,
+                view.data_span_hz,
+                view.compose_pan_offset_hz,
+                view.allow_band_padding,
+                self.display.smooth_alpha,
+                true,
+            );
+        }
+        self.plot.waterfall.trace_refresh = false;
         let storage_span = self.waterfall_storage_view().view_span_hz;
         let freq_map = PlotFreqMapping::new(
             view.view_span_hz,
@@ -115,6 +125,7 @@ impl WaterfallApp {
             height: SCOPE_HEIGHT,
             plot_width: plot_width as f32,
             waterfall_display: self.plot.waterfall.viewport_texture.as_ref(),
+            waterfall_row_head: self.plot.waterfall.viewport_row_head,
         };
 
         let plot_actions = self.plot.panadapter_plot.show(
@@ -140,10 +151,19 @@ impl WaterfallApp {
 
 
     pub(crate) fn refresh_plot_composites(&mut self, ctx: &egui::Context, plot_width: usize) {
+        let plot_width = stable_plot_width(plot_width as f32);
         let view = self.spectrum_view();
         let plot_full_span = self.plot_full_span_hz();
+        self.sync_waterfall_viewport(ctx, plot_width);
+        let idx = self.waterfall_trace_row_index();
+        let trace_row = self
+            .plot
+            .rows
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| self.plot.latest.clone());
         update_trace(
-            &self.plot.latest,
+            &trace_row,
             &mut self.plot.smoothed_trace,
             &mut self.plot.trace_composed,
             &mut self.plot.trace_view_key,
@@ -155,6 +175,7 @@ impl WaterfallApp {
             self.display.smooth_alpha,
             true,
         );
+        self.plot.waterfall.trace_refresh = false;
         if self.display.show_band_overview && self.radio.is_kiwi {
             update_trace(
                 &self.plot.latest,
@@ -170,7 +191,6 @@ impl WaterfallApp {
                 true,
             );
         }
-        self.sync_waterfall_viewport(ctx, plot_width);
     }
 
 }

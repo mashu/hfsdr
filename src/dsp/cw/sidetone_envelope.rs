@@ -86,7 +86,6 @@ impl SidetoneEnvelope {
         *self = Self::new();
     }
 
-    #[cfg(test)]
     pub fn gain(&self) -> f32 {
         self.gain
     }

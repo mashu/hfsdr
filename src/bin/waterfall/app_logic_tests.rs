@@ -250,6 +250,23 @@ fn tune_to_hz_updates_center() {
 }
 
 #[test]
+fn sideband_auto_follows_band_plan() {
+    use hfsdr::CwSideband;
+
+    let mut app = test_app();
+    app.radio.sideband_auto = true;
+    app.radio.lock_ham_bands = false;
+    app.tune_to_hz(14_010_000.0);
+    assert_eq!(app.radio.cw.sideband, CwSideband::Lower);
+    app.tune_to_hz(7_010_000.0);
+    assert_eq!(app.radio.cw.sideband, CwSideband::Upper);
+    app.radio.sideband_auto = false;
+    app.radio.cw.sideband = CwSideband::Lower;
+    app.tune_to_hz(14_010_000.0);
+    assert_eq!(app.radio.cw.sideband, CwSideband::Lower);
+}
+
+#[test]
 fn slow_link_shows_unstable_badge() {
     let mut app = test_app();
     let mut stats = EngineStats::default();
@@ -371,6 +388,17 @@ fn invalidate_waterfall_history_clears_rows() {
     app.invalidate_waterfall_history();
     assert!(app.plot.rows.is_empty());
     assert!(app.plot.waterfall.textures_dirty);
+}
+
+#[test]
+fn waterfall_trace_row_index_follows_displayed_row_not_latest() {
+    let mut app = test_app();
+    app.plot.rows.push_front(vec![-50.0; FFT_SIZE]);
+    app.plot.rows.push_front(vec![-70.0; FFT_SIZE]);
+    app.plot.waterfall.pending_viewport_row_appends = 1;
+    assert_eq!(app.waterfall_trace_row_index(), 1);
+    app.plot.waterfall.pending_viewport_row_appends = 0;
+    assert_eq!(app.waterfall_trace_row_index(), 0);
 }
 
 #[test]

@@ -11,6 +11,23 @@ use super::super::freq_offset::ChannelOffsetHz;
 
 pub use super::sidetone_envelope::{SidetoneEnvelopeSettings, SidetoneEnvelopeShape};
 
+/// CW product-detector sideband — which side of the carrier you zero-beat on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CwSideband {
+    /// CW-L (LSB-style): tune **above** the signal; BFO mixes up.
+    #[default]
+    Lower,
+    /// CW-U (USB-style): tune **below** the signal; BFO mixes down.
+    Upper,
+}
+
+impl CwSideband {
+    /// Mix direction for the BFO product detector (`Lower` → mix up, `Upper` → mix down).
+    pub fn mix_up(self) -> bool {
+        matches!(self, Self::Lower)
+    }
+}
+
 /// Default channel FIR window for new sessions.
 pub const DEFAULT_CHANNEL_WINDOW: WindowKind = WindowKind::Blackman;
 
@@ -197,6 +214,8 @@ pub struct CwChannelSettings {
     /// Bandpass center offset from [`Self::listen_offset_hz`] (0 = filter centered on VFO).
     pub filter_shift_hz: ChannelOffsetHz,
     pub bfo_hz: f32,
+    /// CW-L vs CW-U product-detector sideband.
+    pub sideband: CwSideband,
     pub passband_hz: f32,
     pub channel_filter: ChannelFilterKind,
     /// 2-pole prototype when [`Self::effective_channel_filter`] is IIR.
@@ -232,6 +251,7 @@ impl Default for CwChannelSettings {
             listen_offset_hz: ChannelOffsetHz::ZERO,
             filter_shift_hz: ChannelOffsetHz::ZERO,
             bfo_hz: 500.0,
+            sideband: CwSideband::Lower,
             passband_hz: DEFAULT_CHANNEL_PASSBAND_HZ,
             channel_filter: ChannelFilterKind::LinearFir,
             iir_filter: IirFilterKind::Butterworth,

@@ -181,6 +181,14 @@ impl WaterfallApp {
                 if filter_resp.clicked() {
                     self.chrome.show_filter_drawer = !self.chrome.show_filter_drawer;
                 }
+                let envelope_resp = crate::status_widgets::envelope_diagnostic_chip(
+                    ui,
+                    self.chrome.show_envelope_drawer,
+                    self.radio.cw.sidetone_envelope.enabled,
+                );
+                if envelope_resp.clicked() {
+                    self.chrome.show_envelope_drawer = !self.chrome.show_envelope_drawer;
+                }
                 let gauge_resp = crate::status_widgets::iq_buffer_control(
                     ui,
                     self.engine_ui.stats.iq_buffer_fill,

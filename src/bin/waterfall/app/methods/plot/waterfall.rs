@@ -2,48 +2,19 @@ use crate::app::WaterfallApp;
 use crate::app::prelude::*;
 
 impl WaterfallApp {
+    /// Index into `plot.rows` for the FFT row aligned with the waterfall top line.
+    pub(crate) fn waterfall_trace_row_index(&self) -> usize {
+        self.plot
+            .waterfall
+            .pending_viewport_row_appends
+            .min(self.plot.rows.len().saturating_sub(1))
+    }
+
     pub(crate) fn waterfall_source_row(&self, row_index: usize) -> Option<&[f32]> {
         if let Some(row) = self.plot.rows.get(row_index) {
             return Some(row.as_slice());
         }
         (row_index == 0 && !self.plot.latest.is_empty()).then(|| self.plot.latest.as_slice())
-    }
-
-    pub(crate) fn waterfall_row_db_for_storage(
-        &self,
-        row_index: usize,
-        storage: &hfsdr::SpectrumViewMapping,
-        width: usize,
-        avg: usize,
-    ) -> Vec<f32> {
-        let mut acc = vec![0.0f32; width];
-        let mut count = 0usize;
-        for k in 0..avg {
-            let Some(row_data) = self.waterfall_source_row(row_index.saturating_add(k)) else {
-                break;
-            };
-            let row = compose_panadapter_row(
-                row_data,
-                storage.row_rate_hz,
-                storage.view_span_hz,
-                storage.data_span_hz,
-                storage.compose_pan_offset_hz,
-                storage.allow_band_padding,
-            );
-            let n = row.len().min(width);
-            for (i, &v) in row.iter().take(n).enumerate() {
-                acc[i] += v;
-            }
-            count += 1;
-        }
-        if count == 0 {
-            return vec![-120.0; width];
-        }
-        let inv = 1.0 / count as f32;
-        for v in &mut acc {
-            *v *= inv;
-        }
-        acc
     }
 
     pub(crate) fn waterfall_row_db_for_viewport(

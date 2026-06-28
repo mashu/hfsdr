@@ -11,7 +11,7 @@ pub(crate) use egui_extras::{Column, TableBuilder};
 pub(crate) use hfsdr::{
     decimation_factor, compose_panadapter_row, panadapter_output_bins, stretch_row_to_width,
     strongest_offset_hz, Continent,
-    ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
+    ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, CwSideband, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, IirFilterKind,
     SidetoneEnvelopeShape, WindowKind, FftWindowKind, DEFAULT_KAISER_BETA,
     MAX_KAISER_BETA, MAX_NOTCHES, MIN_KAISER_BETA,
@@ -79,6 +79,7 @@ pub(crate) use crate::app::codec::{
     normalize_waterfall_avg, plot_action_changes_view, skimmer_config_from_settings,
     skimmer_decoder_from_u8, skimmer_decoder_to_u8, spot_sort_from_u8, spot_sort_to_u8,
     st_envelope_shape_from_u8, st_envelope_shape_to_u8,
+    sideband_from_u8, sideband_to_u8,
     fft_window_from_u8, fft_window_to_u8,
     window_from_u8, window_to_u8,
 };

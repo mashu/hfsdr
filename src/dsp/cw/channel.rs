@@ -454,7 +454,8 @@ impl CwChannel {
             let raw = if diag.bfo {
                 scaled.re
             } else {
-                self.detector.process(scaled, settings.bfo_hz, audio_rate)
+                self.detector
+                    .process(scaled, settings.bfo_hz, audio_rate, settings.sideband)
             };
             let level = scaled.norm().max(1e-7);
             out.push(self.sidetone_envelope.process(
@@ -834,6 +835,7 @@ mod tests {
             listen_offset_hz: ChannelOffsetHz::new(120.0),
             filter_shift_hz: ChannelOffsetHz::ZERO,
             bfo_hz: 650.0,
+            sideband: super::super::settings::CwSideband::Lower,
             passband_hz: 250.0,
             channel_filter: ChannelFilterKind::LinearFir,
             iir_filter: super::super::settings::IirFilterKind::Butterworth,
