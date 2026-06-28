@@ -21,4 +21,6 @@ pub struct RadioState {
     pub last_snr_db: f32,
     /// When true, channel filter BW may extend to 2 kHz; when false, capped at 500 Hz (CW range).
     pub passband_wide: bool,
+    /// Follow band-plan CW sideband (CW-L / CW-U) when the RX center changes band.
+    pub sideband_auto: bool,
 }

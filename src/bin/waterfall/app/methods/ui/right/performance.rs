@@ -161,6 +161,18 @@ impl WaterfallApp {
                 if scroll_slider_f32(ui, &mut fps, 10.0..=60.0, "Target FPS").changed() {
                     self.display.target_fps = fps.round() as u32;
                 }
+                let mut wf_rows = self.display.waterfall_rows_per_frame as f32;
+                if scroll_slider_f32(ui, &mut wf_rows, 1.0..=8.0, "Waterfall rows / frame").changed()
+                {
+                    self.display.waterfall_rows_per_frame = wf_rows.round() as u32;
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "1 row/frame = smooth scroll; higher = faster catch-up but jumpier.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
                 if self.is_wideband() && self.skimmer_ui.skimmer_enabled {
                     ui.label(
                         egui::RichText::new(format!(
@@ -194,6 +206,65 @@ impl WaterfallApp {
                     stat_row(ui, "Audio out", name.clone());
                 }
             });
+
+            let wf = &self.plot.waterfall.perf;
+            if matches!(self.engine_ui.conn_state, ConnState::Streaming) {
+                popup_section(
+                    ui,
+                    "Waterfall (UI thread)",
+                    Some("Ring texture + mesh; interval jitter explains jumpy scroll"),
+                    |ui| {
+                        stat_row(
+                            ui,
+                            "Pending rows",
+                            wf.rows_pending.to_string(),
+                        );
+                        stat_row(
+                            ui,
+                            "Applied last frame",
+                            wf.rows_applied_last.to_string(),
+                        );
+                        stat_row(
+                            ui,
+                            "Rows / frame cap",
+                            wf.rows_per_frame_cap.to_string(),
+                        );
+                        if wf.row_interval_ms > 0.0 {
+                            stat_row(
+                                ui,
+                                "Row interval (EMA)",
+                                format!("{:.0} ms", wf.row_interval_ms),
+                            );
+                        }
+                        stat_row(
+                            ui,
+                            "Compose",
+                            format!("{:.0} µs", wf.compose_ns as f64 / 1000.0),
+                        );
+                        stat_row(
+                            ui,
+                            "GPU upload",
+                            format!("{:.0} µs", wf.upload_ns as f64 / 1000.0),
+                        );
+                        stat_row(
+                            ui,
+                            "Uploads",
+                            format!("full {} · partial {}", wf.uploads_full, wf.uploads_partial),
+                        );
+                        stat_row(ui, "Ring head", self.plot.waterfall.viewport_row_head.to_string());
+                        if wf.rows_pending > wf.rows_per_frame_cap {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Engine delivered a batch faster than UI applies — \
+                                     raise rows/frame or target FPS to catch up.",
+                                )
+                                .small()
+                                .color(egui::Color32::from_rgb(255, 200, 80)),
+                            );
+                        }
+                    },
+                );
+            }
 
             if self.display.perf_trace || m.measured_total_ns() > 0 {
                 popup_section(

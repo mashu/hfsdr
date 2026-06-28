@@ -1,10 +1,13 @@
 use crate::app::WaterfallApp;
 use crate::app::prelude::*;
+use crate::waterfall_perf::WaterfallPerf;
 
 impl WaterfallApp {
 
     pub(crate) fn apply_settings(&mut self, s: &AppSettings) {
         self.radio.cw.bfo_hz = s.bfo_hz;
+        self.radio.cw.sideband = sideband_from_u8(s.cw_sideband);
+        self.radio.sideband_auto = s.cw_sideband_auto;
         self.radio.cw.passband_hz = s.passband_hz;
         self.radio.cw.channel_filter = channel_filter_from_u8(s.channel_filter);
         self.radio.cw.decim_filter = channel_filter_from_u8(s.decim_filter);
@@ -117,6 +120,9 @@ impl WaterfallApp {
         }
         self.radio.center_khz = s.last_center_mhz * 1000.0;
         self.clamp_center_to_ham_bands();
+        if self.radio.sideband_auto {
+            self.sync_sideband_from_band();
+        }
         self.radio.last_center_khz = self.radio.center_khz;
         self.chrome.iq.capture_dir = if s.iq_capture_dir.is_empty() {
             hfsdr::default_capture_dir()
@@ -131,6 +137,8 @@ impl WaterfallApp {
     pub(crate) fn current_settings(&self) -> AppSettings {
         AppSettings {
             bfo_hz: self.radio.cw.bfo_hz,
+            cw_sideband: sideband_to_u8(self.radio.cw.sideband),
+            cw_sideband_auto: self.radio.sideband_auto,
             passband_hz: self.radio.cw.passband_hz,
             channel_filter: channel_filter_to_u8(self.radio.cw.channel_filter),
             decim_filter: channel_filter_to_u8(self.radio.cw.decim_filter),
@@ -278,7 +286,10 @@ impl WaterfallApp {
         self.plot.waterfall.viewport_pixels.clear();
         self.plot.waterfall.storage_tex_width = 0;
         self.plot.waterfall.viewport_tex_width = 0;
+        self.plot.waterfall.viewport_row_head = 0;
         self.plot.waterfall.viewport_texture = None;
+        self.plot.waterfall.trace_refresh = false;
+        self.plot.waterfall.perf = WaterfallPerf::default();
     }
 
 

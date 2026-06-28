@@ -77,6 +77,7 @@ impl WaterfallApp {
             self.invalidate_waterfall_history();
             self.engine.send(EngineCommand::Tune(self.radio.center_khz * 1000.0));
             self.radio.last_center_khz = self.radio.center_khz;
+            self.sync_sideband_from_band();
         }
         self.sync_kiwi_rf_now();
         self.apply_kiwi_rf_attn_settings();

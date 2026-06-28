@@ -3,6 +3,7 @@
 use crate::source::Complex32;
 
 use super::nco::ComplexNco;
+use super::settings::CwSideband;
 
 /// Mix baseband to BFO pitch and emit the real (product) component.
 #[derive(Clone, Debug)]
@@ -27,8 +28,18 @@ impl ProductDetector {
         self.bfo.reset();
     }
 
-    pub fn process(&mut self, sample: Complex32, bfo_hz: f32, sample_rate: f32) -> f32 {
-        let mixed = self.bfo.mix_up(sample, bfo_hz, sample_rate);
+    pub fn process(
+        &mut self,
+        sample: Complex32,
+        bfo_hz: f32,
+        sample_rate: f32,
+        sideband: CwSideband,
+    ) -> f32 {
+        let mixed = if sideband.mix_up() {
+            self.bfo.mix_up(sample, bfo_hz, sample_rate)
+        } else {
+            self.bfo.mix_down(sample, bfo_hz, sample_rate)
+        };
         mixed.re
     }
 }
@@ -51,18 +62,37 @@ mod tests {
                 re: phase.cos(),
                 im: phase.sin(),
             };
-            let out = det.process(sample, bfo, rate);
+            let out = det.process(sample, bfo, rate, CwSideband::Lower);
             peak = peak.max(out.abs());
         }
         assert!(peak > 0.5, "expected BFO tone, peak={peak}");
     }
 
     #[test]
+    fn upper_sideband_demods_tone_above_dc() {
+        let rate = 12_000.0;
+        let bfo = 650.0;
+        let mut det = ProductDetector::new();
+        let mut peak = 0.0f32;
+        for n in 0..rate as usize {
+            let t = n as f32 / rate;
+            let phase = std::f32::consts::TAU * bfo * t;
+            let sample = Complex32 {
+                re: phase.cos(),
+                im: phase.sin(),
+            };
+            let out = det.process(sample, bfo, rate, CwSideband::Upper);
+            peak = peak.max(out.abs());
+        }
+        assert!(peak > 0.5, "expected CW-U BFO tone, peak={peak}");
+    }
+
+    #[test]
     fn reset_restores_initial_state() {
         let mut det = ProductDetector::new();
-        let _ = det.process(Complex32::new(1.0, 0.0), 500.0, 12_000.0);
+        let _ = det.process(Complex32::new(1.0, 0.0), 500.0, 12_000.0, CwSideband::Lower);
         det.reset_state();
-        let out = det.process(Complex32::new(1.0, 0.0), 0.0, 12_000.0);
+        let out = det.process(Complex32::new(1.0, 0.0), 0.0, 12_000.0, CwSideband::Lower);
         assert!((out - 1.0).abs() < 0.01);
     }
 }

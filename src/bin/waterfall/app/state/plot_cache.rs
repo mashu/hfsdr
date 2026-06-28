@@ -3,6 +3,7 @@
 use eframe::egui::{self, Color32};
 
 use crate::app::{StorageKey, ViewportKey};
+use crate::waterfall_perf::WaterfallPerf;
 
 pub struct WaterfallTextureCache {
     pub storage_pixels: Vec<Color32>,
@@ -11,11 +12,16 @@ pub struct WaterfallTextureCache {
     pub viewport_texture: Option<egui::TextureHandle>,
     pub viewport_pixels: Vec<Color32>,
     pub viewport_tex_width: usize,
+    /// Next ring-buffer row to write (0..WATERFALL_ROWS).
+    pub viewport_row_head: usize,
     pub last_viewport_key: Option<ViewportKey>,
     pub textures_dirty: bool,
     pub force_texture_full: bool,
     pub pending_row_appends: usize,
     pub pending_viewport_row_appends: usize,
+    /// Set when new waterfall rows were painted — trace must follow the displayed row, not `latest`.
+    pub trace_refresh: bool,
+    pub perf: WaterfallPerf,
 }
 
 impl Default for WaterfallTextureCache {
@@ -27,11 +33,14 @@ impl Default for WaterfallTextureCache {
             viewport_texture: None,
             viewport_pixels: Vec::new(),
             viewport_tex_width: 0,
+            viewport_row_head: 0,
             last_viewport_key: None,
             textures_dirty: true,
             force_texture_full: false,
             pending_row_appends: 0,
             pending_viewport_row_appends: 0,
+            trace_refresh: false,
+            perf: WaterfallPerf::default(),
         }
     }
 }

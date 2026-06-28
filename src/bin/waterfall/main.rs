@@ -18,6 +18,7 @@ mod interaction;
 mod iq_panel;
 mod kiwi_directory;
 mod filter_diagnostic;
+mod envelope_diagnostic;
 mod pipeline_flow;
 mod log;
 mod scp_fetch;
@@ -30,6 +31,7 @@ mod spot_filter;
 mod status_widgets;
 mod theme;
 mod widgets;
+mod waterfall_perf;
 
 #[cfg(test)]
 mod ui_smoke;

@@ -1,12 +1,12 @@
 //! Waterfall texture upload and incremental cache sync.
 
-use eframe::egui::{self, Color32};
+use std::time::Instant;
 
-use hfsdr::{compose_panadapter_row, stretch_row_to_width};
+use eframe::egui::{self, Color32};
 
 use crate::app::prelude::*;
 use crate::app::WaterfallApp;
-use crate::app::{StorageKey, ViewportKey};
+use crate::app::ViewportKey;
 use crate::colormap::db_to_colour;
 
 impl WaterfallApp {
@@ -24,12 +24,13 @@ impl WaterfallApp {
         }
     }
 
-    pub(crate) fn upload_waterfall_viewport(
+    pub(crate) fn upload_waterfall_viewport_full(
         &mut self,
         ctx: &egui::Context,
         width: usize,
         height: usize,
     ) {
+        let t0 = Instant::now();
         let cache = &mut self.plot.waterfall;
         let image = egui::ColorImage::new([width, height], cache.viewport_pixels.clone());
         match &mut cache.viewport_texture {
@@ -42,84 +43,54 @@ impl WaterfallApp {
                 ));
             }
         }
+        cache.perf.upload_ns = t0.elapsed().as_nanos() as u64;
+        cache.perf.uploads_full += 1;
     }
 
-    pub(crate) fn sync_waterfall_storage(&mut self, ctx: &egui::Context) {
-        if self.plot.rows.is_empty() {
+    fn upload_waterfall_ring_rows(
+        &mut self,
+        ctx: &egui::Context,
+        width: usize,
+        head: usize,
+        count: usize,
+    ) {
+        let count = count.min(WATERFALL_ROWS);
+        if count == 0 || width == 0 {
             return;
         }
-        let storage = self.waterfall_storage_view();
-        let row_len = self
-            .plot
-            .rows
-            .front()
-            .map(|r| r.len())
-            .unwrap_or_else(|| self.plot.latest.len());
-        if row_len == 0 {
-            return;
-        }
-        let w = self.storage_row_width(&storage, row_len);
+        let t0 = Instant::now();
         let h = WATERFALL_ROWS;
-        let key = StorageKey::from_storage(&storage, w);
-        let avg = self.display.waterfall_avg.max(1) as usize;
-        let ref_db = self.display.ref_db;
-        let range_db = self.display.range_db;
-        let n_new = self.plot.waterfall.pending_row_appends.min(h);
-        let can_append = n_new > 0
-            && n_new < h
-            && !self.plot.waterfall.force_texture_full
-            && self.plot.waterfall.last_storage_key == Some(key)
-            && self.plot.waterfall.storage_tex_width == w
-            && self.plot.waterfall.storage_pixels.len() == w * h;
-
-        if can_append {
-            let stride = w;
-            for y in (0..h - n_new).rev() {
-                let src = y * stride;
-                self.plot.waterfall.storage_pixels.copy_within(
-                    src..src + stride,
-                    (y + n_new) * stride,
-                );
-            }
-            for y in 0..n_new {
-                let row_db = self.waterfall_row_db_for_storage(y, &storage, w, avg);
-                Self::write_row_pixels(
-                    &mut self.plot.waterfall.storage_pixels,
-                    y,
-                    w,
-                    &row_db,
-                    ref_db,
-                    range_db,
-                );
-            }
-        } else if self.plot.waterfall.textures_dirty
-            || self.plot.waterfall.force_texture_full
-            || self.plot.waterfall.last_storage_key != Some(key)
-            || self.plot.waterfall.storage_tex_width != w
-            || self.plot.waterfall.storage_pixels.len() != w * h
-        {
-            self.plot.waterfall.storage_tex_width = w;
-            self.plot.waterfall.storage_pixels.resize(w * h, Color32::BLACK);
-            for y in 0..h {
-                let row_db = self.waterfall_row_db_for_storage(y, &storage, w, avg);
-                Self::write_row_pixels(
-                    &mut self.plot.waterfall.storage_pixels,
-                    y,
-                    w,
-                    &row_db,
-                    ref_db,
-                    range_db,
-                );
-            }
-            self.plot.waterfall.last_storage_key = Some(key);
-            self.plot.waterfall.last_viewport_key = None;
-        } else {
+        let head = head % h;
+        let stride = width;
+        if self.plot.waterfall.viewport_pixels.len() < h * stride {
             return;
         }
-
-        self.plot.waterfall.textures_dirty = false;
-        self.plot.waterfall.pending_row_appends = 0;
-        let _ = ctx;
+        let needs_full = self.plot.waterfall.viewport_texture.is_none();
+        if needs_full {
+            self.upload_waterfall_viewport_full(ctx, width, h);
+            return;
+        }
+        let pixels = &self.plot.waterfall.viewport_pixels;
+        let upload_rows = |tex: &mut egui::TextureHandle, y: usize, rows: usize| {
+            if rows == 0 {
+                return;
+            }
+            let start = y * stride;
+            let end = start + rows * stride;
+            let patch = egui::ColorImage::new([width, rows], pixels[start..end].to_vec());
+            tex.set_partial([0, y], patch, egui::TextureOptions::NEAREST);
+        };
+        if let Some(tex) = &mut self.plot.waterfall.viewport_texture {
+            if head + count <= h {
+                upload_rows(tex, head, count);
+            } else {
+                let first = h - head;
+                upload_rows(tex, head, first);
+                upload_rows(tex, 0, count - first);
+            }
+            self.plot.waterfall.perf.uploads_partial += 1;
+        }
+        self.plot.waterfall.perf.upload_ns = t0.elapsed().as_nanos() as u64;
     }
 
     pub(crate) fn sync_waterfall_viewport(&mut self, ctx: &egui::Context, plot_width: usize) {
@@ -133,9 +104,14 @@ impl WaterfallApp {
         let avg = self.display.waterfall_avg.max(1) as usize;
         let ref_db = self.display.ref_db;
         let range_db = self.display.range_db;
-        let n_new = self.plot.waterfall.pending_viewport_row_appends.min(h);
-        let can_append = n_new > 0
-            && n_new < h
+        let pending_start = self.plot.waterfall.pending_viewport_row_appends.min(h);
+        let rows_per_frame = self.display.waterfall_rows_per_frame.max(1) as usize;
+        let n_apply = waterfall_rows_to_apply(pending_start, rows_per_frame);
+        self.plot.waterfall.perf.rows_per_frame_cap = rows_per_frame as u32;
+        self.plot.waterfall.perf.rows_pending = pending_start as u32;
+        self.plot.waterfall.perf.sync_calls += 1;
+
+        let can_append = n_apply > 0
             && !self.plot.waterfall.force_texture_full
             && !self.plot.waterfall.textures_dirty
             && self.plot.waterfall.last_viewport_key == Some(key)
@@ -144,16 +120,13 @@ impl WaterfallApp {
             && self.plot.waterfall.viewport_pixels.len() == dst_w * h;
 
         if can_append {
-            let stride = dst_w;
-            for y in (0..h - n_new).rev() {
-                let src = y * stride;
-                self.plot.waterfall.viewport_pixels.copy_within(
-                    src..src + stride,
-                    (y + n_new) * stride,
-                );
-            }
-            for y in 0..n_new {
-                let row_db = self.waterfall_row_db_for_viewport(y, &view, dst_w, avg);
+            let t_compose = Instant::now();
+            let head = self.plot.waterfall.viewport_row_head;
+            for i in 0..n_apply {
+                let y = (head + i) % h;
+                let history_idx = pending_start - n_apply + i;
+                let row_db =
+                    self.waterfall_row_db_for_viewport(history_idx, &view, dst_w, avg);
                 Self::write_row_pixels(
                     &mut self.plot.waterfall.viewport_pixels,
                     y,
@@ -163,25 +136,35 @@ impl WaterfallApp {
                     range_db,
                 );
             }
-            self.upload_waterfall_viewport(ctx, dst_w, h);
-            self.plot.waterfall.pending_viewport_row_appends = 0;
+            self.plot.waterfall.perf.compose_ns = t_compose.elapsed().as_nanos() as u64;
+            self.upload_waterfall_ring_rows(ctx, dst_w, head, n_apply);
+            self.plot.waterfall.viewport_row_head = (head + n_apply) % h;
+            self.plot.waterfall.pending_viewport_row_appends -= n_apply;
+            self.plot.waterfall.perf.record_row_apply(n_apply as u32);
+            self.plot.waterfall.trace_refresh = n_apply > 0;
+            self.plot.waterfall.textures_dirty = false;
             return;
         }
 
-        if self.plot.waterfall.last_viewport_key == Some(key)
+        if pending_start == 0
+            && self.plot.waterfall.last_viewport_key == Some(key)
             && self.plot.waterfall.viewport_texture.is_some()
             && self.plot.waterfall.viewport_tex_width == dst_w
             && self.plot.waterfall.viewport_pixels.len() == dst_w * h
             && !self.plot.waterfall.textures_dirty
             && !self.plot.waterfall.force_texture_full
         {
-            self.plot.waterfall.pending_viewport_row_appends = 0;
             return;
         }
 
+        let t_compose = Instant::now();
         self.plot.waterfall.viewport_pixels.resize(dst_w * h, Color32::BLACK);
-        for y in 0..h {
-            let row_db = self.waterfall_row_db_for_viewport(y, &view, dst_w, avg);
+        let fill = h.min(self.plot.rows.len());
+        let mut head = 0usize;
+        for i in 0..fill {
+            let history_idx = fill - 1 - i;
+            let y = head;
+            let row_db = self.waterfall_row_db_for_viewport(history_idx, &view, dst_w, avg);
             Self::write_row_pixels(
                 &mut self.plot.waterfall.viewport_pixels,
                 y,
@@ -190,11 +173,17 @@ impl WaterfallApp {
                 ref_db,
                 range_db,
             );
+            head = (head + 1) % h;
         }
+        self.plot.waterfall.perf.compose_ns = t_compose.elapsed().as_nanos() as u64;
         self.plot.waterfall.viewport_tex_width = dst_w;
-        self.upload_waterfall_viewport(ctx, dst_w, h);
+        self.plot.waterfall.viewport_row_head = head;
+        self.upload_waterfall_viewport_full(ctx, dst_w, h);
         self.plot.waterfall.last_viewport_key = Some(key);
         self.plot.waterfall.pending_viewport_row_appends = 0;
         self.plot.waterfall.force_texture_full = false;
+        self.plot.waterfall.textures_dirty = false;
+        self.plot.waterfall.trace_refresh = fill > 0;
+        self.plot.waterfall.perf.reset_interval();
     }
 }

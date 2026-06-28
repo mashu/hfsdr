@@ -277,6 +277,69 @@ impl WaterfallApp {
                             "BFO tone",
                             10.0,
                         );
+                        let band_sideband =
+                            cw_sideband_for_center(self.radio.center_khz * 1000.0);
+                        let sideband_sel = if self.radio.sideband_auto {
+                            0
+                        } else if self.radio.cw.sideband == CwSideband::Lower {
+                            1
+                        } else {
+                            2
+                        };
+                        if let Some(i) = labeled_segment_choice(
+                            ui,
+                            "cw_sideband",
+                            "Demod",
+                            sideband_sel,
+                            &["Auto", "CW-L", "CW-U"],
+                            36.0,
+                        ) {
+                            match i {
+                                1 => {
+                                    self.radio.sideband_auto = false;
+                                    self.radio.cw.sideband = CwSideband::Lower;
+                                }
+                                2 => {
+                                    self.radio.sideband_auto = false;
+                                    self.radio.cw.sideband = CwSideband::Upper;
+                                }
+                                _ => {
+                                    self.radio.sideband_auto = true;
+                                    self.sync_sideband_from_band();
+                                }
+                            }
+                        }
+                        let band_label = Self::cw_band_for_center(self.radio.center_khz * 1000.0)
+                            .map(|b| b.label)
+                            .unwrap_or("off-band");
+                        let band_sideband_label = match band_sideband {
+                            CwSideband::Lower => "CW-L",
+                            CwSideband::Upper => "CW-U",
+                        };
+                        let sideband_hint = if self.radio.sideband_auto {
+                            format!(
+                                "Band plan ({band_label}): {band_sideband_label} — tune {} the carrier",
+                                if band_sideband == CwSideband::Lower {
+                                    "above"
+                                } else {
+                                    "below"
+                                }
+                            )
+                        } else {
+                            format!(
+                                "Manual {} — tune {} the carrier",
+                                match self.radio.cw.sideband {
+                                    CwSideband::Lower => "CW-L",
+                                    CwSideband::Upper => "CW-U",
+                                },
+                                if self.radio.cw.sideband == CwSideband::Lower {
+                                    "above"
+                                } else {
+                                    "below"
+                                }
+                            )
+                        };
+                        ui.label(egui::RichText::new(sideband_hint).small().color(MUTED));
                         self.cw_carrier_tools(ui);
                     },
                 );

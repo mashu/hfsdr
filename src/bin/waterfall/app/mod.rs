@@ -119,6 +119,7 @@ impl WaterfallApp {
                 last_kiwi_has_rf_attn: false,
                 last_snr_db: 0.0,
                 passband_wide: false,
+                sideband_auto: true,
             },
             plot: PlotState {
                 rows: VecDeque::with_capacity(WATERFALL_ROWS),
@@ -163,6 +164,7 @@ impl WaterfallApp {
                 fft_auto: true,
                 full_drain_spectrum: false,
                 perf_trace: false,
+                waterfall_rows_per_frame: 4,
             },
             audio: AudioUiState {
                 audio_devices,
@@ -205,6 +207,7 @@ impl WaterfallApp {
                 show_iq_drawer: false,
                 show_pipeline_drawer: false,
                 show_filter_drawer: false,
+                show_envelope_drawer: false,
                 pipeline_flow: PipelineFlow::new(),
                 filter_diagnostic: crate::filter_diagnostic::FilterDiagnosticState::default(),
                 notch_bypass_stash: None,
@@ -286,6 +289,9 @@ impl eframe::App for WaterfallApp {
         self.poll_kiwi_directory();
         self.handle_shortcuts(&ctx);
         self.pump_engine();
+        if self.plot.waterfall.pending_viewport_row_appends > 0 {
+            ctx.request_repaint();
+        }
         self.skimmer_ui.frame_visible_spots = self.visible_spots();
 
         let meter_dt = ui.input(|i| i.stable_dt);
@@ -344,7 +350,8 @@ impl eframe::App for WaterfallApp {
         self.iq_popup(&ctx);
         self.pipeline_popup(&ctx);
         self.filter_popup(&ctx);
-        if self.chrome.show_filter_drawer {
+        self.envelope_popup(&ctx);
+        if self.chrome.show_filter_drawer || self.chrome.show_envelope_drawer {
             ctx.request_repaint();
         }
         self.shortcuts_popup(&ctx);

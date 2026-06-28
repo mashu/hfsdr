@@ -17,6 +17,7 @@ pub struct ChromeState {
     pub show_iq_drawer: bool,
     pub show_pipeline_drawer: bool,
     pub show_filter_drawer: bool,
+    pub show_envelope_drawer: bool,
     pub pipeline_flow: PipelineFlow,
     pub filter_diagnostic: crate::filter_diagnostic::FilterDiagnosticState,
     pub notch_bypass_stash: Option<[bool; MAX_NOTCHES]>,

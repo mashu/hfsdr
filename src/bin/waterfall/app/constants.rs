@@ -1,6 +1,6 @@
 //! Layout presets, band plans, and waterfall texture cache keys.
 
-use hfsdr::{CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ, SpectrumViewMapping};
+use hfsdr::{CHANNEL_PASSBAND_MAX_HZ, CHANNEL_PASSBAND_MIN_HZ, CwSideband};
 
 /// Minimum RX panel width (VFO digit wheels + section margins).
 pub(crate) const LEFT_PANEL_MIN_W: f32 = 288.0;
@@ -14,27 +14,39 @@ pub(crate) struct CwBandPreset {
     pub(crate) label: &'static str,
     pub(crate) center_hz: f64,
     pub(crate) segment_hz: f32,
+    /// Typical CW sideband on this band (IARU Region 1 band plan).
+    pub(crate) default_sideband: CwSideband,
 }
 
 pub(crate) const CW_HF_BAND_PRESETS: [CwBandPreset; 10] = [
-    CwBandPreset { label: "160m", center_hz: 1_810_000.0, segment_hz: 30_000.0 },
-    CwBandPreset { label: "80m", center_hz: 3_510_000.0, segment_hz: 80_000.0 },
-    CwBandPreset { label: "60m", center_hz: 5_354_000.0, segment_hz: 56_000.0 },
-    CwBandPreset { label: "40m", center_hz: 7_010_000.0, segment_hz: 40_000.0 },
-    CwBandPreset { label: "30m", center_hz: 10_110_000.0, segment_hz: 40_000.0 },
-    CwBandPreset { label: "20m", center_hz: 14_010_000.0, segment_hz: 70_000.0 },
-    CwBandPreset { label: "17m", center_hz: 18_080_000.0, segment_hz: 43_000.0 },
-    CwBandPreset { label: "15m", center_hz: 21_010_000.0, segment_hz: 70_000.0 },
-    CwBandPreset { label: "12m", center_hz: 24_900_000.0, segment_hz: 40_000.0 },
-    CwBandPreset { label: "10m", center_hz: 28_010_000.0, segment_hz: 70_000.0 },
+    CwBandPreset { label: "160m", center_hz: 1_810_000.0, segment_hz: 30_000.0, default_sideband: CwSideband::Lower },
+    CwBandPreset { label: "80m", center_hz: 3_510_000.0, segment_hz: 80_000.0, default_sideband: CwSideband::Upper },
+    CwBandPreset { label: "60m", center_hz: 5_354_000.0, segment_hz: 56_000.0, default_sideband: CwSideband::Lower },
+    CwBandPreset { label: "40m", center_hz: 7_010_000.0, segment_hz: 40_000.0, default_sideband: CwSideband::Upper },
+    CwBandPreset { label: "30m", center_hz: 10_110_000.0, segment_hz: 40_000.0, default_sideband: CwSideband::Lower },
+    CwBandPreset { label: "20m", center_hz: 14_010_000.0, segment_hz: 70_000.0, default_sideband: CwSideband::Lower },
+    CwBandPreset { label: "17m", center_hz: 18_080_000.0, segment_hz: 43_000.0, default_sideband: CwSideband::Lower },
+    CwBandPreset { label: "15m", center_hz: 21_010_000.0, segment_hz: 70_000.0, default_sideband: CwSideband::Lower },
+    CwBandPreset { label: "12m", center_hz: 24_900_000.0, segment_hz: 40_000.0, default_sideband: CwSideband::Lower },
+    CwBandPreset { label: "10m", center_hz: 28_010_000.0, segment_hz: 70_000.0, default_sideband: CwSideband::Lower },
 ];
 
 /// VHF and up — separate from HF so the band grid matches the band plan.
 pub(crate) const CW_VHF_BAND_PRESETS: [CwBandPreset; 1] = [
-    CwBandPreset { label: "6m", center_hz: 50_090_000.0, segment_hz: 100_000.0 },
+    CwBandPreset { label: "6m", center_hz: 50_090_000.0, segment_hz: 100_000.0, default_sideband: CwSideband::Lower },
 ];
 
 pub(crate) const DEFAULT_CENTER_HZ: f64 = 14_010_000.0;
+
+/// CW sideband from the band plan for `center_hz`, or CW-L when off-band.
+pub(crate) fn cw_sideband_for_center(center_hz: f64) -> CwSideband {
+    CW_HF_BAND_PRESETS
+        .iter()
+        .chain(CW_VHF_BAND_PRESETS.iter())
+        .find(|band| (center_hz - band.center_hz).abs() < 25_000.0)
+        .map(|band| band.default_sideband)
+        .unwrap_or(CwSideband::Lower)
+}
 
 pub(crate) const BFO_PRESETS: [(&str, f32); 5] =
     [("400", 400.0), ("450", 450.0), ("500", 500.0), ("600", 600.0), ("700", 700.0)];
@@ -124,16 +136,6 @@ pub(crate) struct StorageKey {
     row_rate_hz: u32,
 }
 
-impl StorageKey {
-    pub(crate) fn from_storage(storage: &SpectrumViewMapping, tex_width: usize) -> Self {
-        Self {
-            tex_width: tex_width as u32,
-            storage_span_hz: storage.view_span_hz.round() as u32,
-            row_rate_hz: storage.row_rate_hz.round() as u32,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ViewportKey {
     view_span_hz: u32,
@@ -151,6 +153,27 @@ impl ViewportKey {
     }
 }
 
+/// Quantize plot width so minor egui layout jitter does not rebuild the waterfall texture every frame.
+pub(crate) fn stable_plot_width(raw: f32) -> usize {
+    let w = raw.round().max(1.0) as usize;
+    ((w + 7) / 8) * 8
+}
+
+/// Max FFT rows composited into the waterfall per UI frame when catching up on backlog.
+pub(crate) const MAX_WATERFALL_ROWS_PER_FRAME: usize = 24;
+
+/// Rows to apply this frame: honor the user cap when caught up; drain backlog when behind.
+pub(crate) fn waterfall_rows_to_apply(pending: usize, rows_per_frame: usize) -> usize {
+    if pending == 0 {
+        return 0;
+    }
+    let base = rows_per_frame.max(1);
+    if pending <= base {
+        return pending;
+    }
+    pending.min(MAX_WATERFALL_ROWS_PER_FRAME.max(base))
+}
+
 #[cfg(feature = "airspy")]
 pub(crate) const AIRSPY_PROCESS_RATE_PRESETS: &[(&str, u32)] = &[
     ("48 kHz (recommended)", 48_000),
@@ -165,3 +188,32 @@ pub(crate) const QMX_PROCESS_RATE_PRESETS: &[(&str, u32)] = &[
     ("Native (48 kHz)", 0),
     ("12 kHz", 12_000),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_plot_width_quantizes_to_eight_pixels() {
+        assert_eq!(stable_plot_width(1201.0), 1208);
+        assert_eq!(stable_plot_width(1200.0), 1200);
+    }
+
+    #[test]
+    fn waterfall_rows_to_apply_catches_up_when_behind() {
+        assert_eq!(waterfall_rows_to_apply(0, 1), 0);
+        assert_eq!(waterfall_rows_to_apply(1, 4), 1);
+        assert_eq!(waterfall_rows_to_apply(4, 4), 4);
+        assert_eq!(waterfall_rows_to_apply(10, 1), 10);
+        assert_eq!(waterfall_rows_to_apply(40, 1), MAX_WATERFALL_ROWS_PER_FRAME);
+    }
+
+    #[test]
+    fn band_plan_sideband_defaults() {
+        use hfsdr::CwSideband;
+        assert_eq!(cw_sideband_for_center(14_010_000.0), CwSideband::Lower);
+        assert_eq!(cw_sideband_for_center(7_010_000.0), CwSideband::Upper);
+        assert_eq!(cw_sideband_for_center(3_510_000.0), CwSideband::Upper);
+        assert_eq!(cw_sideband_for_center(16_000_000.0), CwSideband::Lower);
+    }
+}

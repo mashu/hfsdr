@@ -1,12 +1,14 @@
 use eframe::egui::{
-    Align2, Color32, FontId, Painter, Pos2, Rect, Stroke,
+    Align2, Color32, FontId, Painter, Rect, Shape, Stroke,
 };
 
+use crate::engine::WATERFALL_ROWS;
 use crate::interaction::PlotFreqMapping;
 
 use super::filter_band::{draw_filter_band, draw_notch_marker};
 use super::freq_axis::draw_center_line;
 use super::freq_axis::draw_freq_vertical_grid;
+use super::waterfall_mesh::build_waterfall_ring_mesh;
 use super::PlotParams;
 
 pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: PlotFreqMapping, p: &PlotParams) {
@@ -14,12 +16,8 @@ pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: Plot
     let pan = freq_map.pan_offset_hz;
 
     if let Some(tex) = p.waterfall_display {
-        painter.image(
-            tex.id(),
-            rect,
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
+        let mesh = build_waterfall_ring_mesh(rect, p.waterfall_row_head, WATERFALL_ROWS, tex.id());
+        painter.add(Shape::mesh(mesh));
     } else {
         painter.rect_filled(rect, 6.0, Color32::from_rgb(10, 12, 18));
         painter.text(

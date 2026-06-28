@@ -119,6 +119,16 @@ impl WaterfallApp {
 
 
 
+    pub(crate) fn sync_sideband_from_band(&mut self) {
+        if !self.radio.sideband_auto {
+            return;
+        }
+        let center_hz = self.radio.center_khz * 1000.0;
+        self.radio.cw.sideband = cw_sideband_for_center(center_hz);
+    }
+
+
+
     pub(crate) fn band_preset_selector(&mut self, ui: &mut egui::Ui) {
         let center_hz = self.radio.center_khz * 1000.0;
         let presets: Vec<&CwBandPreset> = CW_HF_BAND_PRESETS
@@ -172,6 +182,7 @@ impl WaterfallApp {
         self.plot.tune_preview_offset_hz = None;
         self.clear_rit();
         self.sync_filter_to_listen();
+        self.sync_sideband_from_band();
         self.invalidate_waterfall_history();
         self.apply_radio_settings();
     }
@@ -188,6 +199,7 @@ impl WaterfallApp {
         self.plot.tune_preview_offset_hz = None;
         self.clear_rit();
         self.sync_filter_to_listen();
+        self.sync_sideband_from_band();
     }
 
 

@@ -50,6 +50,52 @@ pub fn engine_pipeline_chip(ui: &mut Ui, panel_open: bool, streaming: bool) -> R
     )
 }
 
+/// Sidetone envelope chip — opens before/after keying shape preview.
+pub fn envelope_diagnostic_chip(ui: &mut Ui, panel_open: bool, envelope_active: bool) -> Response {
+    let size = Vec2::new(72.0, 20.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = chip_hovered(ui, rect, &response);
+    let painter = ui.painter_at(rect);
+    let rounding = 4.0;
+    let accent = if panel_open || hovered {
+        ACCENT
+    } else if envelope_active {
+        Color32::from_rgb(251, 191, 36)
+    } else {
+        MUTED
+    };
+    let border = Color32::from_rgba_unmultiplied(
+        accent.r(),
+        accent.g(),
+        accent.b(),
+        if hovered || panel_open { 200 } else { 110 },
+    );
+    let bg = if hovered || panel_open {
+        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28)
+    } else {
+        Color32::from_rgb(30, 36, 48)
+    };
+    painter.rect(rect, rounding, bg, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    painter.text(
+        rect.center() - Vec2::new(6.0, 0.0),
+        egui::Align2::CENTER_CENTER,
+        "Envelope",
+        FontId::proportional(11.0),
+        accent,
+    );
+    painter.text(
+        egui::pos2(rect.right() - 6.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        "▾",
+        FontId::proportional(10.0),
+        accent,
+    );
+    response.on_hover_text(
+        "Sidetone envelope preview — hard BFO edges vs shaped keying\n\
+         Compare rise, fall, and edge shape from CW demod settings",
+    )
+}
+
 /// Filter diagnostic chip — opens magnitude response curves (notches + channel FIR).
 pub fn filter_diagnostic_chip(ui: &mut Ui, panel_open: bool, filters_active: bool) -> Response {
     let size = Vec2::new(58.0, 20.0);
@@ -466,6 +512,8 @@ mod tests {
             .build_ui_state(|ui, ()| {
                 ui.horizontal(|ui| {
                     let _ = engine_pipeline_chip(ui, false, true);
+                    let _ = filter_diagnostic_chip(ui, false, true);
+                    let _ = envelope_diagnostic_chip(ui, false, true);
                     let _ = iq_buffer_control(ui, 0.55, 1.2, false);
                     let _ = iq_record_toggle(ui, false, true, 0.0);
                     let _ = iq_playback_chip(ui, false, true);

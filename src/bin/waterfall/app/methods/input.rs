@@ -92,6 +92,7 @@ impl WaterfallApp {
             self.chrome.show_iq_drawer = false;
             self.chrome.show_pipeline_drawer = false;
             self.chrome.show_filter_drawer = false;
+            self.chrome.show_envelope_drawer = false;
         }
     }
 
@@ -123,6 +124,10 @@ impl WaterfallApp {
         }
         if self.chrome.show_filter_drawer {
             self.chrome.show_filter_drawer = false;
+            return true;
+        }
+        if self.chrome.show_envelope_drawer {
+            self.chrome.show_envelope_drawer = false;
             return true;
         }
         if self.connection_session_live() {

@@ -25,4 +25,6 @@ pub struct DisplayState {
     pub full_drain_spectrum: bool,
     /// Show per-pump DSP timings in the Performance panel (`HFSDR_PERF=1` also enables).
     pub perf_trace: bool,
+    /// Max FFT rows applied to the waterfall texture per UI frame (1 = smoothest scroll).
+    pub waterfall_rows_per_frame: u32,
 }

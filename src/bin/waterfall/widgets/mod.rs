@@ -7,6 +7,7 @@ mod smooth;
 mod spot_labels;
 mod trace;
 mod waterfall;
+mod waterfall_mesh;
 
 use eframe::egui::{Painter, Rect, Sense, Ui, Vec2};
 
@@ -61,6 +62,8 @@ pub struct PlotParams<'a> {
     pub plot_width: f32,
     /// Viewport waterfall texture (same frequency mapping as the scope trace).
     pub waterfall_display: Option<&'a eframe::egui::TextureHandle>,
+    /// Ring-buffer write head (`next` row index); draw uses fixed screen UV mapping.
+    pub waterfall_row_head: usize,
 }
 
 pub struct PanadapterPlot;
