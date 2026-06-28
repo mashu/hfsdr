@@ -57,6 +57,8 @@ pub(crate) use crate::log;
 pub(crate) use crate::pipeline_flow::{PipelineFlow, PipelineSnapshot, PipelineStage};
 pub(crate) use crate::settings::{AppSettings, NotchData};
 pub(crate) use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind};
+#[cfg(feature = "soapy")]
+pub(crate) use crate::source::SoapySettings;
 pub(crate) use crate::spot_filter::{
     build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
 };

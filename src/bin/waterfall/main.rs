@@ -3,6 +3,7 @@
 //! Usage:
 //!   waterfall airspy [sample_rate_hz] [center_hz] [process_hz]
 //!   waterfall rtlsdr [sample_rate_hz] [center_hz] [process_hz]
+//!   waterfall soapy <device_args> [sample_rate_hz] [center_hz] [process_hz]
 //!   waterfall qmx [center_hz] [process_hz] [serial_port]  (requires `qmx` feature)
 //!   waterfall kiwi <host> [port] [center_hz]
 
@@ -99,13 +100,19 @@ fn log_native_sdr_availability() {
     #[cfg(feature = "airspy")]
     if !hfsdr::native_sdr::airspy_available() {
         log::warn(
-            "Airspy HF+ disabled: airspyhf.dll not found (place it next to hfsdr.exe; KiwiSDR and QMX still work)",
+            "Airspy HF+ disabled: libairspyhf not found (bundled next to hfsdr or via system package; KiwiSDR and QMX still work)",
         );
     }
     #[cfg(feature = "rtlsdr")]
     if !hfsdr::native_sdr::rtlsdr_available() {
         log::warn(
-            "RTL-SDR disabled: rtlsdr.dll not found (place it next to hfsdr.exe; KiwiSDR and QMX still work)",
+            "RTL-SDR disabled: librtlsdr not found (bundled next to hfsdr or via system package; KiwiSDR and QMX still work)",
+        );
+    }
+    #[cfg(feature = "soapy")]
+    if !hfsdr::native_sdr::soapy_available() {
+        log::warn(
+            "SoapySDR disabled: libSoapySDR not found (bundle next to hfsdr or install system package)",
         );
     }
 }

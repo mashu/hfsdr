@@ -8,6 +8,8 @@ use hfsdr::AirspyHf;
 use hfsdr::QmxSource;
 #[cfg(feature = "rtlsdr")]
 use hfsdr::RtlSdr;
+#[cfg(feature = "soapy")]
+use hfsdr::SoapySource;
 
 /// A live device handle owned by the engine thread.
 pub enum DeviceSource {
@@ -18,6 +20,8 @@ pub enum DeviceSource {
     RtlSdr(RtlSdr),
     #[cfg(feature = "qmx")]
     Qmx(QmxSource),
+    #[cfg(feature = "soapy")]
+    Soapy(SoapySource),
 }
 
 impl DeviceSource {
@@ -30,6 +34,8 @@ impl DeviceSource {
             Self::RtlSdr(s) => s,
             #[cfg(feature = "qmx")]
             Self::Qmx(s) => s,
+            #[cfg(feature = "soapy")]
+            Self::Soapy(s) => s,
         }
     }
 
@@ -42,6 +48,8 @@ impl DeviceSource {
             Self::RtlSdr(s) => s,
             #[cfg(feature = "qmx")]
             Self::Qmx(s) => s,
+            #[cfg(feature = "soapy")]
+            Self::Soapy(s) => s,
         }
     }
 
@@ -70,6 +78,8 @@ impl DeviceSource {
             Self::Airspy(_) => None,
             #[cfg(feature = "rtlsdr")]
             Self::RtlSdr(_) => None,
+            #[cfg(feature = "soapy")]
+            Self::Soapy(_) => None,
         }
     }
 

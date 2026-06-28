@@ -1,16 +1,27 @@
 //! Runtime availability of optional native SDR libraries.
 //!
-//! On Windows the build uses `/DELAYLOAD` so missing `airspyhf.dll` / `rtlsdr.dll`
-//! do not prevent startup; call [`init`] once at launch, then gate UI and connect
-//! paths with [`airspy_available`] / [`rtlsdr_available`].
+//! libairspyhf, librtlsdr, and libSoapySDR are loaded at runtime on every
+//! supported platform (Windows, Linux, macOS). Call [`init`] once at launch,
+//! then gate UI and connect paths with [`airspy_available`], [`rtlsdr_available`],
+//! and [`soapy_available`].
 
 use std::sync::OnceLock;
+
+use crate::sdr_ffi::dylib;
+#[cfg(feature = "airspy")]
+use crate::sdr_ffi::dylib::AIRSPYHF_SONAMES;
+#[cfg(feature = "rtlsdr")]
+use crate::sdr_ffi::dylib::RTLSDR_SONAMES;
+#[cfg(feature = "soapy")]
+use crate::sdr_ffi::dylib::SOAPYSDR_SONAMES;
 
 struct State {
     #[cfg(feature = "airspy")]
     airspy: bool,
     #[cfg(feature = "rtlsdr")]
     rtlsdr: bool,
+    #[cfg(feature = "soapy")]
+    soapy: bool,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -40,57 +51,55 @@ pub fn rtlsdr_available() -> bool {
     false
 }
 
+#[cfg(feature = "soapy")]
+pub fn soapy_available() -> bool {
+    state().soapy
+}
+
+#[cfg(not(feature = "soapy"))]
+pub fn soapy_available() -> bool {
+    false
+}
+
 fn state() -> &'static State {
     STATE.get_or_init(|| State {
         #[cfg(feature = "airspy")]
-        airspy: probe_lib("airspyhf"),
+        airspy: dylib::can_load(AIRSPYHF_SONAMES),
         #[cfg(feature = "rtlsdr")]
-        rtlsdr: probe_lib("rtlsdr"),
+        rtlsdr: dylib::can_load(RTLSDR_SONAMES),
+        #[cfg(feature = "soapy")]
+        soapy: dylib::can_load(SOAPYSDR_SONAMES),
     })
 }
 
-/// On Windows, check whether the DLL is loadable from the exe directory / PATH.
-/// Elsewhere, compile-time linking already succeeded when the feature is enabled.
-#[cfg_attr(not(any(feature = "airspy", feature = "rtlsdr")), allow(dead_code))]
-fn probe_lib(stem: &str) -> bool {
-    #[cfg(windows)]
-    {
-        for name in [format!("{stem}.dll"), format!("lib{stem}.dll")] {
-            if dll_loadable(&name) {
-                return true;
-            }
-        }
-        false
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = stem;
-        true
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[cfg(windows)]
-fn dll_loadable(name: &str) -> bool {
-    use std::ffi::c_void;
-    use std::os::raw::c_int;
-    use std::os::windows::ffi::OsStrExt;
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn LoadLibraryW(name: *const u16) -> *mut c_void;
-        fn FreeLibrary(module: *mut c_void) -> c_int;
+    #[test]
+    fn init_is_idempotent() {
+        init();
+        init();
     }
 
-    let wide: Vec<u16> = std::ffi::OsStr::new(name)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        let handle = LoadLibraryW(wide.as_ptr());
-        if handle.is_null() {
-            return false;
-        }
-        FreeLibrary(handle);
-        true
+    #[cfg(feature = "airspy")]
+    #[test]
+    fn airspy_probe_uses_dylib_search() {
+        init();
+        assert_eq!(airspy_available(), dylib::can_load(AIRSPYHF_SONAMES));
+    }
+
+    #[cfg(feature = "rtlsdr")]
+    #[test]
+    fn rtlsdr_probe_uses_dylib_search() {
+        init();
+        assert_eq!(rtlsdr_available(), dylib::can_load(RTLSDR_SONAMES));
+    }
+
+    #[cfg(feature = "soapy")]
+    #[test]
+    fn soapy_probe_uses_dylib_search() {
+        init();
+        assert_eq!(soapy_available(), dylib::can_load(SOAPYSDR_SONAMES));
     }
 }

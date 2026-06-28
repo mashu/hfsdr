@@ -1,6 +1,7 @@
 //! In-process mock IQ sources for tests and coverage runs (no USB / network hardware).
 #![cfg(any(test, coverage, mock_hal))]
 
+use std::cell::Cell;
 use std::f32::consts::TAU;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -11,19 +12,21 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::source::Complex32;
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static ENABLED: Cell<bool> = const { Cell::new(false) };
+}
 
-/// Enable mock HAL backends until the matching [`MockGuard`] is dropped.
+/// Enable mock HAL backends until the matching [`MockGuard`] is dropped (per thread).
 pub fn enable() {
-    ENABLED.store(true, Ordering::SeqCst);
+    ENABLED.with(|e| e.set(true));
 }
 
 pub fn disable() {
-    ENABLED.store(false, Ordering::SeqCst);
+    ENABLED.with(|e| e.set(false));
 }
 
 pub fn enabled() -> bool {
-    ENABLED.load(Ordering::SeqCst)
+    ENABLED.with(|e| e.get())
 }
 
 /// RAII toggle for mock HAL in unit tests.

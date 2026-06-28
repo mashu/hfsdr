@@ -57,6 +57,8 @@ impl WaterfallApp {
             SourceKind::RtlSdr => self.rtlsdr_rf_controls(ui, live),
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => self.qmx_rf_controls(ui, live),
+            #[cfg(feature = "soapy")]
+            SourceKind::Soapy => self.soapy_rf_controls(ui, live),
         }
     }
 
@@ -300,6 +302,51 @@ impl WaterfallApp {
                 "Optimize PLL integer boundary",
             );
         });
+    }
+
+    #[cfg(feature = "soapy")]
+    pub(crate) fn soapy_rf_controls(&mut self, ui: &mut egui::Ui, live: bool) {
+        let _ = live;
+        if stage_toggle(
+            ui,
+            &mut self.connection.form.soapy.agc,
+            "Soapy AGC",
+            Some("Hardware automatic gain on the Soapy device"),
+            None,
+            None,
+        ) {
+            self.sync_soapy_rf_now();
+        }
+        if !self.connection.form.soapy.agc {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("HW gain").small().color(MUTED));
+                let resp = ui.add(
+                    egui::Slider::new(&mut self.connection.form.soapy.gain_db, 0.0..=80.0)
+                        .suffix(" dB")
+                        .fixed_decimals(1),
+                );
+                if resp.changed() {
+                    self.sync_soapy_rf_now();
+                }
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Antenna").small().color(MUTED));
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.connection.form.soapy.antenna)
+                    .hint_text("RX1, HF, …"),
+            );
+            if resp.lost_focus() && resp.changed() {
+                self.sync_soapy_rf_now();
+            }
+        });
+        if !live {
+            ui.label(
+                egui::RichText::new("Gain and antenna apply when connected")
+                    .small()
+                    .color(MUTED),
+            );
+        }
     }
 
 }

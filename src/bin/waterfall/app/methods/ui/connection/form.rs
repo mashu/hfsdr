@@ -8,8 +8,14 @@ impl WaterfallApp {
             self.connection.form.kind = sanitize_source_kind(self.connection.form.kind);
             let labels = source_kind_labels();
             let selected = source_kind_index(self.connection.form.kind);
-            if let Some(i) = segment_choice(ui, "source_kind", selected, &labels) {
+            let btn_w = if labels.len() > 4 { 44.0 } else { 64.0 };
+            if let Some(i) = segment_choice_sized(ui, "source_kind", selected, &labels, btn_w) {
+                let prev = self.connection.form.kind;
                 self.connection.form.kind = source_kind_from_index(i);
+                #[cfg(feature = "soapy")]
+                if self.connection.form.kind == SourceKind::Soapy && prev != SourceKind::Soapy {
+                    self.refresh_soapy_devices();
+                }
             }
 
             if self.connection.form.kind == SourceKind::Kiwi {
@@ -35,7 +41,7 @@ impl WaterfallApp {
             });
 
             let session_active = self.connection_session_live();
-            let can_connect = is_local_source(self.connection.form.kind) || !self.connection.form.host.trim().is_empty();
+            let can_connect = self.can_connect_from_form();
             ui.horizontal(|ui| {
                 if primary_button(ui, "Connect", can_connect && !session_active).clicked() {
                     self.connect_now();

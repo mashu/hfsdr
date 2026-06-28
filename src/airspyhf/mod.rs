@@ -126,7 +126,7 @@ impl AirspyHf {
             revision: 0,
         };
         // SAFETY: writes into a valid local struct.
-        unsafe { sys::airspyhf_lib_version(&mut v) };
+        sys::airspyhf_lib_version(&mut v);
         format!("{}.{}.{}", v.major_version, v.minor_version, v.revision)
     }
 
@@ -147,7 +147,7 @@ impl AirspyHf {
         }
         let mut dev: *mut sys::airspyhf_device_t = std::ptr::null_mut();
         // SAFETY: `dev` is a valid out-pointer.
-        let rc = unsafe { sys::airspyhf_open(&mut dev) };
+        let rc = sys::airspyhf_open(&mut dev);
         if rc != sys::SUCCESS || dev.is_null() {
             return Err(SourceError::NotFound);
         }
@@ -175,7 +175,7 @@ impl AirspyHf {
         }
         let mut dev: *mut sys::airspyhf_device_t = std::ptr::null_mut();
         // SAFETY: `dev` is a valid out-pointer.
-        let rc = unsafe { sys::airspyhf_open_sn(&mut dev, serial) };
+        let rc = sys::airspyhf_open_sn(&mut dev, serial);
         if rc != sys::SUCCESS || dev.is_null() {
             return Err(SourceError::NotFound);
         }
@@ -201,13 +201,13 @@ impl AirspyHf {
             return vec![0xDEAD_BEEF];
         }
         // SAFETY: count query with a null buffer.
-        let count = unsafe { sys::airspyhf_list_devices(std::ptr::null_mut(), 0) };
+        let count = sys::airspyhf_list_devices(std::ptr::null_mut(), 0);
         if count <= 0 {
             return Vec::new();
         }
         let mut serials = vec![0u64; count as usize];
         // SAFETY: buffer holds `count` slots.
-        let got = unsafe { sys::airspyhf_list_devices(serials.as_mut_ptr(), count) };
+        let got = sys::airspyhf_list_devices(serials.as_mut_ptr(), count);
         serials.truncate(got.max(0) as usize);
         serials
     }
@@ -219,9 +219,7 @@ impl AirspyHf {
             m.lib_dsp = on;
             return Ok(());
         }
-        check("airspyhf_set_lib_dsp", unsafe {
-            sys::airspyhf_set_lib_dsp(self.dev, on as u8)
-        })
+        check("airspyhf_set_lib_dsp", sys::airspyhf_set_lib_dsp(self.dev, on as u8))
     }
 
     /// Frequency calibration in parts-per-billion.
@@ -231,9 +229,7 @@ impl AirspyHf {
             m.calibration_ppb = ppb;
             return Ok(());
         }
-        check("airspyhf_set_calibration", unsafe {
-            sys::airspyhf_set_calibration(self.dev, ppb)
-        })
+        check("airspyhf_set_calibration", sys::airspyhf_set_calibration(self.dev, ppb))
     }
 
     /// Read the stored calibration (ppb).
@@ -244,7 +240,7 @@ impl AirspyHf {
         }
         let mut ppb = 0i32;
         // SAFETY: `ppb` is a valid out-pointer.
-        let rc = unsafe { sys::airspyhf_get_calibration(self.dev, &mut ppb) };
+        let rc = sys::airspyhf_get_calibration(self.dev, &mut ppb);
         check("airspyhf_get_calibration", rc).map(|_| ppb)
     }
 
@@ -255,9 +251,7 @@ impl AirspyHf {
             m.hf_agc = on;
             return Ok(());
         }
-        check("airspyhf_set_hf_agc", unsafe {
-            sys::airspyhf_set_hf_agc(self.dev, on as u8)
-        })
+        check("airspyhf_set_hf_agc", sys::airspyhf_set_hf_agc(self.dev, on as u8))
     }
 
     /// HF AGC threshold: `false` = low, `true` = high.
@@ -267,9 +261,7 @@ impl AirspyHf {
             m.hf_agc_threshold_high = high;
             return Ok(());
         }
-        check("airspyhf_set_hf_agc_threshold", unsafe {
-            sys::airspyhf_set_hf_agc_threshold(self.dev, high as u8)
-        })
+        check("airspyhf_set_hf_agc_threshold", sys::airspyhf_set_hf_agc_threshold(self.dev, high as u8))
     }
 
     /// HF attenuator step, 0..=8 (0..48 dB in 6 dB steps).
@@ -284,9 +276,7 @@ impl AirspyHf {
             m.hf_att = step;
             return Ok(());
         }
-        check("airspyhf_set_hf_att", unsafe {
-            sys::airspyhf_set_hf_att(self.dev, step)
-        })
+        check("airspyhf_set_hf_att", sys::airspyhf_set_hf_att(self.dev, step))
     }
 
     /// LNA / preamp on/off (+6 dB, compensated digitally).
@@ -296,9 +286,7 @@ impl AirspyHf {
             m.hf_lna = on;
             return Ok(());
         }
-        check("airspyhf_set_hf_lna", unsafe {
-            sys::airspyhf_set_hf_lna(self.dev, on as u8)
-        })
+        check("airspyhf_set_hf_lna", sys::airspyhf_set_hf_lna(self.dev, on as u8))
     }
 
     /// Frontend option flags (`sys::FLAGS_*`). Discovery/Ranger band-tracking
@@ -312,9 +300,7 @@ impl AirspyHf {
         }
         #[cfg(airspyhf_extended_api)]
         {
-            return check("airspyhf_set_frontend_options", unsafe {
-                sys::airspyhf_set_frontend_options(self.dev, flags)
-            });
+            return check("airspyhf_set_frontend_options", sys::airspyhf_set_frontend_options(self.dev, flags));
         }
         #[cfg(not(airspyhf_extended_api))]
         {
@@ -332,7 +318,7 @@ impl AirspyHf {
         #[cfg(airspyhf_extended_api)]
         {
             let mut flags = 0u32;
-            let rc = unsafe { sys::airspyhf_get_frontend_options(self.dev, &mut flags) };
+            let rc = sys::airspyhf_get_frontend_options(self.dev, &mut flags);
             return check("airspyhf_get_frontend_options", rc).map(|_| flags);
         }
         #[cfg(not(airspyhf_extended_api))]
@@ -349,9 +335,7 @@ impl AirspyHf {
         }
         #[cfg(airspyhf_extended_api)]
         {
-            return check("airspyhf_set_bias_tee", unsafe {
-                sys::airspyhf_set_bias_tee(self.dev, on as i8)
-            });
+            return check("airspyhf_set_bias_tee", sys::airspyhf_set_bias_tee(self.dev, on as i8));
         }
         #[cfg(not(airspyhf_extended_api))]
         {
@@ -367,7 +351,7 @@ impl AirspyHf {
             return false;
         }
         // SAFETY: valid device handle.
-        unsafe { sys::airspyhf_is_low_if(self.dev) == 1 }
+        sys::airspyhf_is_low_if(self.dev) == 1
     }
 
     /// IQ samples delivered per callback at the current sample rate.
@@ -377,7 +361,7 @@ impl AirspyHf {
             return 8192;
         }
         // SAFETY: valid device handle.
-        let n = unsafe { sys::airspyhf_get_output_size(self.dev) };
+        let n = sys::airspyhf_get_output_size(self.dev);
         n.max(0) as usize
     }
 
@@ -389,13 +373,11 @@ impl AirspyHf {
         }
         let mut buf = [0u8; 64];
         // SAFETY: 64-byte buffer; the library writes a NUL-terminated string.
-        let rc = unsafe {
-            sys::airspyhf_version_string_read(
-                self.dev,
-                buf.as_mut_ptr() as *mut c_char,
-                buf.len() as u8,
-            )
-        };
+        let rc = sys::airspyhf_version_string_read(
+            self.dev,
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as u8,
+        );
         if rc != sys::SUCCESS {
             return String::new();
         }
@@ -425,9 +407,7 @@ impl IqSource for AirspyHf {
             self.sample_rate = sr;
             return Ok(());
         }
-        check("airspyhf_set_samplerate", unsafe {
-            sys::airspyhf_set_samplerate(self.dev, sr)
-        })?;
+        check("airspyhf_set_samplerate", sys::airspyhf_set_samplerate(self.dev, sr))?;
         self.sample_rate = sr;
         Ok(())
     }
@@ -439,9 +419,7 @@ impl IqSource for AirspyHf {
             return Ok(());
         }
         let freq = hz.round().clamp(0.0, u32::MAX as f64) as u32;
-        check("airspyhf_set_freq", unsafe {
-            sys::airspyhf_set_freq(self.dev, freq)
-        })?;
+        check("airspyhf_set_freq", sys::airspyhf_set_freq(self.dev, freq))?;
         self.freq_hz = hz;
         Ok(())
     }
@@ -476,7 +454,7 @@ impl IqSource for AirspyHf {
 
         // SAFETY: `stream_cb` matches the expected signature and `ctx_ptr` lives
         // until `airspyhf_stop` returns (we hold the Box in `self.ctx`).
-        let rc = unsafe { sys::airspyhf_start(self.dev, stream_cb, ctx_ptr) };
+        let rc = sys::airspyhf_start(self.dev, stream_cb, ctx_ptr);
         check("airspyhf_start", rc)?;
 
         self.ctx = Some(ctx);
@@ -499,7 +477,7 @@ impl IqSource for AirspyHf {
         }
         // SAFETY: valid device handle; `airspyhf_stop` blocks until the callback
         // has returned for the last time, so dropping `ctx` afterwards is sound.
-        let rc = unsafe { sys::airspyhf_stop(self.dev) };
+        let rc = sys::airspyhf_stop(self.dev);
         self.streaming = false;
         self.ctx = None;
         check("airspyhf_stop", rc)
@@ -563,12 +541,12 @@ impl Drop for AirspyHf {
         }
         if self.streaming {
             // SAFETY: stop the stream before freeing the callback context.
-            unsafe { sys::airspyhf_stop(self.dev) };
+            sys::airspyhf_stop(self.dev);
             self.ctx = None;
         }
         if !self.dev.is_null() {
             // SAFETY: opened by us, closed exactly once.
-            unsafe { sys::airspyhf_close(self.dev) };
+            sys::airspyhf_close(self.dev);
             self.dev = std::ptr::null_mut();
         }
     }
@@ -578,13 +556,13 @@ impl Drop for AirspyHf {
 fn read_sample_rates(dev: *mut sys::airspyhf_device_t) -> Vec<u32> {
     let mut count: u32 = 0;
     // SAFETY: with `len == 0`, libairspyhf writes the count into `*buffer`.
-    unsafe { sys::airspyhf_get_samplerates(dev, &mut count, 0) };
+    sys::airspyhf_get_samplerates(dev, &mut count, 0);
     if count == 0 {
         return Vec::new();
     }
     let mut buf = vec![0u32; count as usize];
     // SAFETY: `buf` has `count` slots.
-    let rc = unsafe { sys::airspyhf_get_samplerates(dev, buf.as_mut_ptr(), count) };
+    let rc = sys::airspyhf_get_samplerates(dev, buf.as_mut_ptr(), count);
     if rc != sys::SUCCESS {
         return Vec::new();
     }

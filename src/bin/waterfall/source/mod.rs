@@ -31,3 +31,6 @@ pub use kinds::{
 };
 #[allow(unused_imports)] // engine-bench binary
 pub use settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};
+#[cfg(feature = "soapy")]
+#[allow(unused_imports)] // engine-bench binary
+pub use settings::{default_soapy_sample_rate, SoapySettings};

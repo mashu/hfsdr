@@ -84,6 +84,7 @@ impl WaterfallApp {
         self.apply_airspy_live_settings();
         self.apply_rtlsdr_live_settings();
         self.apply_qmx_live_settings();
+        self.apply_soapy_live_settings();
         self.apply_audio_device();
     }
 
@@ -177,6 +178,49 @@ impl WaterfallApp {
                 self.connection.form.last_rtlsdr_rf.ppm = self.connection.form.rtlsdr.ppm;
             }
         }
+    }
+
+    pub(crate) fn sync_soapy_rf_now(&mut self) {
+        #[cfg(not(feature = "soapy"))]
+        {
+            let _ = self;
+            return;
+        }
+        #[cfg(feature = "soapy")]
+        {
+            if self.radio.is_kiwi || !matches!(self.engine_ui.conn_state, ConnState::Streaming) {
+                return;
+            }
+            if self.connection.form.kind != SourceKind::Soapy {
+                return;
+            }
+            if self.connection.form.soapy.agc != self.connection.form.last_soapy_rf.agc {
+                self.engine
+                    .send(EngineCommand::SetSoapyAgc(self.connection.form.soapy.agc));
+                self.connection.form.last_soapy_rf.agc = self.connection.form.soapy.agc;
+                self.lock_display_levels_for_rf_tuning();
+            }
+            if !self.connection.form.soapy.agc
+                && (self.connection.form.soapy.gain_db - self.connection.form.last_soapy_rf.gain_db).abs()
+                    > f64::EPSILON
+            {
+                self.engine
+                    .send(EngineCommand::SetSoapyGain(self.connection.form.soapy.gain_db));
+                self.connection.form.last_soapy_rf.gain_db = self.connection.form.soapy.gain_db;
+                self.lock_display_levels_for_rf_tuning();
+            }
+            let antenna = self.connection.form.soapy.antenna.trim();
+            let last = self.connection.form.last_soapy_rf.antenna.trim();
+            if antenna != last {
+                self.engine
+                    .send(EngineCommand::SetSoapyAntenna(self.connection.form.soapy.antenna.clone()));
+                self.connection.form.last_soapy_rf.antenna = self.connection.form.soapy.antenna.clone();
+            }
+        }
+    }
+
+    pub(crate) fn apply_soapy_live_settings(&mut self) {
+        self.sync_soapy_rf_now();
     }
 
     pub(crate) fn apply_airspy_live_settings(&mut self) {

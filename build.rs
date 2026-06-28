@@ -19,6 +19,7 @@ fn main() {
         println!("cargo:rustc-cfg=coverage");
     }
     println!("cargo:rerun-if-env-changed=HFSDR_DEPS_PREFIX");
+    println!("cargo:rerun-if-env-changed=HFSDR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
     println!("cargo:rerun-if-env-changed=VCPKG_INSTALLED_DIR");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
@@ -29,143 +30,14 @@ fn main() {
         println!("cargo:rerun-if-changed={}", methods.display());
     }
 
-    #[cfg(target_os = "windows")]
-    let mut windows_delay_load = false;
-
-    if std::env::var_os("CARGO_FEATURE_AIRSPY").is_some() {
-        probe_or_panic(
-            "libairspyhf",
-            "libairspyhf not found. Install the system library (e.g. libairspyhf-dev on Linux, \
-             `brew install airspyhf` on macOS, or `pwsh scripts/install-windows-sdr-deps.ps1` \
-             on Windows) or build with --no-default-features.",
-            &["airspyhf", ""],
-            &["libairspyhf.dylib", "libairspyhf.a"],
-        );
-        if std::env::var_os("DOCS_RS").is_some() || airspyhf_has_extended_api() {
-            println!("cargo:rustc-cfg=airspyhf_extended_api");
-        }
-        #[cfg(target_os = "windows")]
-        {
-            println!("cargo:rustc-link-arg=/DELAYLOAD:airspyhf.dll");
-            windows_delay_load = true;
-        }
-    }
-
-    if std::env::var_os("CARGO_FEATURE_RTLSDR").is_some() {
-        probe_or_panic(
-            "librtlsdr",
-            "librtlsdr not found. Install the system library (e.g. librtlsdr-dev on Linux, \
-             `brew install librtlsdr` on macOS, or `pwsh scripts/install-windows-sdr-deps.ps1` \
-             on Windows) or disable the `rtlsdr` feature.",
-            &["librtlsdr", ""],
-            &["librtlsdr.dylib", "librtlsdr.a"],
-        );
-        #[cfg(target_os = "windows")]
-        {
-            println!("cargo:rustc-link-arg=/DELAYLOAD:rtlsdr.dll");
-            windows_delay_load = true;
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    if windows_delay_load {
-        println!("cargo:rustc-link-lib=delayimp");
-    }
-}
-
-fn probe_or_panic(
-    pkg: &str,
-    panic_msg: &str,
-    macos_brew_formulas: &[&str],
-    macos_lib_names: &[&str],
-) {
-    if pkg_config::Config::new()
-        .cargo_metadata(true)
-        .probe(pkg)
-        .is_ok()
+    // airspyhf, librtlsdr, and libSoapySDR are loaded at runtime on every platform
+    // (see `src/sdr_ffi/dylib.rs`). Build only probes libairspyhf when present for
+    // optional >= 1.8 symbols.
+    if std::env::var_os("CARGO_FEATURE_AIRSPY").is_some()
+        && (std::env::var_os("DOCS_RS").is_some() || airspyhf_has_extended_api())
     {
-        return;
+        println!("cargo:rustc-cfg=airspyhf_extended_api");
     }
-
-    #[cfg(target_os = "macos")]
-    if link_macos_brew_lib(macos_brew_formulas, macos_lib_names) {
-        return;
-    }
-
-    #[cfg(target_os = "windows")]
-    if link_windows_lib(pkg) {
-        return;
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = (macos_brew_formulas, macos_lib_names);
-
-    panic!("{panic_msg}");
-}
-
-#[cfg(target_os = "windows")]
-fn link_windows_lib(pkg: &str) -> bool {
-    let lib_name = match pkg {
-        "libairspyhf" => "airspyhf",
-        "librtlsdr" => "rtlsdr",
-        _ => return false,
-    };
-    for lib_dir in windows_lib_dirs() {
-        if find_lib_in_dir(&lib_dir, lib_name).is_some() {
-            println!("cargo:rustc-link-search=native={}", lib_dir.display());
-            println!("cargo:rustc-link-lib=dylib={lib_name}");
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(target_os = "windows")]
-fn windows_lib_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(deps) = std::env::var("HFSDR_DEPS_PREFIX") {
-        let prefix = PathBuf::from(&deps);
-        dirs.push(prefix.join("lib"));
-        dirs.push(prefix.join("bin"));
-    }
-    if let Ok(vcpkg) = std::env::var("VCPKG_ROOT") {
-        let installed = PathBuf::from(vcpkg).join("installed/x64-windows");
-        dirs.push(installed.join("lib"));
-        dirs.push(installed.join("bin"));
-    }
-    if let Ok(installed) = std::env::var("VCPKG_INSTALLED_DIR") {
-        let root = PathBuf::from(installed);
-        dirs.push(root.join("lib"));
-        dirs.push(root.join("bin"));
-    }
-    dirs
-}
-
-#[cfg(target_os = "macos")]
-fn link_macos_brew_lib(formulas: &[&str], lib_names: &[&str]) -> bool {
-    for formula in formulas {
-        let args: &[&str] = if formula.is_empty() {
-            &["--prefix"]
-        } else {
-            &["--prefix", formula]
-        };
-        let Ok(output) = std::process::Command::new("brew").args(args).output() else {
-            continue;
-        };
-        if !output.status.success() {
-            continue;
-        }
-        let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let lib_dir = format!("{prefix}/lib");
-        let has_lib = lib_names
-            .iter()
-            .any(|name| std::path::Path::new(&lib_dir).join(name).exists());
-        if has_lib {
-            println!("cargo:rustc-link-search=native={lib_dir}");
-            return true;
-        }
-    }
-    false
 }
 
 /// `airspyhf_set_bias_tee` / `airspyhf_set_frontend_options` were added in libairspyhf 1.8.
@@ -216,6 +88,30 @@ fn airspyhf_lib_path() -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(target_os = "windows")]
+fn windows_lib_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(deps) = std::env::var("HFSDR_DEPS_PREFIX") {
+        let prefix = PathBuf::from(&deps);
+        dirs.push(prefix.join("lib"));
+        dirs.push(prefix.join("bin"));
+    }
+    if let Ok(deps) = std::env::var("HFSDR_LIB_DIR") {
+        dirs.push(PathBuf::from(deps));
+    }
+    if let Ok(vcpkg) = std::env::var("VCPKG_ROOT") {
+        let installed = PathBuf::from(vcpkg).join("installed/x64-windows");
+        dirs.push(installed.join("lib"));
+        dirs.push(installed.join("bin"));
+    }
+    if let Ok(installed) = std::env::var("VCPKG_INSTALLED_DIR") {
+        let root = PathBuf::from(installed);
+        dirs.push(root.join("lib"));
+        dirs.push(root.join("bin"));
+    }
+    dirs
 }
 
 fn find_lib_in_dir(dir: impl AsRef<Path>, name: &str) -> Option<PathBuf> {

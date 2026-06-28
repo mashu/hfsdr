@@ -11,6 +11,8 @@ pub fn source_kind_available(kind: SourceKind) -> bool {
         SourceKind::RtlSdr => hfsdr::native_sdr::rtlsdr_available(),
         #[cfg(feature = "qmx")]
         SourceKind::Qmx => true,
+        #[cfg(feature = "soapy")]
+        SourceKind::Soapy => hfsdr::native_sdr::soapy_available(),
     }
 }
 
@@ -34,6 +36,10 @@ pub fn all_source_kinds() -> Vec<SourceKind> {
     }
     #[cfg(feature = "qmx")]
     kinds.push(SourceKind::Qmx);
+    #[cfg(feature = "soapy")]
+    if hfsdr::native_sdr::soapy_available() {
+        kinds.push(SourceKind::Soapy);
+    }
     kinds
 }
 
@@ -46,6 +52,8 @@ pub fn source_kind_label(kind: SourceKind) -> &'static str {
         SourceKind::RtlSdr => "RTL-SDR",
         #[cfg(feature = "qmx")]
         SourceKind::Qmx => "QMX",
+        #[cfg(feature = "soapy")]
+        SourceKind::Soapy => "SoapySDR",
     }
 }
 
@@ -79,6 +87,8 @@ pub fn is_local_source(kind: SourceKind) -> bool {
         SourceKind::RtlSdr => true,
         #[cfg(feature = "qmx")]
         SourceKind::Qmx => true,
+        #[cfg(feature = "soapy")]
+        SourceKind::Soapy => true,
     }
 }
 
@@ -93,7 +103,7 @@ mod tests {
 
     #[test]
     fn sanitize_unavailable_falls_back_to_kiwi() {
-        #[cfg(all(windows, feature = "airspy"))]
+        #[cfg(feature = "airspy")]
         {
             if !hfsdr::native_sdr::airspy_available() {
                 assert_eq!(sanitize_source_kind(SourceKind::Airspy), SourceKind::Kiwi);
@@ -115,7 +125,7 @@ mod tests {
         assert!(!is_local_source(SourceKind::Kiwi));
     }
 
-    #[cfg(any(feature = "airspy", feature = "rtlsdr", feature = "qmx"))]
+    #[cfg(any(feature = "airspy", feature = "rtlsdr", feature = "qmx", feature = "soapy"))]
     #[test]
     fn local_sources_flagged() {
         #[cfg(feature = "airspy")]
@@ -124,6 +134,8 @@ mod tests {
         assert!(is_local_source(SourceKind::RtlSdr));
         #[cfg(feature = "qmx")]
         assert!(is_local_source(SourceKind::Qmx));
+        #[cfg(feature = "soapy")]
+        assert!(is_local_source(SourceKind::Soapy));
     }
 
     #[test]

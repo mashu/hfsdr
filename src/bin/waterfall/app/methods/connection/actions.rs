@@ -18,9 +18,25 @@ impl WaterfallApp {
         self.connection.form.airspy = req.airspy.clone();
         self.connection.form.rtlsdr = req.rtlsdr.clone();
         self.connection.form.qmx = req.qmx.clone();
+        #[cfg(feature = "soapy")]
+        {
+            self.connection.form.soapy = req.soapy.clone();
+        }
+    }
+
+    pub(crate) fn can_connect_from_form(&self) -> bool {
+        #[cfg(feature = "soapy")]
+        if self.connection.form.kind == SourceKind::Soapy {
+            return !self.connection.form.soapy.device_args.trim().is_empty();
+        }
+        is_local_source(self.connection.form.kind) || !self.connection.form.host.trim().is_empty()
     }
 
     pub(crate) fn can_connect_request(req: &ConnectRequest) -> bool {
+        #[cfg(feature = "soapy")]
+        if req.kind == SourceKind::Soapy {
+            return !req.soapy.device_args.trim().is_empty();
+        }
         is_local_source(req.kind) || !req.host.trim().is_empty()
     }
 
@@ -28,7 +44,7 @@ impl WaterfallApp {
         if let Some(req) = self.connection.form.recent_hosts.first() {
             Self::can_connect_request(req)
         } else {
-            is_local_source(self.connection.form.kind) || !self.connection.form.host.trim().is_empty()
+            self.can_connect_from_form()
         }
     }
 
@@ -53,6 +69,8 @@ impl WaterfallApp {
             SourceKind::Airspy => self.connection.form.sample_rate,
             #[cfg(feature = "rtlsdr")]
             SourceKind::RtlSdr => self.connection.form.sample_rate,
+            #[cfg(feature = "soapy")]
+            SourceKind::Soapy => self.connection.form.sample_rate,
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => 0,
             _ => 0,
@@ -69,10 +87,16 @@ impl WaterfallApp {
             airspy: self.connection.form.airspy.clone(),
             rtlsdr: self.connection.form.rtlsdr.clone(),
             qmx: self.connection.form.qmx.clone(),
+            #[cfg(feature = "soapy")]
+            soapy: self.connection.form.soapy.clone(),
         };
         self.connection.form.last_airspy_rf = self.connection.form.airspy.clone();
         self.connection.form.last_rtlsdr_rf = self.connection.form.rtlsdr.clone();
         self.connection.form.last_qmx_rf = self.connection.form.qmx.clone();
+        #[cfg(feature = "soapy")]
+        {
+            self.connection.form.last_soapy_rf = self.connection.form.soapy.clone();
+        }
         self.radio.last_kiwi_man_gain = self.connection.form.kiwi.man_gain;
         self.radio.last_kiwi_rf_attn_db = self.connection.form.kiwi.rf_attn_db;
         self.radio.last_kiwi_has_rf_attn = false;

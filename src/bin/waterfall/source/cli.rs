@@ -1,11 +1,14 @@
 use super::connection::{ConnectRequest, SourceKind};
 use super::settings::{AirspySettings, KiwiSettings, QmxSettings, RtlSdrSettings};
+#[cfg(feature = "soapy")]
+use super::settings::SoapySettings;
 
 /// Parse CLI args into a connect request for auto-connect on launch.
 ///
 /// `waterfall kiwi <host> [port] [center_hz]` or
 /// `waterfall airspy [sample_rate_hz] [center_hz] [process_hz]` (requires `airspy` feature) or
-/// `waterfall rtlsdr [sample_rate_hz] [center_hz] [process_hz]` (requires `rtlsdr` feature).
+/// `waterfall rtlsdr [sample_rate_hz] [center_hz] [process_hz]` (requires `rtlsdr` feature) or
+/// `waterfall soapy <device_args> [sample_rate_hz] [center_hz] [process_hz]` (requires `soapy` feature).
 pub fn request_from_args() -> Option<ConnectRequest> {
     let args: Vec<String> = std::env::args().collect();
     parse_connect_request(&args)
@@ -27,6 +30,8 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
                 airspy: AirspySettings::default(),
                 rtlsdr: RtlSdrSettings::default(),
                 qmx: QmxSettings::default(),
+                #[cfg(feature = "soapy")]
+                soapy: SoapySettings::default(),
             })
         }
         #[cfg(feature = "airspy")]
@@ -46,6 +51,8 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
                 airspy,
                 rtlsdr: RtlSdrSettings::default(),
                 qmx: QmxSettings::default(),
+                #[cfg(feature = "soapy")]
+                soapy: SoapySettings::default(),
             })
         }
         #[cfg(feature = "rtlsdr")]
@@ -65,6 +72,30 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
                 airspy: AirspySettings::default(),
                 rtlsdr,
                 qmx: QmxSettings::default(),
+                #[cfg(feature = "soapy")]
+                soapy: SoapySettings::default(),
+            })
+        }
+        #[cfg(feature = "soapy")]
+        Some("soapy") => {
+            let device_args = args.get(2).cloned()?;
+            let sample_rate = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let center_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
+            let process_hz = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let mut soapy = SoapySettings::default();
+            soapy.device_args = device_args;
+            soapy.iq_process_hz = process_hz;
+            Some(ConnectRequest {
+                kind: SourceKind::Soapy,
+                host: String::new(),
+                port: 8073,
+                center_hz,
+                sample_rate,
+                kiwi: KiwiSettings::default(),
+                airspy: AirspySettings::default(),
+                rtlsdr: RtlSdrSettings::default(),
+                qmx: QmxSettings::default(),
+                soapy,
             })
         }
         #[cfg(feature = "qmx")]
@@ -85,6 +116,8 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
                 airspy: AirspySettings::default(),
                 rtlsdr: RtlSdrSettings::default(),
                 qmx,
+                #[cfg(feature = "soapy")]
+                soapy: SoapySettings::default(),
             })
         }
         _ => None,
@@ -142,6 +175,31 @@ mod tests {
         assert_eq!(req.sample_rate, 2_048_000);
         assert!((req.center_hz - 7_030_000.0).abs() < 1.0);
         assert_eq!(req.rtlsdr.iq_process_hz, 96_000);
+    }
+
+    #[cfg(feature = "soapy")]
+    #[test]
+    fn soapy_requires_device_args() {
+        assert!(parse_connect_request(&argv(&["hfsdr", "soapy"])).is_none());
+    }
+
+    #[cfg(feature = "soapy")]
+    #[test]
+    fn soapy_parses_args_rates_and_center() {
+        let req = parse_connect_request(&argv(&[
+            "hfsdr",
+            "soapy",
+            "driver=rtlsdr,serial=0001",
+            "2048000",
+            "7030000",
+            "48000",
+        ]))
+        .expect("soapy");
+        assert_eq!(req.kind, SourceKind::Soapy);
+        assert_eq!(req.soapy.device_args, "driver=rtlsdr,serial=0001");
+        assert_eq!(req.sample_rate, 2_048_000);
+        assert!((req.center_hz - 7_030_000.0).abs() < 1.0);
+        assert_eq!(req.soapy.iq_process_hz, 48_000);
     }
 
     #[test]

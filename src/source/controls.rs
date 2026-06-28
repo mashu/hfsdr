@@ -48,6 +48,15 @@ pub trait QmxControls {
     fn rssi_dbm(&self) -> Option<f32>;
 }
 
+/// SoapySDR overall gain, AGC, and antenna selection.
+pub trait SoapyControls {
+    fn set_gain_db(&mut self, db: f64) -> Result<()>;
+    fn set_agc(&mut self, on: bool) -> Result<()>;
+    fn set_antenna(&mut self, name: &str) -> Result<()>;
+    fn gain_db(&self) -> f64;
+    fn agc_on(&self) -> bool;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

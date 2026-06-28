@@ -121,6 +121,24 @@ pub(super) fn handle_command(&mut self, cmd: EngineCommand) {
                     src_ctl::qmx_set_rf_gain_db(&mut conn.device, db);
                 }
             }
+            #[cfg(feature = "soapy")]
+            EngineCommand::SetSoapyGain(db) => {
+                if let Some(conn) = &mut self.conn {
+                    src_ctl::soapy_set_gain_db(&mut conn.device, db);
+                }
+            }
+            #[cfg(feature = "soapy")]
+            EngineCommand::SetSoapyAgc(on) => {
+                if let Some(conn) = &mut self.conn {
+                    src_ctl::soapy_set_agc(&mut conn.device, on);
+                }
+            }
+            #[cfg(feature = "soapy")]
+            EngineCommand::SetSoapyAntenna(name) => {
+                if let Some(conn) = &mut self.conn {
+                    src_ctl::soapy_set_antenna(&mut conn.device, &name);
+                }
+            }
             EngineCommand::SetAudioDevice(name) => {
                 self.audio_device = name;
                 self.reopen_audio();

@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="hfsdr">
+  <defs>
+    <linearGradient id="bg" x1="32" y1="24" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#121722"/>
+      <stop offset="1" stop-color="#0b0f16"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="48" y1="56" x2="208" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1a2230"/>
+      <stop offset="1" stop-color="#121822"/>
+    </linearGradient>
+    <linearGradient id="fall-a" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.08"/>
+      <stop offset="0.45" stop-color="#6ee7b7" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#a7f3d0" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="fall-b" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.05"/>
+      <stop offset="0.35" stop-color="#38bdf8" stop-opacity="0.35"/>
+      <stop offset="0.75" stop-color="#6ee7b7" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#6ee7b7" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="fall-c" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#1e4d68" stop-opacity="0.12"/>
+      <stop offset="0.5" stop-color="#38bdf8" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#7dd3fc" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="trace-glow" x1="56" y1="0" x2="200" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0"/>
+      <stop offset="0.15" stop-color="#38bdf8" stop-opacity="0.85"/>
+      <stop offset="0.55" stop-color="#6ee7b7" stop-opacity="1"/>
+      <stop offset="0.85" stop-color="#38bdf8" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="antenna" x1="128" y1="52" x2="128" y2="84" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="display">
+      <rect x="52" y="72" width="152" height="128" rx="10"/>
+    </clipPath>
+  </defs>
+
+  <!-- App icon background -->
+  <rect width="256" height="256" rx="58" fill="url(#bg)"/>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="none" stroke="#243044" stroke-width="1.5" opacity="0.55"/>
+
+  <!-- RF antenna above the waterfall -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M128 54v18" stroke="url(#antenna)" stroke-width="3.5"/>
+    <path d="M118 58c5-7 10-7 15 0" stroke="#7dd3fc" stroke-width="2.5" opacity="0.85"/>
+    <path d="M110 64c8-10 16-10 24 0" stroke="#38bdf8" stroke-width="2" opacity="0.55"/>
+    <path d="M102 70c12-14 24-14 36 0" stroke="#38bdf8" stroke-width="1.5" opacity="0.28"/>
+    <circle cx="128" cy="52" r="3.5" fill="#bae6fd"/>
+  </g>
+
+  <!-- Waterfall panel -->
+  <rect x="48" y="68" width="160" height="136" rx="14" fill="url(#panel)" stroke="#2a3448" stroke-width="1.5"/>
+  <rect x="52" y="72" width="152" height="128" rx="10" fill="#0d121a"/>
+
+  <!-- Grid -->
+  <g clip-path="url(#display)" opacity="0.22" stroke="#3c4a62" stroke-width="1">
+    <path d="M52 104h152M52 136h152M52 168h152"/>
+    <path d="M88 72v128M128 72v128M168 72v128"/>
+  </g>
+
+  <!-- Waterfall columns -->
+  <g clip-path="url(#display)">
+    <rect x="56" y="118" width="14" height="82" fill="url(#fall-b)" opacity="0.85"/>
+    <rect x="72" y="96" width="14" height="104" fill="url(#fall-a)" opacity="0.9"/>
+    <rect x="88" y="132" width="14" height="68" fill="url(#fall-c)" opacity="0.75"/>
+    <rect x="104" y="88" width="14" height="112" fill="url(#fall-b)" opacity="0.95"/>
+    <rect x="120" y="108" width="14" height="92" fill="url(#fall-a)" opacity="0.88"/>
+    <rect x="136" y="124" width="14" height="76" fill="url(#fall-c)" opacity="0.8"/>
+    <rect x="152" y="92" width="14" height="108" fill="url(#fall-b)" opacity="0.92"/>
+    <rect x="168" y="114" width="14" height="86" fill="url(#fall-a)" opacity="0.86"/>
+    <rect x="184" y="136" width="14" height="64" fill="url(#fall-c)" opacity="0.7"/>
+  </g>
+
+  <!-- VFO center line -->
+  <line x1="52" y1="136" x2="204" y2="136" stroke="#f87171" stroke-width="1.5" opacity="0.55"/>
+
+  <!-- Live spectrum trace -->
+  <path
+    d="M56 148 C72 132, 84 156, 96 138 S120 122, 132 140 S156 158, 168 132 S188 118, 200 126"
+    fill="none"
+    stroke="url(#trace-glow)"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#soft-glow)"
+    opacity="0.35"
+  />
+  <path
+    d="M56 148 C72 132, 84 156, 96 138 S120 122, 132 140 S156 158, 168 132 S188 118, 200 126"
+    fill="none"
+    stroke="url(#trace-glow)"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- HF wordmark -->
+  <text
+    x="128"
+    y="226"
+    text-anchor="middle"
+    font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+    font-size="28"
+    font-weight="700"
+    letter-spacing="2"
+    fill="#e2e8f4"
+  >HF</text>
+</svg>

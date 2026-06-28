@@ -144,6 +144,8 @@ impl WaterfallApp {
             SourceKind::RtlSdr => self.connection.form.rtlsdr.ingress_decimation(device_rate).0,
             #[cfg(feature = "qmx")]
             SourceKind::Qmx => self.connection.form.qmx.ingress_decimation(device_rate).0,
+            #[cfg(feature = "soapy")]
+            SourceKind::Soapy => self.connection.form.soapy.ingress_decimation(device_rate).0,
         }
     }
 

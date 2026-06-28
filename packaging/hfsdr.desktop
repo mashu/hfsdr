@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=hfsdr
+Comment=HF SDR client with waterfall and CW skimmer
+Exec=hfsdr
+Icon=hfsdr
+Categories=HamRadio;AudioVideo;
+Terminal=false
