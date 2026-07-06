@@ -19,6 +19,8 @@ mod interaction;
 mod iq_panel;
 mod kiwi_directory;
 mod filter_diagnostic;
+mod filter_curve_plot;
+mod filter_design_panel;
 mod envelope_diagnostic;
 mod pipeline_flow;
 mod log;

@@ -843,7 +843,6 @@ mod tests {
             window: WindowKind::Kaiser,
             kaiser_beta: 8.0,
             passband_flatten: true,
-            economy_filter: false,
             full_demod: true,
             decimation: 2,
             noise_blanker: super::super::settings::NoiseBlankerSettings {

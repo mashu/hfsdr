@@ -9,13 +9,16 @@ impl WaterfallApp {
         self.radio.cw.sideband = sideband_from_u8(s.cw_sideband);
         self.radio.sideband_auto = s.cw_sideband_auto;
         self.radio.cw.passband_hz = s.passband_hz;
-        self.radio.cw.channel_filter = channel_filter_from_u8(s.channel_filter);
+        let mut channel_filter = channel_filter_from_u8(s.channel_filter);
+        if s.economy_filter {
+            channel_filter = ChannelFilterKind::Iir2Pole;
+        }
+        self.radio.cw.channel_filter = channel_filter;
         self.radio.cw.decim_filter = channel_filter_from_u8(s.decim_filter);
         self.radio.cw.iir_filter = iir_filter_from_u8(s.iir_filter);
         self.radio.cw.window = window_from_u8(s.window);
         self.radio.cw.kaiser_beta = s.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
         self.radio.cw.passband_flatten = s.passband_flatten;
-        self.radio.cw.economy_filter = s.economy_filter;
         self.radio.cw.full_demod = s.full_demod;
         self.radio.cw.decimation = s.decimation;
         self.radio.cw.noise_blanker.enabled = s.nb_enabled;
@@ -154,7 +157,7 @@ impl WaterfallApp {
             window: window_to_u8(self.radio.cw.window),
             kaiser_beta: self.radio.cw.kaiser_beta,
             passband_flatten: self.radio.cw.passband_flatten,
-            economy_filter: self.radio.cw.economy_filter,
+            economy_filter: false,
             full_demod: self.radio.cw.full_demod,
             decimation: self.radio.cw.decimation,
             nb_enabled: self.radio.cw.noise_blanker.enabled,

@@ -60,7 +60,6 @@ fn theory_cache_key(settings: &CwChannelSettings, audio_rate: f32, span_hz: f32)
     key ^= (settings.passband_flatten as u64) << 1;
     key ^= (settings.channel_filter as u8 as u64) << 2;
     key ^= (settings.iir_filter as u8 as u64) << 5;
-    key ^= (settings.economy_filter as u64) << 3;
     key ^= (settings.diagnostic.channel_fir as u64) << 4;
     for (i, n) in settings.notches.iter().enumerate() {
         let slot = (i as u64).wrapping_mul(17);
@@ -107,10 +106,11 @@ pub fn show_filter_diagnostic_panel(
 
     let cutoff = fir_cutoff_hz(view.settings.passband_hz);
     let window = window_label(view.settings);
+    let half_span = view.span_hz * 0.5;
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!(
-                "Main plot ±{:.0} Hz (−3 dB) · {:.0} Hz BW · {window}",
+                "Plot ±{half_span:.0} Hz · main ±{:.0} Hz (−3 dB) · {:.0} Hz BW · {window}",
                 view.channel_half_hz,
                 view.settings.passband_hz,
             ))
@@ -170,8 +170,8 @@ pub fn show_filter_diagnostic_panel(
     } else {
         ui.label(
             RichText::new(
-                "Hz offset from listen center — change BW / window in DSP panel; \
-                 main plot −3 dB edges update with filter width.",
+                "Hz offset from listen center — plot span zooms with filter BW so narrow \
+                 passbands stay visible. Change settings in Filter design; curve updates live.",
             )
             .small()
             .color(MUTED),
@@ -181,7 +181,7 @@ pub fn show_filter_diagnostic_panel(
 
 fn window_label(settings: &CwChannelSettings) -> &'static str {
     use hfsdr::{ChannelFilterKind, IirFilterKind, WindowKind};
-    if settings.economy_filter || settings.effective_channel_filter() == ChannelFilterKind::Iir2Pole {
+    if settings.channel_filter == ChannelFilterKind::Iir2Pole {
         return match settings.iir_filter {
             IirFilterKind::Chebyshev => "Chebyshev IIR",
             IirFilterKind::Butterworth => "Butterworth IIR",
