@@ -104,10 +104,11 @@ impl WaterfallApp {
         let spots = &self.skimmer_ui.frame_visible_spots;
         let sort = &mut self.skimmer_ui.spot_sort;
         let mut tune_to: Option<f64> = None;
+        let table_h = ui.available_height().clamp(80.0, 480.0);
         TableBuilder::new(ui)
             .striped(true)
             .sense(egui::Sense::click())
-            .max_scroll_height(300.0)
+            .max_scroll_height(table_h)
             .column(Column::exact(18.0))
             .column(Column::remainder().at_least(40.0))
             .column(Column::exact(50.0))

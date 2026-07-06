@@ -49,29 +49,42 @@ pub fn load(sonames: &[&str]) -> Option<Library> {
 
 fn search_paths(sonames: &[&str]) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    for env in ["HFSDR_LIB_DIR", "HFSDR_DEPS_PREFIX"] {
-        if let Ok(dir) = std::env::var(env) {
-            let root = PathBuf::from(&dir);
-            for name in sonames {
-                paths.push(root.join(name));
-                paths.push(root.join("lib").join(name));
-                paths.push(root.join("bin").join(name));
-            }
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(bin_dir) = exe.parent() {
-            for name in sonames {
-                paths.push(bin_dir.join(name));
-                paths.push(bin_dir.join("lib").join(name));
-                paths.push(bin_dir.join("../lib").join(name));
-            }
+    for root in bundled_lib_dirs() {
+        for name in sonames {
+            paths.push(root.join(name));
         }
     }
     for name in sonames {
         paths.push(PathBuf::from(name));
     }
     paths
+}
+
+/// Search roots for bundled/native libraries: env overrides, then AppImage/portable `usr/lib`.
+pub fn bundled_lib_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for key in ["HFSDR_LIB_DIR", "HFSDR_DEPS_PREFIX"] {
+        if let Ok(dir) = std::env::var(key) {
+            dirs.push(PathBuf::from(dir));
+        }
+    }
+    if let Ok(appdir) = std::env::var("APPDIR") {
+        let lib = PathBuf::from(appdir).join("usr/lib");
+        if lib.is_dir() {
+            dirs.push(lib);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            for rel in ["../lib", "lib", "../lib64", "lib64"] {
+                let candidate = bin_dir.join(rel);
+                if candidate.is_dir() {
+                    dirs.push(candidate);
+                }
+            }
+        }
+    }
+    dirs
 }
 
 /// Load a required symbol from an opened library.
@@ -95,5 +108,17 @@ mod tests {
         let paths = search_paths(AIRSPYHF_SONAMES);
         assert!(paths.iter().any(|p| p == Path::new("libairspyhf.so.1")));
         assert!(paths.iter().any(|p| p == Path::new("airspyhf.dll")));
+    }
+
+    #[test]
+    fn bundled_lib_dirs_includes_appdir_usr_lib() {
+        let tmp = std::env::temp_dir().join(format!("hfsdr-appdir-test-{}", std::process::id()));
+        let lib = tmp.join("usr/lib");
+        std::fs::create_dir_all(&lib).expect("tmpdir");
+        unsafe { std::env::set_var("APPDIR", &tmp) };
+        let dirs = bundled_lib_dirs();
+        unsafe { std::env::remove_var("APPDIR") };
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(dirs.iter().any(|p| p == &lib));
     }
 }

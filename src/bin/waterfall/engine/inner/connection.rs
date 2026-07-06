@@ -30,7 +30,7 @@ pub(super) fn start_connect(&mut self, req: &ConnectRequest) {
             Ok(conn) => {
                 if self.connect_cancel.load(Ordering::Relaxed) || self.request.is_none() {
                     let mut conn = conn;
-                    let _ = conn.device.stop();
+                    log::warn_if_err("stop device after cancelled connect", conn.device.stop());
                     self.set_state(ConnState::Disconnected);
                     return;
                 }
@@ -75,7 +75,7 @@ pub(super) fn start_connect(&mut self, req: &ConnectRequest) {
 
     pub(super) fn teardown(&mut self) {
         if let Some(conn) = &mut self.conn {
-            let _ = conn.device.stop();
+            log::warn_if_err("stop device", conn.device.stop());
         }
         self.conn = None;
         self.playback = None;

@@ -10,8 +10,10 @@ impl WaterfallApp {
                 log::clear();
             }
         });
+        let scroll_h = ui.available_height().max(24.0);
         egui::ScrollArea::vertical()
-            .max_height(140.0)
+            .auto_shrink([false, false])
+            .max_height(scroll_h)
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 for line in log::entries() {

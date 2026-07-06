@@ -429,11 +429,25 @@ impl IqSource for SoapySource {
 
         self.stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.read_thread.take() {
-            let _ = handle.join();
+            if let Err(err) = handle.join() {
+                crate::log::warn(format!("SoapySDR read thread join failed: {err:?}"));
+            }
         }
         if let Some(stream) = self.stream.take() {
-            let _ = sys::deactivate_stream(self.dev, stream);
-            let _ = sys::close_stream(self.dev, stream);
+            let rc = sys::deactivate_stream(self.dev, stream);
+            if rc != 0 {
+                crate::log::warn(format!(
+                    "SoapySDR deactivateStream failed (code {rc}): {}",
+                    sys::last_error_message()
+                ));
+            }
+            let rc = sys::close_stream(self.dev, stream);
+            if rc != 0 {
+                crate::log::warn(format!(
+                    "SoapySDR closeStream failed (code {rc}): {}",
+                    sys::last_error_message()
+                ));
+            }
         }
         self.streaming = false;
         self.prod = None;
@@ -481,7 +495,7 @@ impl SoapyControls for SoapySource {
 
 impl Drop for SoapySource {
     fn drop(&mut self) {
-        let _ = self.stop();
+        crate::log::warn_if_err("SoapySDR stop on drop", self.stop());
         #[cfg(any(test, coverage, mock_hal))]
         if self.mock.is_some() {
             return;
@@ -527,6 +541,12 @@ fn soapy_read_loop(
             if n <= 0 {
                 if stop.load(Ordering::Relaxed) {
                     return;
+                }
+                if n < 0 {
+                    crate::log::warn(format!(
+                        "SoapySDR readStream error (code {n}): {}",
+                        sys::last_error_message()
+                    ));
                 }
                 break;
             }

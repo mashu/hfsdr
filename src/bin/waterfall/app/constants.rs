@@ -8,6 +8,9 @@ pub(crate) const LEFT_PANEL_MAX_W: f32 = 440.0;
 /// Minimum DSP panel width (AF scope, stage toggles, labeled sliders).
 pub(crate) const RIGHT_PANEL_MIN_W: f32 = 252.0;
 pub(crate) const RIGHT_PANEL_MAX_W: f32 = 420.0;
+/// Resizable bottom panels (log console, spots history).
+pub(crate) const BOTTOM_PANEL_MIN_H: f32 = 72.0;
+pub(crate) const BOTTOM_PANEL_MAX_H: f32 = 520.0;
 
 /// CW band plan: calling frequency + typical CW segment width for panadapter zoom.
 pub(crate) struct CwBandPreset {

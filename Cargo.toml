@@ -1,6 +1,6 @@
 [package]
 name = "hfsdr"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2021"
 description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR, QMX)"
 license = "MIT"
@@ -30,6 +30,9 @@ dirs = "5"
 flate2 = "1.0"
 rfd = { version = "0.15", optional = true }
 ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 default = ["airspy"]

@@ -346,18 +346,22 @@ impl eframe::App for WaterfallApp {
                 .show_inside(ui, |ui| self.right_panel(ui));
         }
 
-        if self.chrome.show_history {
-            egui::Panel::bottom("history")
-                .resizable(true)
-                .default_size(150.0)
-                .show_inside(ui, |ui| self.history_panel(ui));
-        }
-
         if self.chrome.show_console {
             egui::Panel::bottom("console")
                 .resizable(true)
+                .frame(bottom_panel_frame())
+                .size_range(BOTTOM_PANEL_MIN_H..=BOTTOM_PANEL_MAX_H)
                 .default_size(160.0)
                 .show_inside(ui, |ui| self.console_panel(ui));
+        }
+
+        if self.chrome.show_history {
+            egui::Panel::bottom("history")
+                .resizable(true)
+                .frame(bottom_panel_frame())
+                .size_range(BOTTOM_PANEL_MIN_H..=BOTTOM_PANEL_MAX_H)
+                .default_size(150.0)
+                .show_inside(ui, |ui| self.history_panel(ui));
         }
 
         egui::CentralPanel::default()
