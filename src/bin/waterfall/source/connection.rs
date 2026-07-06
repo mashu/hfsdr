@@ -413,26 +413,43 @@ fn connect_soapy(
     let mut src = SoapySource::open(args).map_err(|e| {
         format!("SoapySDR open failed: {e} ({})", hfsdr::soapy::last_error())
     })?;
+    hfsdr::log::info(format!(
+        "SoapySDR: opened {} (driver={})",
+        args,
+        src.driver()
+    ));
     let rates = src.sample_rates();
-    let sr = if req.sample_rate != 0 {
+    let requested = if req.sample_rate != 0 {
         req.sample_rate
     } else {
         default_soapy_sample_rate(&rates)
     };
+    let sr = hfsdr::soapy::snap_sample_rate(requested, &rates);
     src.set_sample_rate(sr).map_err(|e| e.to_string())?;
+    let device_rate = src.sample_rate();
     if !req.soapy.antenna.is_empty() {
-        src.set_antenna_name(&req.soapy.antenna).ok();
+        if let Err(e) = src.set_antenna_name(&req.soapy.antenna) {
+            hfsdr::log::warn(format!(
+                "SoapySDR: antenna '{}' not applied: {e}",
+                req.soapy.antenna
+            ));
+        }
     }
     src.set_automatic_gain(req.soapy.agc).map_err(|e| e.to_string())?;
     if !req.soapy.agc {
-        src.set_overall_gain(req.soapy.gain_db).ok();
+        if let Err(e) = src.set_overall_gain(req.soapy.gain_db) {
+            hfsdr::log::warn(format!(
+                "SoapySDR: gain {:.1} dB not applied: {e}",
+                req.soapy.gain_db
+            ));
+        }
     }
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
-    let (ingress_decim, eff_sr) = req.soapy.ingress_decimation(sr);
-    let ring_cap = soapy_ring_capacity(sr);
+    let (ingress_decim, eff_sr) = req.soapy.ingress_decimation(device_rate);
+    let ring_cap = soapy_ring_capacity(device_rate);
     let device_iq = src.start().map_err(|e| e.to_string())?;
     let (iq, iq_spectrum, bridge, iq_spectrum_ring_capacity) =
-        attach_dual_ring(device_iq, ingress_decim, sr as f32, ring_cap, DecimFilterKind::LinearFir);
+        attach_dual_ring(device_iq, ingress_decim, device_rate as f32, ring_cap, DecimFilterKind::LinearFir);
     Ok(super::device::Connection {
         device: DeviceSource::Soapy(src),
         iq,
@@ -440,7 +457,7 @@ fn connect_soapy(
         bridge,
         iq_ring_capacity: ring_cap,
         iq_spectrum_ring_capacity,
-        device_sample_rate: sr as f32,
+        device_sample_rate: device_rate as f32,
         sample_rate: eff_sr,
         center_hz: req.center_hz,
         is_kiwi: false,

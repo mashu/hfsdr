@@ -41,6 +41,37 @@ copy_sdr_lib airspyhf libairspyhf.so.1 libairspyhf.so
 copy_sdr_lib rtlsdr librtlsdr.so.0 librtlsdr.so
 copy_sdr_lib soapysdr libSoapySDR.so.0.8 libSoapySDR.so.0 libSoapySDR.so
 
+copy_soapy_plugins() {
+  local dest="$APPDIR/usr/lib/SoapySDR/modules0.8"
+  mkdir -p "$dest"
+  local copied=0
+  for dir in /usr/lib/x86_64-linux-gnu/SoapySDR/modules0.8 /usr/lib/SoapySDR/modules0.8; do
+    if [[ -d "$dir" ]]; then
+      for f in "$dir"/*.so; do
+        [[ -f "$f" ]] || continue
+        cp -L "$f" "$dest/"
+        echo "Bundled Soapy plugin ${f}"
+        copied=1
+      done
+    fi
+  done
+  for dir in /usr/lib/x86_64-linux-gnu /usr/lib; do
+    for f in "$dir"/libSoapy*.so*; do
+      [[ -f "$f" ]] || continue
+      case "$(basename "$f")" in
+        libSoapySDR.so*) continue ;;
+      esac
+      cp -L "$f" "$APPDIR/usr/lib/"
+      echo "Bundled Soapy module ${f}"
+      copied=1
+    done
+  done
+  if [[ "$copied" -eq 0 ]]; then
+    echo "warning: no SoapySDR driver plugins found — Pluto/RTL/etc. need system modules or SOAPY_SDR_PLUGIN_PATH" >&2
+  fi
+}
+copy_soapy_plugins
+
 LINUXDEPLOY="${ROOT}/.cache/linuxdeploy-x86_64.AppImage"
 PLUGIN="${ROOT}/.cache/linuxdeploy-plugin-appimage-x86_64.AppImage"
 

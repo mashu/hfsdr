@@ -68,6 +68,9 @@ type SetAntennaFn =
     unsafe extern "C" fn(*mut SoapySDRDevice, c_int, usize, *const c_char) -> c_int;
 type StringsClearFn = unsafe extern "C" fn(*mut *mut *mut c_char, usize);
 type GetDriverKeyFn = unsafe extern "C" fn(*const SoapySDRDevice) -> *mut c_char;
+type ListModulesFn = unsafe extern "C" fn(*mut usize) -> *mut *mut c_char;
+type ListSearchPathsFn = unsafe extern "C" fn(*mut usize) -> *mut *mut c_char;
+type LoadModulesFn = unsafe extern "C" fn();
 
 struct Api {
     _lib: Library,
@@ -99,15 +102,50 @@ struct Api {
     set_antenna: SetAntennaFn,
     strings_clear: StringsClearFn,
     get_driver_key: GetDriverKeyFn,
+    list_modules: Option<ListModulesFn>,
+    list_search_paths: Option<ListSearchPathsFn>,
+    load_modules: Option<LoadModulesFn>,
 }
 
 static API: OnceLock<Option<Api>> = OnceLock::new();
+
+/// Configure SoapySDR plugin search paths before the first library load.
+pub fn prepare_environment() {
+    if std::env::var("SOAPY_SDR_PLUGIN_PATH").is_ok() {
+        return;
+    }
+    for key in ["HFSDR_LIB_DIR", "HFSDR_DEPS_PREFIX"] {
+        let Ok(dir) = std::env::var(key) else {
+            continue;
+        };
+        let root = std::path::PathBuf::from(&dir);
+        for sub in [
+            "SoapySDR/modules0.8",
+            "SoapySDR/modules",
+            "lib/SoapySDR/modules0.8",
+        ] {
+            let plugins = root.join(sub);
+            if plugins.is_dir() {
+                // SAFETY: called before any Soapy thread; only sets env once at startup.
+                unsafe { std::env::set_var("SOAPY_SDR_PLUGIN_PATH", &plugins) };
+                return;
+            }
+        }
+        if root.join("libSoapyPlutoSDR.so").exists()
+            || root.join("libSoapyPlutoSDR.so.0.8").exists()
+        {
+            unsafe { std::env::set_var("SOAPY_SDR_PLUGIN_PATH", &root) };
+            return;
+        }
+    }
+}
 
 fn api() -> Option<&'static Api> {
     API.get_or_init(load_api).as_ref()
 }
 
 fn load_api() -> Option<Api> {
+    prepare_environment();
     let lib = dylib::load(SOAPYSDR_SONAMES)?;
     Some(Api {
         enumerate_str_args: dylib::required_sym(&lib, "SoapySDRDevice_enumerateStrArgs")?,
@@ -138,12 +176,114 @@ fn load_api() -> Option<Api> {
         set_antenna: dylib::required_sym(&lib, "SoapySDRDevice_setAntenna")?,
         strings_clear: dylib::required_sym(&lib, "SoapySDRStrings_clear")?,
         get_driver_key: dylib::required_sym(&lib, "SoapySDRDevice_getDriverKey")?,
+        list_modules: dylib::optional_sym(&lib, "SoapySDR_listModules"),
+        list_search_paths: dylib::optional_sym(&lib, "SoapySDR_listSearchPaths"),
+        load_modules: dylib::optional_sym(&lib, "SoapySDR_loadModules"),
         _lib: lib,
     })
 }
 
 pub fn library_loaded() -> bool {
     api().is_some()
+}
+
+/// Load all discoverable SoapySDR driver modules (no-op when lib or symbol missing).
+pub fn load_driver_modules() {
+    if let Some(a) = api() {
+        if let Some(load) = a.load_modules {
+            unsafe { load() };
+        }
+    }
+}
+
+fn string_array(len: &mut usize, ptr: *mut *mut c_char) -> Vec<String> {
+    if ptr.is_null() || *len == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(*len);
+    for i in 0..*len {
+        out.push(cstr_lossy(unsafe { *ptr.add(i) }));
+    }
+    if let Some(a) = api() {
+        unsafe { (a.strings_clear)(&mut (ptr as *mut *mut c_char), *len) };
+    }
+    out
+}
+
+/// Plugin directories SoapySDR searches for driver modules.
+pub fn list_search_paths() -> Vec<String> {
+    let Some(a) = api() else {
+        return Vec::new();
+    };
+    let Some(list_paths) = a.list_search_paths else {
+        return Vec::new();
+    };
+    let mut len = 0usize;
+    let ptr = unsafe { list_paths(&mut len) };
+    string_array(&mut len, ptr)
+}
+
+/// File paths of installed SoapySDR driver modules (e.g. `libSoapyPlutoSDR.so`).
+pub fn list_module_paths() -> Vec<String> {
+    let Some(a) = api() else {
+        return Vec::new();
+    };
+    let Some(list_modules) = a.list_modules else {
+        return Vec::new();
+    };
+    let mut len = 0usize;
+    let ptr = unsafe { list_modules(&mut len) };
+    string_array(&mut len, ptr)
+}
+
+/// Driver keys parsed from [`list_module_paths`] (e.g. `plutosdr`, `rtlsdr`).
+pub fn available_driver_keys() -> Vec<String> {
+    let mut keys: Vec<String> = list_module_paths()
+        .iter()
+        .filter_map(|path| driver_key_from_module_path(path))
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+fn driver_key_from_module_path(path: &str) -> Option<String> {
+    let file = std::path::Path::new(path)
+        .file_name()?
+        .to_str()?;
+    let stem = file
+        .strip_suffix(".so.0.8")
+        .or_else(|| file.strip_suffix(".so.0"))
+        .or_else(|| file.strip_suffix(".so"))
+        .or_else(|| file.strip_suffix(".dll"))
+        .or_else(|| file.strip_suffix(".dylib"))
+        .unwrap_or(file);
+    let mut body = stem.strip_prefix("lib").unwrap_or(stem);
+    body = body.strip_suffix("Support").unwrap_or(body);
+    body = body.strip_prefix("Soapy").unwrap_or(body);
+    body = body.strip_suffix("SDR").unwrap_or(body);
+    if body.is_empty() {
+        return None;
+    }
+    let key = body.to_ascii_lowercase();
+    normalize_driver_key(&key)
+}
+
+fn normalize_driver_key(key: &str) -> Option<String> {
+    const KNOWN: &[&str] = &[
+        "airspyhf", "airspy", "hackrf", "bladerf", "lime", "lms7", "uhd", "sdrplay", "remote",
+        "plutosdr", "rtlsdr", "osmosdr", "miri", "audio", "redpitaya", "hydrasdr",
+    ];
+    if KNOWN.contains(&key) {
+        return Some(key.to_string());
+    }
+    match key {
+        "pluto" => Some("plutosdr".into()),
+        "rtl" => Some("rtlsdr".into()),
+        "hackrf" | "blade" | "osmosdr" | "miri" | "hydra" => Some(format!("{key}sdr")),
+        _ if key.ends_with("sdr") => Some(key.to_string()),
+        _ => Some(format!("{key}sdr")),
+    }
 }
 
 fn cstr_lossy(ptr: *const c_char) -> String {
@@ -197,6 +337,26 @@ pub fn enumerate_devices(driver: &str) -> Vec<(String, String)> {
     }
     unsafe { (a.kwargs_list_clear)(list, len) };
     out
+}
+
+/// Operator-facing hint when enumeration returns no devices.
+pub fn enumeration_hint(driver: &str) -> String {
+    if api().is_none() {
+        return "libSoapySDR not found — install SoapySDR or set HFSDR_LIB_DIR to bundled libs"
+            .into();
+    }
+    let d = driver.trim();
+    if d == "plutosdr" {
+        return "No Pluto devices — install soapysdr-module-plutosdr, check USB cable, \
+                or enter device args manually (driver=plutosdr,uri=ip:192.168.2.1)"
+            .into();
+    }
+    if d.is_empty() {
+        return "No SoapySDR devices — install driver modules (e.g. soapysdr-module-plutosdr) \
+                or enter device args manually"
+            .into();
+    }
+    format!("No devices for driver '{d}' — install the matching SoapySDR module")
 }
 
 pub fn make_device(args: &str) -> Option<*mut SoapySDRDevice> {
@@ -426,4 +586,53 @@ pub fn read_stream(
             )
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::driver_key_from_module_path;
+
+    #[test]
+    fn driver_key_from_pluto_module() {
+        assert_eq!(
+            driver_key_from_module_path("/usr/lib/SoapySDR/modules0.8/libPlutoSDRSupport.so").as_deref(),
+            Some("plutosdr")
+        );
+        assert_eq!(
+            driver_key_from_module_path("/usr/lib/libSoapyPlutoSDR.so.0.8").as_deref(),
+            Some("plutosdr")
+        );
+    }
+
+    #[test]
+    fn driver_key_from_rtl_module() {
+        assert_eq!(
+            driver_key_from_module_path("librtlsdrSupport.so").as_deref(),
+            Some("rtlsdr")
+        );
+        assert_eq!(
+            driver_key_from_module_path("libSoapyRTLSDR.so").as_deref(),
+            Some("rtlsdr")
+        );
+    }
+
+    #[test]
+    fn driver_key_from_airspyhf_module() {
+        assert_eq!(
+            driver_key_from_module_path("libairspyhfSupport.so").as_deref(),
+            Some("airspyhf")
+        );
+        assert_eq!(
+            driver_key_from_module_path("libSoapyAirspyHFSDR.so").as_deref(),
+            Some("airspyhf")
+        );
+    }
+
+    #[test]
+    fn driver_key_from_hackrf_support_module() {
+        assert_eq!(
+            driver_key_from_module_path("libHackRFSupport.so").as_deref(),
+            Some("hackrf")
+        );
+    }
 }

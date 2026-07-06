@@ -33,7 +33,12 @@ impl Default for SoapySettings {
 
 #[cfg(feature = "soapy")]
 impl SoapySettings {
+    /// Soapy drivers deliver IQ in bursts — keep full device rate unless the
+    /// operator explicitly sets Process IQ (unlike native Airspy/RTL auto-decim).
     pub fn ingress_decimation(&self, device_rate: u32) -> (usize, f32) {
+        if self.iq_process_hz == 0 {
+            return (1, device_rate as f32);
+        }
         hfsdr::ingress_decimation_from_hz(self.iq_process_hz, device_rate)
     }
 }
@@ -55,9 +60,17 @@ mod tests {
 
     #[test]
     #[cfg(feature = "soapy")]
-    fn soapy_ingress_decimation_divides_evenly() {
+    fn soapy_default_ingress_stays_at_device_rate() {
+        let s = SoapySettings::default();
+        assert_eq!(s.ingress_decimation(768_000), (1, 768_000.0));
+        assert_eq!(s.ingress_decimation(384_000), (1, 384_000.0));
+    }
+
+    #[test]
+    #[cfg(feature = "soapy")]
+    fn soapy_explicit_process_decimates() {
         let mut s = SoapySettings::default();
-        s.iq_process_hz = 48_000;
-        assert_eq!(s.ingress_decimation(1_920_000), (40, 48_000.0));
+        s.iq_process_hz = 192_000;
+        assert_eq!(s.ingress_decimation(768_000), (4, 192_000.0));
     }
 }

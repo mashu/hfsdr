@@ -19,6 +19,7 @@
 //! When ingress decimation is configured, a bridge thread fans device IQ into raw +
 //! decimated rings before the engine pump.
 
+pub mod log;
 pub mod native_sdr;
 pub mod sdr_ffi;
 #[cfg(feature = "soapy")]

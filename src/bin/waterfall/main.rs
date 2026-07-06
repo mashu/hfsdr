@@ -102,12 +102,16 @@ fn log_native_sdr_availability() {
         log::warn(
             "Airspy HF+ disabled: libairspyhf not found (bundled next to hfsdr or via system package; KiwiSDR and QMX still work)",
         );
+    } else {
+        log::info("Airspy HF+: libairspyhf available");
     }
     #[cfg(feature = "rtlsdr")]
     if !hfsdr::native_sdr::rtlsdr_available() {
         log::warn(
             "RTL-SDR disabled: librtlsdr not found (bundled next to hfsdr or via system package; KiwiSDR and QMX still work)",
         );
+    } else {
+        log::info("RTL-SDR: librtlsdr available");
     }
     #[cfg(feature = "soapy")]
     if !hfsdr::native_sdr::soapy_available() {
@@ -115,4 +119,5 @@ fn log_native_sdr_availability() {
             "SoapySDR disabled: libSoapySDR not found (bundle next to hfsdr or install system package)",
         );
     }
+    // Soapy driver/module details are logged from native_sdr::init → soapy::log_startup_status.
 }
