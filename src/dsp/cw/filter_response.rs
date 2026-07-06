@@ -16,6 +16,16 @@ use super::settings::{ChannelFilterKind, CwChannelSettings, MAX_NOTCHES};
 /// Main-plot band / notch edge marker — attenuation relative to passband peak.
 pub const OVERLAY_ATTEN_DB: f32 = -3.0;
 
+/// Full frequency span for filter-response plots (Hz), zoomed to the passband and skirts.
+///
+/// Unlike the panadapter view span, this tracks [`channel_half_hz`] so a 25 Hz CW filter
+/// fills the plot instead of appearing as a single-pixel spike.
+pub fn filter_curve_span_hz(passband_hz: f32, channel_half_hz: f32) -> f32 {
+    let pb = clamp_passband_hz(passband_hz);
+    let half = channel_half_hz.max(pb * 0.15).max(5.0);
+    (half * 12.0).clamp(pb * 2.0, CHANNEL_PASSBAND_MAX_HZ * 1.25)
+}
+
 /// Points along the diagnostic curve (offset Hz from listen center).
 pub const FILTER_CURVE_POINTS: usize = 256;
 
@@ -66,7 +76,6 @@ pub fn filter_overlay_cache_key(settings: &CwChannelSettings, audio_rate: f32) -
     key ^= (settings.passband_flatten as u64) << 1;
     key ^= (settings.channel_filter as u8 as u64) << 2;
     key ^= (settings.iir_filter as u8 as u64) << 5;
-    key ^= (settings.economy_filter as u64) << 3;
     key ^= (settings.diagnostic.channel_fir as u64) << 4;
     for (i, n) in settings.notches.iter().enumerate() {
         let slot = (i as u64).wrapping_mul(17);
@@ -150,6 +159,33 @@ pub fn notch_width_for_display_half(
     ((lo + hi) * 0.5).clamp(width_min_hz, width_max_hz)
 }
 
+/// Channel magnitude at `offset_hz` from listen center (0 dB = passband peak).
+pub fn channel_magnitude_db_at(
+    settings: &CwChannelSettings,
+    audio_rate: f32,
+    offset_hz: f32,
+) -> f32 {
+    let rate = audio_rate.max(1.0);
+    let bandwidth = settings.channel_bandwidth_hz();
+    let mag = if settings.channel_filter == ChannelFilterKind::Iir2Pole {
+        let mut bq = Biquad::new();
+        let q = iir_2pole_lowpass_q(settings.iir_filter);
+        bq.set_lowpass(rate, (bandwidth * 0.5).max(10.0), q);
+        bq.magnitude_linear(rate, offset_hz.abs())
+    } else {
+        let design = LowpassDesign {
+            window: settings.window,
+            kaiser_beta: settings.kaiser_beta,
+            passband_flatten: settings.passband_flatten,
+        };
+        let taps = design_lowpass_with(rate, bandwidth, design)
+            .taps()
+            .to_vec();
+        fir_magnitude_linear(&taps, rate, offset_hz.abs())
+    };
+    linear_to_db(mag)
+}
+
 pub fn channel_half_width_hz(
     settings: &CwChannelSettings,
     audio_rate: f32,
@@ -157,7 +193,7 @@ pub fn channel_half_width_hz(
 ) -> f32 {
     let bandwidth = settings.channel_bandwidth_hz();
     let max_search = (bandwidth * 1.5).max(CHANNEL_PASSBAND_MAX_HZ * 0.5);
-    if settings.effective_channel_filter() == ChannelFilterKind::Iir2Pole {
+    if settings.channel_filter == ChannelFilterKind::Iir2Pole {
         let mut bq = Biquad::new();
         let q = iir_2pole_lowpass_q(settings.iir_filter);
         bq.set_lowpass(audio_rate, (bandwidth * 0.5).max(10.0), q);
@@ -248,7 +284,7 @@ pub fn build_listen_filter_curves(req: &FilterCurveRequest) -> FilterCurve {
         .to_vec();
 
     let mut iir = Biquad::new();
-    let use_iir = settings.effective_channel_filter() == ChannelFilterKind::Iir2Pole;
+    let use_iir = settings.channel_filter == ChannelFilterKind::Iir2Pole;
     if use_iir {
         let q = iir_2pole_lowpass_q(settings.iir_filter);
         iir.set_lowpass(rate, (bandwidth * 0.5).max(10.0), q);
@@ -479,6 +515,15 @@ mod tests {
         let solved = notch_width_for_display_half(half, rate, 10.0, 500.0);
         let half2 = notch_display_half_hz(solved, rate, db_to_linear(OVERLAY_ATTEN_DB));
         assert!((half2 - half).abs() < 2.0);
+    }
+
+    #[test]
+    fn filter_curve_span_zooms_narrow_passband() {
+        let wide = filter_curve_span_hz(200.0, 80.0);
+        let narrow = filter_curve_span_hz(25.0, 8.0);
+        assert!(narrow < 200.0, "narrow span {narrow}");
+        assert!(narrow < wide);
+        assert!(narrow >= 50.0);
     }
 
     #[test]

@@ -23,209 +23,6 @@ impl WaterfallApp {
         });
     }
 
-    fn filter_design_label_tip(ui: &mut egui::Ui, label: &str, title: &str, lines: &[(&str, Color32)]) {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let label_resp = ui.label(egui::RichText::new(label).small().color(MUTED));
-        let hint_resp = ui.label(egui::RichText::new("(?)").small().color(MUTED));
-        attach_rich_tooltip(&label_resp, Some(title), lines);
-        attach_rich_tooltip(&hint_resp, Some(title), lines);
-    }
-
-    fn filter_segment_row(
-        ui: &mut egui::Ui,
-        label: &str,
-        title: &str,
-        tip: &[(&str, Color32)],
-        id: &str,
-        selected: usize,
-        options: &[&str],
-    ) -> Option<usize> {
-        let picked = ui.vertical(|ui| {
-            Self::filter_design_label_tip(ui, label, title, tip);
-            segment_choice_sized(ui, id, selected, options, 36.0)
-        });
-        picked.inner
-    }
-
-    fn cw_filter_design_body(&mut self, ui: &mut egui::Ui) {
-        let economy_active = self.radio.cw.economy_filter;
-        let arch_sel = if self.radio.cw.effective_channel_filter() == ChannelFilterKind::LinearFir {
-            0
-        } else {
-            1
-        };
-        ui.add_enabled_ui(!economy_active, |ui| {
-            if let Some(i) = Self::filter_segment_row(
-                ui,
-                "Architecture",
-                "Channel filter architecture",
-                &[
-                    ("IQ bandpass, pre-demod", ACCENT),
-                    (
-                        "Both options filter complex baseband before the BFO. Only energy \
-                         that passes this bandpass is demodulated into audio.",
-                        MUTED,
-                    ),
-                    ("FIR", OK),
-                    (
-                        "Windowed sinc — linear phase, steep skirts, predictable group delay.",
-                        MUTED,
-                    ),
-                    ("IIR 2-pole", OK),
-                    ("Minimal delay; non-linear phase and may ring on fast CW.", MUTED),
-                ],
-                "ch_filter_arch",
-                arch_sel,
-                &["FIR", "IIR 2-pole"],
-            ) {
-                self.radio.cw.channel_filter = if i == 0 {
-                    ChannelFilterKind::LinearFir
-                } else {
-                    ChannelFilterKind::Iir2Pole
-                };
-            }
-        });
-        if economy_active {
-            ui.label(
-                egui::RichText::new("Economy filter active — architecture locked to IIR 2-pole")
-                    .small()
-                    .color(MUTED),
-            );
-        }
-        if !economy_active && self.radio.cw.channel_filter == ChannelFilterKind::LinearFir {
-            let shape_sel = match self.radio.cw.window {
-                WindowKind::Gaussian => 0,
-                WindowKind::RaisedCosine => 1,
-                WindowKind::Blackman => 2,
-                WindowKind::Kaiser => 3,
-            };
-            if let Some(i) = Self::filter_segment_row(
-                ui,
-                "Window",
-                "FIR window (filter shape)",
-                &[
-                    ("Shapes the channel FIR", ACCENT),
-                    (
-                        "The channel filter is a windowed-sinc bandpass on IQ. The window \
-                         truncates the ideal sinc and sets how sharply energy outside your \
-                         passband is rejected.",
-                        MUTED,
-                    ),
-                    ("Why it affects audio", OK),
-                    (
-                        "This runs before BFO demod — neighbors that leak through the skirts \
-                         are mixed into your sidetone. BW sets passband width; window sets \
-                         skirt steepness vs keying ringing.",
-                        MUTED,
-                    ),
-                    ("Pick", ACCENT),
-                    (
-                        "Blackman/Kaiser: best adjacent-CW rejection · Gaussian: softest · \
-                         RaisedCos: everyday default.",
-                        MUTED,
-                    ),
-                ],
-                "ch_filter_win",
-                shape_sel,
-                &["Gauss", "RaisedCos", "Blackman", "Kaiser"],
-            ) {
-                self.radio.cw.window = match i {
-                    1 => WindowKind::RaisedCosine,
-                    2 => WindowKind::Blackman,
-                    3 => WindowKind::Kaiser,
-                    _ => WindowKind::Gaussian,
-                };
-            }
-            if self.radio.cw.window == WindowKind::Kaiser {
-                let beta_resp = scroll_slider_f32(
-                    ui,
-                    &mut self.radio.cw.kaiser_beta,
-                    MIN_KAISER_BETA..=MAX_KAISER_BETA,
-                    "Kaiser β",
-                );
-                attach_rich_tooltip(
-                    &beta_resp,
-                    Some("Kaiser β"),
-                    &[
-                        ("Stopband steepness", ACCENT),
-                        (
-                            "Higher β sharpens FIR skirts (better adjacent rejection); lower β \
-                             is softer with a shorter impulse.",
-                            MUTED,
-                        ),
-                    ],
-                );
-            }
-            let flatten_resp =
-                ui.checkbox(&mut self.radio.cw.passband_flatten, "Flatten passband (inv-sinc)");
-            attach_rich_tooltip(
-                &flatten_resp,
-                Some("Flatten passband"),
-                &[
-                    ("Inv-sinc lift", ACCENT),
-                    (
-                        "Lifts upstream boxcar/CIC droop (N≈7). Off by default — enable if the tone sounds dull at band edges.",
-                        MUTED,
-                    ),
-                ],
-            );
-        }
-        let use_iir = economy_active
-            || self.radio.cw.channel_filter == ChannelFilterKind::Iir2Pole;
-        if use_iir {
-            let iir_sel = match self.radio.cw.iir_filter {
-                IirFilterKind::Butterworth => 0,
-                IirFilterKind::Chebyshev => 1,
-            };
-            if let Some(i) = Self::filter_segment_row(
-                ui,
-                "IIR type",
-                "IIR filter shape",
-                &[
-                    ("2-pole prototype", ACCENT),
-                    (
-                        "Sets the biquad Q for the IQ channel lowpass. FIR window types \
-                         do not apply — IIR shape is defined by the analog prototype.",
-                        MUTED,
-                    ),
-                    ("Butterworth", OK),
-                    ("Maximally flat passband — gentle, minimal peaking.", MUTED),
-                    ("Chebyshev", ACCENT),
-                    (
-                        "Steeper stopband with ~2 dB passband ripple — better adjacent \
-                         rejection; may ring more on keying.",
-                        MUTED,
-                    ),
-                ],
-                "ch_filter_iir",
-                iir_sel,
-                &["Butterworth", "Chebyshev"],
-            ) {
-                self.radio.cw.iir_filter = if i == 1 {
-                    IirFilterKind::Chebyshev
-                } else {
-                    IirFilterKind::Butterworth
-                };
-            }
-        }
-        let economy = ui.checkbox(
-            &mut self.radio.cw.economy_filter,
-            "Economy filter (2-pole IIR)",
-        );
-        attach_rich_tooltip(
-            &economy,
-            Some("Economy filter"),
-            &[
-                ("Lower CPU", ACCENT),
-                (
-                    "Overrides architecture with a 2-pole IIR channel filter. \
-                     Steeper skirts but may ring on fast CW.",
-                    MUTED,
-                ),
-            ],
-        );
-    }
-
     pub(crate) fn cw_demod_card(&mut self, ui: &mut egui::Ui) {
         let simple = self.chrome.cw_simple_ui;
         collapsible_section(
@@ -503,7 +300,6 @@ impl WaterfallApp {
 
                             let filter_advanced =
                                 self.radio.cw.channel_filter != ChannelFilterKind::LinearFir
-                                    || self.radio.cw.economy_filter
                                     || self.radio.cw.iir_filter != IirFilterKind::Butterworth
                                     || self.radio.cw.window != WindowKind::RaisedCosine
                                     || self.radio.cw.passband_flatten
@@ -514,7 +310,17 @@ impl WaterfallApp {
                             .id_salt("cw_filter_design")
                             .default_open(filter_advanced)
                             .show(ui, |ui| {
-                                self.cw_filter_design_body(ui);
+                                let audio_rate = hfsdr::audio_sample_rate(
+                                    self.radio.sample_rate,
+                                    self.radio.cw.decimation,
+                                );
+                                crate::filter_design_panel::show_filter_design_panel(
+                                    ui,
+                                    crate::filter_design_panel::FilterDesignPanel {
+                                        settings: &mut self.radio.cw,
+                                        audio_rate,
+                                    },
+                                );
                             });
                             attach_rich_tooltip(
                                 &design_hdr.header_response,
@@ -522,10 +328,8 @@ impl WaterfallApp {
                                 &[
                                     ("How the bandpass is built", ACCENT),
                                     (
-                                        "BW presets and the slider set passband width. These advanced \
-                                         controls set filter architecture and FIR window shape — \
-                                         they change adjacent-signal rejection and keying character, \
-                                         not just how wide the passband is.",
+                                        "BW sets passband width. Architecture and window set skirt \
+                                         steepness — the response plot above updates live as you change settings.",
                                         MUTED,
                                     ),
                                 ],

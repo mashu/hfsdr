@@ -170,12 +170,8 @@ impl WaterfallApp {
             self.radio.sample_rate.max(self.engine_ui.stats.sample_rate),
             self.radio.cw.decimation,
         );
-        let view_span = self.plot.plot_view.view_span_hz(
-            self.plot_full_span_hz(),
-            self.plot_max_zoom_out(),
-        );
-        let span_hz = (view_span * 0.35).clamp(400.0, 3_000.0);
         let channel_half_hz = self.filter_overlay_cached().channel_half_hz;
+        let span_hz = hfsdr::filter_curve_span_hz(self.radio.cw.passband_hz, channel_half_hz);
         let spectrum = self.spectrum_view();
         let streaming = matches!(self.engine_ui.conn_state, ConnState::Streaming);
         let listen_offset_hz = self.listen_offset_hz();

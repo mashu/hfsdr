@@ -239,8 +239,6 @@ pub struct CwChannelSettings {
     pub sidetone_envelope: SidetoneEnvelopeSettings,
     /// Diagnostic bypass (flow diagram / A/B); not saved to disk.
     pub diagnostic: DiagnosticBypassSettings,
-    /// Use 2-pole IIR instead of linear FIR for lower CPU (may ring on fast CW).
-    pub economy_filter: bool,
     /// Process the full IQ drain through listen demod (no tail cap on catch-up).
     pub full_demod: bool,
 }
@@ -269,20 +267,15 @@ impl Default for CwChannelSettings {
             agc_mode: AgcMode::Envelope,
             sidetone_envelope: SidetoneEnvelopeSettings::default(),
             diagnostic: DiagnosticBypassSettings::default(),
-            economy_filter: false,
             full_demod: true,
         }
     }
 }
 
 impl CwChannelSettings {
-    /// Channel filter after economy override.
+    /// Channel filter after legacy economy override (always [`Self::channel_filter`]).
     pub fn effective_channel_filter(&self) -> ChannelFilterKind {
-        if self.economy_filter {
-            ChannelFilterKind::Iir2Pole
-        } else {
-            self.channel_filter
-        }
+        self.channel_filter
     }
 
     pub fn channel_bandwidth_hz(&self) -> f32 {

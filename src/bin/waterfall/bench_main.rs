@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hfsdr::{
-    ChannelOffsetHz, Complex32, CwChannel, CwChannelSettings, CwStageMetrics,
+    ChannelFilterKind, ChannelOffsetHz, Complex32, CwChannel, CwChannelSettings, CwStageMetrics,
     IqAudioDemod, IqSource, KiwiSource, ListenOrigin, WidebandCwIngress,
 };
 use rtrb::RingBuffer;
@@ -294,9 +294,9 @@ fn run_demod_microbench(args: &[String]) {
 
     let mut settings = CwChannelSettings::default();
     settings.listen_offset_hz = ChannelOffsetHz::new(700.0);
-    settings.economy_filter = economy;
     if economy {
-        eprintln!("=== economy filter (2-pole IIR override) ===");
+        settings.channel_filter = ChannelFilterKind::Iir2Pole;
+        eprintln!("=== IIR 2-pole channel filter ===");
     }
 
     for &r in &rates {
