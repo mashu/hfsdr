@@ -1,5 +1,7 @@
 //! Waterfall GPU/CPU texture cache (storage + viewport).
 
+use std::time::Instant;
+
 use eframe::egui::{self, Color32};
 
 use crate::app::{StorageKey, ViewportKey};
@@ -19,6 +21,11 @@ pub struct WaterfallTextureCache {
     pub force_texture_full: bool,
     pub pending_row_appends: usize,
     pub pending_viewport_row_appends: usize,
+    /// Fractional row credit for time-paced scroll (see `waterfall_scroll_rows_due`).
+    pub scroll_pacing_credit: f32,
+    pub scroll_pacing_last: Option<Instant>,
+    /// egui pass id — at most one paced apply per frame.
+    pub scroll_pacing_pass: u64,
     /// Set when new waterfall rows were painted — trace must follow the displayed row, not `latest`.
     pub trace_refresh: bool,
     pub perf: WaterfallPerf,
@@ -39,6 +46,9 @@ impl Default for WaterfallTextureCache {
             force_texture_full: false,
             pending_row_appends: 0,
             pending_viewport_row_appends: 0,
+            scroll_pacing_credit: 0.0,
+            scroll_pacing_last: None,
+            scroll_pacing_pass: u64::MAX,
             trace_refresh: false,
             perf: WaterfallPerf::default(),
         }

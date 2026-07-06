@@ -168,7 +168,7 @@ impl WaterfallApp {
                 }
                 ui.label(
                     egui::RichText::new(
-                        "1 row/frame = smooth scroll; higher = faster catch-up but jumpier.",
+                        "Also under Display → Waterfall. 1 row/frame = slowest smooth scroll.",
                     )
                     .small()
                     .color(MUTED),
@@ -252,11 +252,11 @@ impl WaterfallApp {
                             format!("full {} · partial {}", wf.uploads_full, wf.uploads_partial),
                         );
                         stat_row(ui, "Ring head", self.plot.waterfall.viewport_row_head.to_string());
-                        if wf.rows_pending > wf.rows_per_frame_cap {
+                        if wf.rows_pending > wf.rows_per_frame_cap.saturating_mul(4) {
                             ui.label(
                                 egui::RichText::new(
-                                    "Engine delivered a batch faster than UI applies — \
-                                     raise rows/frame or target FPS to catch up.",
+                                    "Waterfall backlog — raise scroll speed or FPS if you want \
+                                     to stay closer to live.",
                                 )
                                 .small()
                                 .color(egui::Color32::from_rgb(255, 200, 80)),

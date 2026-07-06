@@ -217,6 +217,14 @@ impl WaterfallApp {
             }
             self.display.waterfall_rows = self.plot.rows.len();
             self.plot.waterfall.pending_viewport_row_appends += n_new;
+            let cap = waterfall_pending_cap(
+                self.effective_target_fps(),
+                self.display.waterfall_rows_per_frame.max(1) as usize,
+            );
+            while self.plot.waterfall.pending_viewport_row_appends > cap {
+                self.plot.waterfall.pending_viewport_row_appends -= 1;
+                let _ = self.plot.rows.pop_back();
+            }
             let levels_due = self
                 .plot.last_display_levels_at
                 .map(|t| t.elapsed() >= Duration::from_millis(300))

@@ -26,7 +26,7 @@ fn send_text(ws: &mut Ws, cmd: &str) -> bool {
 fn configure_iq(ws: &mut Ws, rx_setup: &KiwiRxSetup) -> bool {
     for cmd in rx_setup.setup_commands() {
         if !send_text(ws, &cmd) {
-            eprintln!("kiwi: failed to send {cmd}");
+            crate::log::warn(format!("kiwi: failed to send {cmd}"));
             return false;
         }
     }
@@ -223,7 +223,7 @@ pub fn reader_loop(
             Err(tungstenite::Error::Io(e))
                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
             Err(e) => {
-                eprintln!("kiwi reader: websocket error: {e}");
+                crate::log::warn(format!("kiwi reader: websocket error: {e}"));
                 record_link_lost(&link_error, &format!("Kiwi connection lost: {e}"));
                 return;
             }

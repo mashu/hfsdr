@@ -62,13 +62,22 @@ pub fn soapy_available() -> bool {
 }
 
 fn state() -> &'static State {
-    STATE.get_or_init(|| State {
+    STATE.get_or_init(|| {
+        #[cfg(feature = "soapy")]
+        crate::soapy::prepare_environment();
+        let state = State {
         #[cfg(feature = "airspy")]
         airspy: dylib::can_load(AIRSPYHF_SONAMES),
         #[cfg(feature = "rtlsdr")]
         rtlsdr: dylib::can_load(RTLSDR_SONAMES),
         #[cfg(feature = "soapy")]
         soapy: dylib::can_load(SOAPYSDR_SONAMES),
+        };
+        #[cfg(feature = "soapy")]
+        if state.soapy {
+            crate::soapy::log_startup_status();
+        }
+        state
     })
 }
 

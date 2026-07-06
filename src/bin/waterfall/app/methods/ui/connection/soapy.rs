@@ -38,6 +38,23 @@ impl WaterfallApp {
     pub(crate) fn refresh_soapy_devices(&mut self) {
         self.connection.form.soapy_enumerate_error = None;
         let driver = self.connection.form.soapy.driver.clone();
+        if !hfsdr::native_sdr::soapy_available() {
+            let msg = "libSoapySDR not loaded";
+            self.connection.form.soapy_enumerate_error = Some(msg.into());
+            log::warn(msg);
+            return;
+        }
+        let drivers = hfsdr::soapy::available_driver_keys();
+        if !driver.is_empty() && !drivers.contains(&driver) {
+            log::warn(format!(
+                "SoapySDR: driver filter '{driver}' has no installed module (available: {})",
+                if drivers.is_empty() {
+                    "none".into()
+                } else {
+                    drivers.join(", ")
+                }
+            ));
+        }
         let devices = hfsdr::soapy::enumerate_devices(&driver);
         self.connection.form.soapy_device_labels.clear();
         self.connection.form.soapy_device_args_list.clear();
@@ -49,15 +66,36 @@ impl WaterfallApp {
             self.connection.form.soapy_device_args_list.push(args);
         }
         if self.connection.form.soapy_device_labels.is_empty() {
-            self.connection.form.soapy_enumerate_error = Some(if driver.is_empty() {
-                "No SoapySDR devices found".into()
+            let hint = hfsdr::soapy::enumeration_hint(&driver);
+            self.connection.form.soapy_enumerate_error = Some(if hint.is_empty() {
+                if driver.is_empty() {
+                    "No SoapySDR devices found".into()
+                } else {
+                    format!("No devices for driver '{driver}'")
+                }
             } else {
-                format!("No devices for driver '{driver}'")
+                hint.clone()
             });
-        } else if self.connection.form.soapy_device_index
-            >= self.connection.form.soapy_device_labels.len()
-        {
-            self.connection.form.soapy_device_index = 0;
+            log::warn(if hint.is_empty() {
+                if driver.is_empty() {
+                    "SoapySDR: no devices found".to_string()
+                } else {
+                    format!("SoapySDR: no devices for driver '{driver}'")
+                }
+            } else {
+                hint
+            });
+        } else {
+            log::info(format!(
+                "SoapySDR: {} device(s) for driver filter '{}'",
+                self.connection.form.soapy_device_labels.len(),
+                if driver.is_empty() { "all" } else { &driver }
+            ));
+            if self.connection.form.soapy_device_index
+                >= self.connection.form.soapy_device_labels.len()
+            {
+                self.connection.form.soapy_device_index = 0;
+            }
         }
         self.sync_soapy_selection_from_index();
     }
@@ -75,6 +113,43 @@ impl WaterfallApp {
                 if let Some(driver) = rest.split(',').next() {
                     self.connection.form.soapy.driver = driver.to_string();
                 }
+            }
+        }
+        self.probe_soapy_device_rates();
+    }
+
+    #[cfg(feature = "soapy")]
+    fn probe_soapy_device_rates(&mut self) {
+        let args = self.connection.form.soapy.device_args.trim();
+        if args.is_empty() {
+            self.connection.form.soapy_device_sample_rates.clear();
+            return;
+        }
+        match hfsdr::soapy::probe_sample_rates(args) {
+            Ok(rates) if !rates.is_empty() => {
+                self.connection.form.soapy_device_sample_rates = rates.clone();
+                self.connection.form.sample_rate = hfsdr::soapy::snap_sample_rate(
+                    self.connection.form.sample_rate,
+                    &self.connection.form.soapy_device_sample_rates,
+                );
+                log::info(format!(
+                    "SoapySDR: {} sample rate(s) from device — using {} Hz",
+                    rates.len(),
+                    self.connection.form.sample_rate
+                ));
+            }
+            Ok(_) => {
+                self.connection.form.soapy_device_sample_rates.clear();
+                log::warn(format!(
+                    "SoapySDR: device opened but reported no RX sample rates ({args})"
+                ));
+            }
+            Err(e) => {
+                self.connection.form.soapy_device_sample_rates.clear();
+                log::warn(format!(
+                    "SoapySDR: could not probe sample rates for {args}: {e} ({})",
+                    hfsdr::soapy::last_error()
+                ));
             }
         }
     }
@@ -179,24 +254,62 @@ impl WaterfallApp {
                     ui.end_row();
 
                     ui.label(egui::RichText::new("Device args").small().color(MUTED));
-                    ui.add(
+                    let args_resp = ui.add(
                         egui::TextEdit::singleline(&mut self.connection.form.soapy.device_args)
                             .hint_text("driver=rtlsdr,serial=…")
                             .desired_width(ui.available_width())
                             .clip_text(true),
                     );
+                    if args_resp.lost_focus() {
+                        self.probe_soapy_device_rates();
+                    }
                     ui.end_row();
 
                     ui.label(egui::RichText::new("Sample rate").small().color(MUTED));
-                    preset_combo_u32(
-                        ui,
-                        "soapy_sr",
-                        &mut self.connection.form.sample_rate,
-                        SOAPY_SAMPLE_RATE_PRESETS,
-                        "Hz ",
-                        250_000..=32_000_000,
-                    );
+                    let device_rates = self.connection.form.soapy_device_sample_rates.clone();
+                    if device_rates.is_empty() {
+                        preset_combo_u32(
+                            ui,
+                            "soapy_sr",
+                            &mut self.connection.form.sample_rate,
+                            SOAPY_SAMPLE_RATE_PRESETS,
+                            "Hz ",
+                            250_000..=32_000_000,
+                        );
+                    } else {
+                        let labels: Vec<String> = device_rates
+                            .iter()
+                            .map(|&hz| hfsdr::soapy::format_sample_rate(hz))
+                            .collect();
+                        let presets: Vec<(&str, u32)> = labels
+                            .iter()
+                            .zip(device_rates.iter())
+                            .map(|(label, &hz)| (label.as_str(), hz))
+                            .collect();
+                        let min = *device_rates.first().unwrap_or(&250_000);
+                        let max = *device_rates.last().unwrap_or(&32_000_000);
+                        preset_combo_u32(
+                            ui,
+                            "soapy_sr_dev",
+                            &mut self.connection.form.sample_rate,
+                            &presets,
+                            "Hz ",
+                            min..=max,
+                        );
+                    }
                     ui.end_row();
+                    if !device_rates.is_empty() {
+                        ui.label("");
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} rate(s) from device",
+                                device_rates.len()
+                            ))
+                            .small()
+                            .color(MUTED),
+                        );
+                        ui.end_row();
+                    }
 
                     ui.label(egui::RichText::new("Process IQ").small().color(MUTED));
                     preset_combo_u32(
@@ -236,8 +349,8 @@ impl WaterfallApp {
             section_hint(
                 ui,
                 "SoapySDR wraps many SDR drivers (RTL-SDR, Airspy HF+, HackRF, Pluto, …). \
-                 Pick a driver filter, refresh, then choose a device. Advanced users can edit \
-                 device args directly. Gain and antenna apply live when connected.",
+                 Supported sample rates come from the device. Leave Process IQ at “Native” \
+                 unless you need lower CPU — Soapy already delivers IQ in bursts.",
             );
         });
     }

@@ -106,7 +106,35 @@ impl WaterfallApp {
         let range_db = self.display.range_db;
         let pending_start = self.plot.waterfall.pending_viewport_row_appends.min(h);
         let rows_per_frame = self.display.waterfall_rows_per_frame.max(1) as usize;
-        let n_apply = waterfall_rows_to_apply(pending_start, rows_per_frame);
+        let target_fps = self.effective_target_fps();
+        let pass = ctx.cumulative_pass_nr();
+        let n_apply = if pass != self.plot.waterfall.scroll_pacing_pass {
+            self.plot.waterfall.scroll_pacing_pass = pass;
+            let now = Instant::now();
+            let dt = self
+                .plot
+                .waterfall
+                .scroll_pacing_last
+                .map(|t| now.duration_since(t).as_secs_f32())
+                .unwrap_or(0.0);
+            self.plot.waterfall.scroll_pacing_last = Some(now);
+            if pending_start == 0 {
+                self.plot.waterfall.scroll_pacing_credit = 0.0;
+                0
+            } else {
+                let (n, credit) = waterfall_scroll_rows_due(
+                    pending_start,
+                    rows_per_frame,
+                    target_fps,
+                    dt,
+                    self.plot.waterfall.scroll_pacing_credit,
+                );
+                self.plot.waterfall.scroll_pacing_credit = credit;
+                n
+            }
+        } else {
+            0
+        };
         self.plot.waterfall.perf.rows_per_frame_cap = rows_per_frame as u32;
         self.plot.waterfall.perf.rows_pending = pending_start as u32;
         self.plot.waterfall.perf.sync_calls += 1;
@@ -181,6 +209,8 @@ impl WaterfallApp {
         self.upload_waterfall_viewport_full(ctx, dst_w, h);
         self.plot.waterfall.last_viewport_key = Some(key);
         self.plot.waterfall.pending_viewport_row_appends = 0;
+        self.plot.waterfall.scroll_pacing_credit = 0.0;
+        self.plot.waterfall.scroll_pacing_last = None;
         self.plot.waterfall.force_texture_full = false;
         self.plot.waterfall.textures_dirty = false;
         self.plot.waterfall.trace_refresh = fill > 0;

@@ -52,6 +52,9 @@ impl WaterfallApp {
         let mut app = Self::build(autoconnect, EngineHandle::spawn_for_test());
         // Deterministic defaults — do not inherit the developer's on-disk settings.
         app.apply_settings(&AppSettings::default());
+        app.connection.form.kind = SourceKind::Kiwi;
+        app.connection.form.host.clear();
+        app.connection.form.port = 8073;
         app.last_settings_snapshot = Some(app.current_settings());
         app
     }
@@ -101,6 +104,8 @@ impl WaterfallApp {
                     soapy_device_args_list: Vec::new(),
                     #[cfg(feature = "soapy")]
                     soapy_device_index: 0,
+                    #[cfg(feature = "soapy")]
+                    soapy_device_sample_rates: Vec::new(),
                     #[cfg(feature = "soapy")]
                     soapy_enumerate_error: None,
                     recent_hosts: Vec::new(),
@@ -176,7 +181,7 @@ impl WaterfallApp {
                 fft_auto: true,
                 full_drain_spectrum: false,
                 perf_trace: false,
-                waterfall_rows_per_frame: 4,
+                waterfall_rows_per_frame: 1,
             },
             audio: AudioUiState {
                 audio_devices,
@@ -309,9 +314,6 @@ impl eframe::App for WaterfallApp {
         self.poll_kiwi_directory();
         self.handle_shortcuts(&ctx);
         self.pump_engine();
-        if self.plot.waterfall.pending_viewport_row_appends > 0 {
-            ctx.request_repaint();
-        }
         self.skimmer_ui.frame_visible_spots = self.visible_spots();
 
         let meter_dt = ui.input(|i| i.stable_dt);

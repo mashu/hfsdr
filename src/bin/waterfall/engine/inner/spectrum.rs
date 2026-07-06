@@ -1,6 +1,6 @@
 //! Spectrum chain sync and wideband slicing.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use hfsdr::{Complex32, spectrum_hop, spectrum_plan, SpectrumAnalyzer, MIN_KAISER_BETA, MAX_KAISER_BETA};
 
@@ -130,6 +130,11 @@ impl Engine {
 
     pub(super) fn update_slow_flag(&mut self, nominal: f32, effective: f32) -> bool {
         if self.conn.is_none() || !self.first_iq_received {
+            self.slow_since = None;
+            return false;
+        }
+        // Ignore startup bursts — SoapySDR streams need ~1 s to stabilize.
+        if self.rate_window_start.elapsed() < Duration::from_secs(1) {
             self.slow_since = None;
             return false;
         }

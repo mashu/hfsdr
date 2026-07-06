@@ -100,3 +100,68 @@ fn mock_connect_respects_cancel_flag() {
     let err = connect(&req, &cancel).err().expect("cancelled");
     assert!(err.contains("cancelled"));
 }
+
+#[cfg(feature = "soapy")]
+#[test]
+fn mock_connect_soapy_pluto_network() {
+    use super::settings::SoapySettings;
+    use hfsdr::mock_hal::MOCK_PLUTO_NET_ARGS;
+
+    let _guard = MockGuard::new();
+    let cancel = AtomicBool::new(false);
+    let req = ConnectRequest {
+        kind: SourceKind::Soapy,
+        center_hz: 7_100_000.0,
+        sample_rate: 2_083_333,
+        soapy: SoapySettings {
+            device_args: MOCK_PLUTO_NET_ARGS.into(),
+            driver: "plutosdr".into(),
+            agc: true,
+            ..SoapySettings::default()
+        },
+        ..ConnectRequest::default()
+    };
+    let conn = connect(&req, &cancel).expect("mock soapy pluto network connect");
+    assert!(!conn.is_kiwi);
+    assert_eq!(conn.center_hz, 7_100_000.0);
+    assert!(conn.sample_rate > 0.0);
+}
+
+#[cfg(feature = "soapy")]
+#[test]
+fn mock_connect_soapy_pluto_streams_iq() {
+    use super::settings::SoapySettings;
+    use hfsdr::mock_hal::MOCK_PLUTO_USB_ARGS;
+    use rtrb::RingBuffer;
+
+    let _guard = MockGuard::new();
+    let cancel = AtomicBool::new(false);
+    let req = ConnectRequest {
+        kind: SourceKind::Soapy,
+        center_hz: 14_010_000.0,
+        sample_rate: 2_083_333,
+        soapy: SoapySettings {
+            device_args: MOCK_PLUTO_USB_ARGS.into(),
+            driver: "plutosdr".into(),
+            agc: false,
+            gain_db: 40.0,
+            antenna: "B".into(),
+            ..SoapySettings::default()
+        },
+        ..ConnectRequest::default()
+    };
+    let mut conn = connect(&req, &cancel).expect("mock pluto connect");
+    let (mut prod, mut cons) = RingBuffer::<hfsdr::Complex32>::new(4096);
+    std::thread::sleep(std::time::Duration::from_millis(40));
+    let mut got = 0usize;
+    while let Ok(sample) = conn.iq.pop() {
+        let _ = prod.push(sample);
+        got += 1;
+        if got >= 8 {
+            break;
+        }
+    }
+    assert!(got >= 1, "expected IQ samples from mock Pluto stream");
+    assert!(cons.pop().is_ok());
+    let _ = conn.device.stop();
+}

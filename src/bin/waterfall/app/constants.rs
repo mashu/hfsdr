@@ -192,19 +192,36 @@ pub(crate) fn stable_plot_width(raw: f32) -> usize {
     ((w + 7) / 8) * 8
 }
 
-/// Max FFT rows composited into the waterfall per UI frame when catching up on backlog.
-pub(crate) const MAX_WATERFALL_ROWS_PER_FRAME: usize = 24;
+/// Max scroll credit (in rows) banked after a UI hitch — about two frames worth.
+pub(crate) const WATERFALL_SCROLL_CREDIT_CAP_MULT: f32 = 2.0;
 
-/// Rows to apply this frame: honor the user cap when caught up; drain backlog when behind.
-pub(crate) fn waterfall_rows_to_apply(pending: usize, rows_per_frame: usize) -> usize {
+/// How many undisplayed FFT rows to keep before dropping oldest (stay near live).
+pub(crate) fn waterfall_pending_cap(target_fps: u32, rows_per_frame: usize) -> usize {
+    (target_fps.max(1) as usize * rows_per_frame.max(1) * 3).max(8)
+}
+
+/// Time-paced rows to paint this sync — decouples scroll from bursty engine delivery.
+pub(crate) fn waterfall_scroll_rows_due(
+    pending: usize,
+    rows_per_frame: usize,
+    target_fps: u32,
+    dt_secs: f32,
+    credit: f32,
+) -> (usize, f32) {
     if pending == 0 {
-        return 0;
+        return (0, 0.0);
     }
-    let base = rows_per_frame.max(1);
-    if pending <= base {
-        return pending;
+    let per_frame = rows_per_frame.max(1);
+    let rate = target_fps.max(1) as f32 * per_frame as f32;
+    let max_credit = per_frame as f32 * WATERFALL_SCROLL_CREDIT_CAP_MULT;
+    let mut credit = (credit + dt_secs.max(0.0) * rate).min(max_credit);
+    let n = (credit.floor() as usize)
+        .min(pending)
+        .min(per_frame);
+    if n > 0 {
+        credit -= n as f32;
     }
-    pending.min(MAX_WATERFALL_ROWS_PER_FRAME.max(base))
+    (n, credit)
 }
 
 #[cfg(feature = "airspy")]
@@ -233,12 +250,22 @@ mod tests {
     }
 
     #[test]
-    fn waterfall_rows_to_apply_catches_up_when_behind() {
-        assert_eq!(waterfall_rows_to_apply(0, 1), 0);
-        assert_eq!(waterfall_rows_to_apply(1, 4), 1);
-        assert_eq!(waterfall_rows_to_apply(4, 4), 4);
-        assert_eq!(waterfall_rows_to_apply(10, 1), 10);
-        assert_eq!(waterfall_rows_to_apply(40, 1), MAX_WATERFALL_ROWS_PER_FRAME);
+    fn waterfall_scroll_rows_due_paces_by_time() {
+        assert_eq!(waterfall_scroll_rows_due(0, 1, 30, 0.033, 0.0), (0, 0.0));
+        assert_eq!(waterfall_scroll_rows_due(10, 1, 30, 0.033, 0.0), (0, 0.99));
+        assert_eq!(waterfall_scroll_rows_due(10, 1, 30, 0.034, 0.99), (1, 1.0));
+        let (n, credit) = waterfall_scroll_rows_due(10, 4, 15, 0.066, 0.0);
+        assert_eq!(n, 3);
+        assert!((credit - 0.96).abs() < 0.001);
+        let (n2, credit2) = waterfall_scroll_rows_due(10, 4, 15, 0.001, 0.96);
+        assert_eq!(n2, 1);
+        assert!((credit2 - 0.02).abs() < 0.001);
+    }
+
+    #[test]
+    fn waterfall_pending_cap_scales_with_fps() {
+        assert_eq!(waterfall_pending_cap(15, 1), 45);
+        assert_eq!(waterfall_pending_cap(10, 2), 60);
     }
 
     #[test]

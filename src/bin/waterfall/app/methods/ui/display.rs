@@ -219,6 +219,24 @@ impl WaterfallApp {
                         }
                     });
 
+                    let mut wf_rows = self.display.waterfall_rows_per_frame as f32;
+                    if scroll_slider_f32(ui, &mut wf_rows, 1.0..=8.0, "Scroll speed (rows/frame)")
+                        .on_hover_text(
+                            "Steady scroll rate = Display FPS × this value. Lower = slower. \
+                             Does not slow demod or IQ processing.",
+                        )
+                        .changed()
+                    {
+                        self.display.waterfall_rows_per_frame = wf_rows.round() as u32;
+                    }
+                    let mut fps = self.display.target_fps as f32;
+                    if scroll_slider_f32(ui, &mut fps, 10.0..=60.0, "Display FPS")
+                        .on_hover_text("UI refresh rate — lower FPS also slows waterfall scroll.")
+                        .changed()
+                    {
+                        self.display.target_fps = fps.round() as u32;
+                    }
+
                     ui.label(egui::RichText::new("FFT window").small().color(MUTED));
                     let mut window = self.display.spectrum_window;
                     let window_resp = egui::ComboBox::from_id_salt("spectrum_fft_window")

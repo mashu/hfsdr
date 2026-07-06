@@ -32,6 +32,9 @@ pub struct ConnectionFormState {
     #[cfg(feature = "soapy")]
     pub soapy_device_index: usize,
     #[cfg(feature = "soapy")]
+    /// Sample rates reported by the selected device (`SoapySDRDevice_listSampleRates`).
+    pub soapy_device_sample_rates: Vec<u32>,
+    #[cfg(feature = "soapy")]
     pub soapy_enumerate_error: Option<String>,
     pub recent_hosts: Vec<ConnectRequest>,
     pub show_connection_drawer: bool,

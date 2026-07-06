@@ -191,6 +191,57 @@ impl MockCat {
     }
 }
 
+#[cfg(any(test, coverage, mock_hal))]
+/// Device args for mock Pluto (USB) used in tests.
+pub const MOCK_PLUTO_USB_ARGS: &str =
+    "driver=plutosdr,label=Mock Pluto USB,serial=MOCKPLUTO001";
+
+#[cfg(any(test, coverage, mock_hal))]
+/// Device args for mock Pluto (network) used in tests.
+pub const MOCK_PLUTO_NET_ARGS: &str =
+    "driver=plutosdr,label=Mock Pluto Network,uri=ip:192.168.2.1";
+
+#[cfg(any(test, coverage, mock_hal))]
+const MOCK_SOAPY_CATALOG: &[(&str, &str)] = &[
+    ("Mock Pluto USB · MOCKPLUTO001", MOCK_PLUTO_USB_ARGS),
+    ("Mock Pluto Network · 192.168.2.1", MOCK_PLUTO_NET_ARGS),
+    (
+        "Mock RTL-Soapy · 00000001",
+        "driver=rtlsdr,label=Mock RTL-Soapy,serial=00000001",
+    ),
+];
+
+#[cfg(any(test, coverage, mock_hal))]
+pub fn soapy_enumerate(driver: &str) -> Vec<(String, String)> {
+    let filter = driver.trim();
+    MOCK_SOAPY_CATALOG
+        .iter()
+        .filter(|(_, args)| {
+            filter.is_empty() || args.contains(&format!("driver={filter},"))
+        })
+        .map(|(label, args)| ((*label).to_string(), (*args).to_string()))
+        .collect()
+}
+
+#[cfg(any(test, coverage, mock_hal))]
+pub fn soapy_mock_openable(args: &str) -> bool {
+    let trimmed = args.trim();
+    MOCK_SOAPY_CATALOG.iter().any(|(_, a)| *a == trimmed)
+        || trimmed.starts_with("driver=plutosdr")
+        || trimmed.starts_with("driver=rtlsdr")
+        || trimmed.starts_with("driver=mock")
+}
+
+#[cfg(any(test, coverage, mock_hal))]
+pub fn soapy_mock_driver(args: &str) -> String {
+    for part in args.split(',') {
+        if let Some(d) = part.strip_prefix("driver=") {
+            return d.trim().to_string();
+        }
+    }
+    "mock".into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +265,19 @@ mod tests {
         assert_eq!(cat.vfo_hz, 14_010_000);
         cat.smeter_db = -73.0;
         assert_eq!(cat.read_smeter_db().unwrap(), Some(-73.0));
+    }
+
+    #[test]
+    fn mock_soapy_enumerate_plutosdr() {
+        let _guard = MockGuard::new();
+        let devices = soapy_enumerate("plutosdr");
+        assert_eq!(devices.len(), 2);
+        assert!(devices[0].1.contains("driver=plutosdr"));
+    }
+
+    #[test]
+    fn mock_soapy_enumerate_all_drivers() {
+        let _guard = MockGuard::new();
+        assert!(soapy_enumerate("").len() >= 3);
     }
 }

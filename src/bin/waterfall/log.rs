@@ -1,4 +1,4 @@
-//! In-app log ring buffer (hidden console panel). Also mirrors to stderr.
+//! In-app log ring buffer (hidden console panel). Mirrors [`hfsdr::log`] to stderr.
 
 use std::collections::VecDeque;
 use std::fmt::Display;
@@ -12,31 +12,30 @@ fn buffer() -> &'static Mutex<VecDeque<String>> {
     LOG.get_or_init(|| Mutex::new(VecDeque::with_capacity(CAPACITY)))
 }
 
-pub fn init() {
-    let _ = buffer();
-}
-
-fn push(level: &str, msg: impl Display) {
-    let line = format!("[{level}] {msg}");
+fn push_line(line: &str) {
     if let Ok(mut q) = buffer().lock() {
         if q.len() >= CAPACITY {
             q.pop_front();
         }
-        q.push_back(line.clone());
+        q.push_back(line.to_string());
     }
-    eprintln!("{line}");
+}
+
+pub fn init() {
+    let _ = buffer();
+    hfsdr::log::set_sink(Some(Box::new(push_line)));
 }
 
 pub fn info(msg: impl Display) {
-    push("INFO", msg);
+    hfsdr::log::info(msg);
 }
 
 pub fn warn(msg: impl Display) {
-    push("WARN", msg);
+    hfsdr::log::warn(msg);
 }
 
 pub fn error(msg: impl Display) {
-    push("ERROR", msg);
+    hfsdr::log::error(msg);
 }
 
 pub fn entries() -> Vec<String> {

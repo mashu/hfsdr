@@ -6,7 +6,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use hfsdr::{Complex32, DecimFilterKind, FirDecimator};
 use rtrb::{Consumer, RingBuffer};
@@ -25,6 +24,8 @@ fn filter_to_atomic(kind: DecimFilterKind) -> u8 {
         DecimFilterKind::LinearFir => 0,
     }
 }
+
+const BRIDGE_CHUNK: usize = 4096;
 
 /// Background tap: device IQ → raw ring + decimated ring.
 pub struct IqDualRingBridge {
@@ -62,6 +63,8 @@ impl IqDualRingBridge {
                 let mut decim =
                     FirDecimator::with_factor(device_rate, factor, true, filter_kind);
                 let mut active_filter = filter_kind;
+                let mut chunk = Vec::with_capacity(BRIDGE_CHUNK);
+                let mut decim_out = Vec::new();
                 loop {
                     if stop_t.load(Ordering::Relaxed) {
                         break;
@@ -71,19 +74,29 @@ impl IqDualRingBridge {
                         decim.sync_filter(device_rate, wanted);
                         active_filter = wanted;
                     }
-                    match device.pop() {
-                        Ok(sample) => {
-                            if raw_prod.push(sample).is_err() {
-                                raw_dropped_t.fetch_add(1, Ordering::Relaxed);
-                            }
-                            if let Some(d) = decim.push(sample, false) {
-                                if decim_prod.push(d).is_err() {
-                                    decim_dropped_t.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
+
+                    chunk.clear();
+                    while chunk.len() < BRIDGE_CHUNK {
+                        match device.pop() {
+                            Ok(sample) => chunk.push(sample),
+                            Err(rtrb::PopError::Empty) => break,
                         }
-                        Err(rtrb::PopError::Empty) => {
-                            thread::sleep(Duration::from_micros(200));
+                    }
+                    if chunk.is_empty() {
+                        thread::yield_now();
+                        continue;
+                    }
+
+                    for sample in &chunk {
+                        if raw_prod.push(*sample).is_err() {
+                            raw_dropped_t.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+
+                    decim.decimate_block(&chunk, &mut decim_out, false);
+                    for sample in &decim_out {
+                        if decim_prod.push(*sample).is_err() {
+                            decim_dropped_t.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
@@ -158,6 +171,7 @@ pub fn attach_dual_ring(
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
+    use std::time::Duration;
 
     #[test]
     fn bridge_decimates_into_second_ring() {
