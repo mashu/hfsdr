@@ -184,16 +184,33 @@ fi
 echo "Created ${ARTIFACT}"
 ls -lh "$ARTIFACT"
 
-rm -rf squashfs-root
-./"$ARTIFACT" --appimage-extract >/dev/null 2>&1
-plugin_count="$(find squashfs-root/usr/lib/SoapySDR/modules0.8 -maxdepth 1 -name '*.so' 2>/dev/null | wc -l)"
-echo "SoapySDR plugins in image: ${plugin_count}"
-if [[ "${plugin_count}" -lt 1 ]]; then
-  echo "error: AppImage contains no SoapySDR driver plugins" >&2
-  exit 1
+verify_soapy_plugins() {
+  local modules_dir="$1"
+  local plugin_count
+  plugin_count="$(find "$modules_dir" -maxdepth 1 -name '*.so' 2>/dev/null | wc -l)"
+  echo "SoapySDR plugins in image: ${plugin_count}"
+  if [[ "${plugin_count}" -lt 1 ]]; then
+    echo "error: AppImage contains no SoapySDR driver plugins" >&2
+    exit 1
+  fi
+  if ! compgen -G "${modules_dir}/*[Pp]luto*.so" >/dev/null; then
+    echo "warning: Pluto Soapy plugin not found inside AppImage" >&2
+  fi
+  while IFS= read -r plugin; do
+    basename "$plugin"
+  done < <(find "$modules_dir" -maxdepth 1 -name '*.so' 2>/dev/null | sort)
+}
+
+# GitHub Actions runners cannot execute AppImages for --appimage-extract (no FUSE).
+if [[ "${CI:-}" == "true" ]]; then
+  verify_soapy_plugins "$SOAPY_MODULES"
+else
+  rm -rf squashfs-root
+  if ./"$ARTIFACT" --appimage-extract >/dev/null 2>&1; then
+    verify_soapy_plugins "squashfs-root/usr/lib/SoapySDR/modules0.8"
+    rm -rf squashfs-root
+  else
+    echo "warning: --appimage-extract unavailable; verifying AppDir instead" >&2
+    verify_soapy_plugins "$SOAPY_MODULES"
+  fi
 fi
-if ! compgen -G "squashfs-root/usr/lib/SoapySDR/modules0.8/*[Pp]luto*.so" >/dev/null; then
-  echo "warning: Pluto Soapy plugin not found inside AppImage" >&2
-fi
-find squashfs-root/usr/lib/SoapySDR/modules0.8 -maxdepth 1 -name '*.so' 2>/dev/null | xargs -r -n1 basename | sort
-rm -rf squashfs-root
