@@ -23,6 +23,7 @@ fn push_line(line: &str) {
 
 pub fn init() {
     let _ = buffer();
+    hfsdr::log::init_stdio_capture();
     hfsdr::log::set_sink(Some(Box::new(push_line)));
 }
 
@@ -36,6 +37,10 @@ pub fn warn(msg: impl Display) {
 
 pub fn error(msg: impl Display) {
     hfsdr::log::error(msg);
+}
+
+pub fn warn_if_err<E: std::fmt::Display>(op: impl Display, result: std::result::Result<(), E>) {
+    hfsdr::log::warn_if_err(op, result);
 }
 
 pub fn entries() -> Vec<String> {

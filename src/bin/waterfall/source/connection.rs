@@ -276,17 +276,25 @@ fn connect_airspy(
         default_airspy_sample_rate(&src.sample_rates())
     };
     src.set_sample_rate(sr).map_err(|e| e.to_string())?;
-    src.set_lib_dsp(req.airspy.lib_dsp).ok();
+    hfsdr::log::warn_if_err("Airspy lib DSP", src.set_lib_dsp(req.airspy.lib_dsp));
     if req.airspy.calibration_ppb != 0 {
-        src.set_calibration_ppb(req.airspy.calibration_ppb).ok();
+        hfsdr::log::warn_if_err(
+            "Airspy calibration PPB",
+            src.set_calibration_ppb(req.airspy.calibration_ppb),
+        );
     }
     src.set_hf_agc(req.airspy.hf_agc).map_err(|e| e.to_string())?;
-    src.set_hf_agc_threshold(req.airspy.hf_agc_threshold_high)
-        .ok();
-    src.set_hf_att(req.airspy.hf_att).ok();
-    src.set_hf_lna(req.airspy.hf_lna).ok();
-    src.set_frontend_options(req.airspy.frontend_flags()).ok();
-    src.set_bias_tee(req.airspy.bias_tee).ok();
+    hfsdr::log::warn_if_err(
+        "Airspy HF AGC threshold",
+        src.set_hf_agc_threshold(req.airspy.hf_agc_threshold_high),
+    );
+    hfsdr::log::warn_if_err("Airspy HF att", src.set_hf_att(req.airspy.hf_att));
+    hfsdr::log::warn_if_err("Airspy HF LNA", src.set_hf_lna(req.airspy.hf_lna));
+    hfsdr::log::warn_if_err(
+        "Airspy frontend options",
+        src.set_frontend_options(req.airspy.frontend_flags()),
+    );
+    hfsdr::log::warn_if_err("Airspy bias tee", src.set_bias_tee(req.airspy.bias_tee));
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
     let (ingress_decim, eff_sr) = req.airspy.ingress_decimation(sr);
     let ring_cap = iq_ring_capacity(sr);
@@ -324,19 +332,19 @@ fn connect_rtlsdr(
     };
     src.set_sample_rate(sr).map_err(|e| e.to_string())?;
     if req.rtlsdr.ppm != 0 {
-        src.set_freq_correction(req.rtlsdr.ppm).ok();
+        hfsdr::log::warn_if_err("RTL-SDR PPM correction", src.set_freq_correction(req.rtlsdr.ppm));
     }
     src.set_direct_sampling(req.rtlsdr.direct_sampling)
         .map_err(|e| e.to_string())?;
-    src.set_offset_tuning(req.rtlsdr.offset_tuning).ok();
-    src.set_rtl_agc(req.rtlsdr.rtl_agc).ok();
+    hfsdr::log::warn_if_err("RTL-SDR offset tuning", src.set_offset_tuning(req.rtlsdr.offset_tuning));
+    hfsdr::log::warn_if_err("RTL-SDR AGC", src.set_rtl_agc(req.rtlsdr.rtl_agc));
     src.set_tuner_gain_mode(req.rtlsdr.manual_gain)
         .map_err(|e| e.to_string())?;
     if req.rtlsdr.manual_gain {
         let gain = src.clamp_tuner_gain(req.rtlsdr.tuner_gain_db10);
-        src.set_tuner_gain(gain).ok();
+        hfsdr::log::warn_if_err("RTL-SDR tuner gain", src.set_tuner_gain(gain));
     }
-    src.set_bias_tee(req.rtlsdr.bias_tee).ok();
+    hfsdr::log::warn_if_err("RTL-SDR bias tee", src.set_bias_tee(req.rtlsdr.bias_tee));
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
     let (ingress_decim, eff_sr) = req.rtlsdr.ingress_decimation(sr);
     let ring_cap = rtlsdr_ring_capacity(sr);
@@ -428,21 +436,17 @@ fn connect_soapy(
     src.set_sample_rate(sr).map_err(|e| e.to_string())?;
     let device_rate = src.sample_rate();
     if !req.soapy.antenna.is_empty() {
-        if let Err(e) = src.set_antenna_name(&req.soapy.antenna) {
-            hfsdr::log::warn(format!(
-                "SoapySDR: antenna '{}' not applied: {e}",
-                req.soapy.antenna
-            ));
-        }
+        hfsdr::log::warn_if_err(
+            format!("SoapySDR antenna '{}'", req.soapy.antenna),
+            src.set_antenna_name(&req.soapy.antenna),
+        );
     }
     src.set_automatic_gain(req.soapy.agc).map_err(|e| e.to_string())?;
     if !req.soapy.agc {
-        if let Err(e) = src.set_overall_gain(req.soapy.gain_db) {
-            hfsdr::log::warn(format!(
-                "SoapySDR: gain {:.1} dB not applied: {e}",
-                req.soapy.gain_db
-            ));
-        }
+        hfsdr::log::warn_if_err(
+            format!("SoapySDR gain {:.1} dB", req.soapy.gain_db),
+            src.set_overall_gain(req.soapy.gain_db),
+        );
     }
     src.tune(req.center_hz).map_err(|e| e.to_string())?;
     let (ingress_decim, eff_sr) = req.soapy.ingress_decimation(device_rate);

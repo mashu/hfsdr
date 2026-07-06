@@ -7,16 +7,19 @@ impl WaterfallApp {
         section_heading(ui, "Callsign log (10 min)");
         let center_hz = self.radio.center_khz * 1000.0;
         let annotations: Vec<_> = self.slow.annotations().iter().cloned().collect();
+        let scroll_h = ui.available_height().max(24.0);
         if annotations.is_empty() {
             ui.label(
                 egui::RichText::new("Decoded callsigns appear here when skimmer is on.")
                     .small()
                     .color(MUTED),
             );
+            ui.allocate_space(egui::vec2(0.0, ui.available_height()));
             return;
         }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
+            .max_height(scroll_h)
             .show(ui, |ui| {
                 for ann in annotations {
                     let age = ann.at.elapsed();

@@ -175,6 +175,8 @@ mod tests {
 
     #[test]
     fn bridge_decimates_into_second_ring() {
+        use std::time::Instant;
+
         let (mut dev_prod, dev_cons) = RingBuffer::<Complex32>::new(256);
         for i in 0..32i32 {
             let t = i as f32 / 48_000.0;
@@ -182,20 +184,26 @@ mod tests {
         }
         drop(dev_prod);
 
-        let (_bridge, mut raw, mut decim) =
+        let (bridge, mut raw, mut decim) =
             IqDualRingBridge::spawn(dev_cons, 48_000.0, 4, DecimFilterKind::LinearFir, 256, 64);
 
-        std::thread::sleep(Duration::from_millis(50));
-
+        let deadline = Instant::now() + Duration::from_secs(2);
         let mut raw_n = 0usize;
-        while raw.pop().is_ok() {
-            raw_n += 1;
-        }
         let mut decim_n = 0usize;
-        while decim.pop().is_ok() {
-            decim_n += 1;
+        while Instant::now() < deadline && raw_n < 32 {
+            while raw.pop().is_ok() {
+                raw_n += 1;
+            }
+            while decim.pop().is_ok() {
+                decim_n += 1;
+            }
+            if raw_n < 32 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
-        assert_eq!(raw_n, 32);
-        assert!(decim_n > 0 && decim_n < raw_n);
+        drop(bridge);
+
+        assert_eq!(raw_n, 32, "bridge should forward all device samples to raw ring");
+        assert!(decim_n > 0 && decim_n < raw_n, "decimated count should be between 1 and raw_n");
     }
 }

@@ -71,6 +71,8 @@ type GetDriverKeyFn = unsafe extern "C" fn(*const SoapySDRDevice) -> *mut c_char
 type ListModulesFn = unsafe extern "C" fn(*mut usize) -> *mut *mut c_char;
 type ListSearchPathsFn = unsafe extern "C" fn(*mut usize) -> *mut *mut c_char;
 type LoadModulesFn = unsafe extern "C" fn();
+type RegisterLogHandlerFn = unsafe extern "C" fn(Option<unsafe extern "C" fn(i32, *const c_char)>);
+type SetLogLevelFn = unsafe extern "C" fn(i32);
 
 struct Api {
     _lib: Library,
@@ -105,6 +107,8 @@ struct Api {
     list_modules: Option<ListModulesFn>,
     list_search_paths: Option<ListSearchPathsFn>,
     load_modules: Option<LoadModulesFn>,
+    register_log_handler: Option<RegisterLogHandlerFn>,
+    set_log_level: Option<SetLogLevelFn>,
 }
 
 static API: OnceLock<Option<Api>> = OnceLock::new();
@@ -114,30 +118,56 @@ pub fn prepare_environment() {
     if std::env::var("SOAPY_SDR_PLUGIN_PATH").is_ok() {
         return;
     }
-    for key in ["HFSDR_LIB_DIR", "HFSDR_DEPS_PREFIX"] {
-        let Ok(dir) = std::env::var(key) else {
-            continue;
-        };
-        let root = std::path::PathBuf::from(&dir);
-        for sub in [
-            "SoapySDR/modules0.8",
-            "SoapySDR/modules",
-            "lib/SoapySDR/modules0.8",
-        ] {
-            let plugins = root.join(sub);
-            if plugins.is_dir() {
-                // SAFETY: called before any Soapy thread; only sets env once at startup.
-                unsafe { std::env::set_var("SOAPY_SDR_PLUGIN_PATH", &plugins) };
-                return;
-            }
+    if std::env::var("HFSDR_LIB_DIR").is_err() {
+        if let Some(lib_dir) = crate::sdr_ffi::dylib::bundled_lib_dirs().into_iter().find(|p| {
+            p.join("libSoapySDR.so.0.8").exists() || p.join("libSoapySDR.so.0").exists()
+        }) {
+            // SAFETY: called before any Soapy thread; only sets env once at startup.
+            unsafe { std::env::set_var("HFSDR_LIB_DIR", &lib_dir) };
         }
-        if root.join("libSoapyPlutoSDR.so").exists()
-            || root.join("libSoapyPlutoSDR.so.0.8").exists()
-        {
-            unsafe { std::env::set_var("SOAPY_SDR_PLUGIN_PATH", &root) };
+    }
+    for root in crate::sdr_ffi::dylib::bundled_lib_dirs() {
+        if try_set_plugin_path(&root) {
             return;
         }
     }
+}
+
+fn try_set_plugin_path(root: &std::path::Path) -> bool {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    for sub in [
+        "SoapySDR/modules0.8",
+        "SoapySDR/modules",
+        "lib/SoapySDR/modules0.8",
+    ] {
+        let plugins = root.join(sub);
+        if plugins.is_dir() && plugin_dir_has_modules(&plugins) {
+            // SAFETY: called before any Soapy thread; only sets env once at startup.
+            unsafe { std::env::set_var("SOAPY_SDR_PLUGIN_PATH", &plugins) };
+            return true;
+        }
+    }
+    if root.join("libSoapyPlutoSDR.so").exists()
+        || root.join("libSoapyPlutoSDR.so.0.8").exists()
+        || root.join("libPlutoSDRSupport.so").exists()
+    {
+        unsafe { std::env::set_var("SOAPY_SDR_PLUGIN_PATH", &root) };
+        return true;
+    }
+    false
+}
+
+fn plugin_dir_has_modules(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "so" || ext == "dll" || ext == "dylib")
+        })
 }
 
 fn api() -> Option<&'static Api> {
@@ -147,7 +177,7 @@ fn api() -> Option<&'static Api> {
 fn load_api() -> Option<Api> {
     prepare_environment();
     let lib = dylib::load(SOAPYSDR_SONAMES)?;
-    Some(Api {
+    let built = Api {
         enumerate_str_args: dylib::required_sym(&lib, "SoapySDRDevice_enumerateStrArgs")?,
         kwargs_list_clear: dylib::required_sym(&lib, "SoapySDRKwargsList_clear")?,
         kwargs_to_string: dylib::required_sym(&lib, "SoapySDRKwargs_toString")?,
@@ -179,8 +209,35 @@ fn load_api() -> Option<Api> {
         list_modules: dylib::optional_sym(&lib, "SoapySDR_listModules"),
         list_search_paths: dylib::optional_sym(&lib, "SoapySDR_listSearchPaths"),
         load_modules: dylib::optional_sym(&lib, "SoapySDR_loadModules"),
+        register_log_handler: dylib::optional_sym(&lib, "SoapySDR_registerLogHandler"),
+        set_log_level: dylib::optional_sym(&lib, "SoapySDR_setLogLevel"),
         _lib: lib,
-    })
+    };
+    install_log_handler(&built);
+    Some(built)
+}
+
+fn install_log_handler(a: &Api) {
+    if let Some(set_level) = a.set_log_level {
+        // SOAPY_SDR_DEBUG = 7 — capture everything the library offers.
+        unsafe { set_level(7) };
+    }
+    if let Some(register) = a.register_log_handler {
+        unsafe { register(Some(soapy_log_handler)) };
+    }
+}
+
+extern "C" fn soapy_log_handler(level: i32, msg: *const c_char) {
+    let text = cstr_lossy(msg);
+    if text.is_empty() {
+        return;
+    }
+    match level {
+        1 | 2 | 3 => crate::log::error(format!("SoapySDR: {text}")),
+        4 => crate::log::warn(format!("SoapySDR: {text}")),
+        5 | 6 => crate::log::info(format!("SoapySDR: {text}")),
+        _ => crate::log::debug(format!("SoapySDR: {text}")),
+    }
 }
 
 pub fn library_loaded() -> bool {

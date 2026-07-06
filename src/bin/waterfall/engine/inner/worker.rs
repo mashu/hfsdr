@@ -147,7 +147,7 @@ impl Engine {
         }
         // Clean shutdown: stop source so the reader thread exits.
         if let Some(conn) = &mut self.conn {
-            let _ = conn.device.stop();
+            crate::log::warn_if_err("stop device on engine shutdown", conn.device.stop());
         }
     }
 

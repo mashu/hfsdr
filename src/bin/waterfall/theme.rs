@@ -73,6 +73,11 @@ pub fn side_panel_frame() -> Frame {
         .stroke(Stroke::new(1.0, Color32::from_rgb(38, 46, 62)))
 }
 
+/// Bottom panel chrome (log, spots history) — fills height while dragging the resize handle.
+pub fn bottom_panel_frame() -> Frame {
+    side_panel_frame()
+}
+
 /// Top status bar chrome.
 pub fn status_panel_frame() -> Frame {
     Frame::new()

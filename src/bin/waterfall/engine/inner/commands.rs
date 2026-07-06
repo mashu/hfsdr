@@ -33,7 +33,7 @@ pub(super) fn handle_command(&mut self, cmd: EngineCommand) {
             }
             EngineCommand::Tune(hz) => {
                 if let Some(conn) = &mut self.conn {
-                    let _ = conn.device.tune(hz);
+                    log::warn_if_err(format!("tune to {hz} Hz"), conn.device.tune(hz));
                     conn.center_hz = hz;
                 }
                 if let Some(req) = &mut self.request {

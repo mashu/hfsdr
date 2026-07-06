@@ -51,6 +51,7 @@ jobs:
                 libairspyhf-dev \
                 librtlsdr-dev \
                 libsoapysdr-dev \
+                soapysdr-module-all \
                 libasound2-dev \
                 libxkbcommon-dev \
                 libwayland-dev \
