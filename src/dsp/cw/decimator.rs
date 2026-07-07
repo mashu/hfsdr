@@ -97,17 +97,12 @@ impl Decimator {
         if self.factor == 1 {
             return Some(sample);
         }
-        let filtered = if bypass_fir {
-            sample
-        } else {
-            self.filter.process_complex(sample)
-        };
         self.counter += 1;
-        if self.counter.is_multiple_of(self.factor) {
-            Some(filtered)
-        } else {
-            None
+        let emit = self.counter.is_multiple_of(self.factor);
+        if bypass_fir {
+            return if emit { Some(sample) } else { None };
         }
+        self.filter.push_decimate(sample, emit)
     }
 }
 

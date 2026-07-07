@@ -303,6 +303,7 @@ pub fn show_analog_s_meter(
     );
 
     let painter = ui.painter_at(outer);
+    let needle_t = needle_t.clamp(0.0, 1.0);
     paint_analog_s_meter_face(&painter, face, arc_rect, needle_t, p.streaming);
 
     let reading = if p.streaming {

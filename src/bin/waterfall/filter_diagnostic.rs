@@ -104,7 +104,7 @@ pub fn show_filter_diagnostic_panel(
     );
     ui.add_space(6.0);
 
-    let cutoff = fir_cutoff_hz(view.settings.passband_hz);
+    let cutoff = fir_cutoff_hz(view.settings.passband_hz, view.settings.passband_cutoff_frac);
     let window = window_label(view.settings);
     let half_span = view.span_hz * 0.5;
     ui.horizontal(|ui| {
@@ -192,6 +192,7 @@ fn window_label(settings: &CwChannelSettings) -> &'static str {
         WindowKind::RaisedCosine => "RaisedCos FIR",
         WindowKind::Blackman => "Blackman FIR",
         WindowKind::Kaiser => "Kaiser FIR",
+        WindowKind::DolphChebyshev => "Dolph FIR",
     }
 }
 

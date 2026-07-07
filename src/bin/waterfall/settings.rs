@@ -20,6 +20,7 @@ const fn window_to_persisted(w: WindowKind) -> u8 {
         WindowKind::RaisedCosine => 1,
         WindowKind::Blackman => 2,
         WindowKind::Kaiser => 3,
+        WindowKind::DolphChebyshev => 4,
         WindowKind::Gaussian => 0,
     }
 }
@@ -73,6 +74,14 @@ const fn default_agc_lookahead_ms() -> f32 {
     8.0
 }
 
+fn default_passband_cutoff_frac() -> f32 {
+    hfsdr::DEFAULT_PASSBAND_CUTOFF_FRAC
+}
+
+fn default_dolph_sidelobe_db() -> f32 {
+    hfsdr::DEFAULT_DOLPH_SIDELOBE_DB
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotchData {
     pub enabled: bool,
@@ -109,6 +118,32 @@ pub struct AppSettings {
     pub window: u8,
     pub kaiser_beta: f32,
     pub passband_flatten: bool,
+    #[serde(default)]
+    pub deep_selectivity: bool,
+    #[serde(default = "default_passband_cutoff_frac")]
+    pub passband_cutoff_frac: f32,
+    #[serde(default = "default_dolph_sidelobe_db")]
+    pub dolph_sidelobe_db: f32,
+    #[serde(default)]
+    pub detector_mode: u8,
+    #[serde(default)]
+    pub iq_apf_enabled: bool,
+    #[serde(default)]
+    pub iq_apf_width_hz: f32,
+    #[serde(default)]
+    pub iq_apf_gain: f32,
+    #[serde(default)]
+    pub iq_wiener_enabled: bool,
+    #[serde(default)]
+    pub iq_wiener_level: f32,
+    #[serde(default)]
+    pub squelch_enabled: bool,
+    #[serde(default)]
+    pub squelch_open_thr: f32,
+    #[serde(default)]
+    pub squelch_close_thr: f32,
+    #[serde(default)]
+    pub squelch_hang_ms: f32,
     #[serde(default)]
     pub economy_filter: bool,
     #[serde(default = "default_full_demod")]
@@ -270,6 +305,19 @@ impl Default for AppSettings {
             window: window_to_persisted(DEFAULT_CHANNEL_WINDOW),
             kaiser_beta: DEFAULT_KAISER_BETA,
             passband_flatten: false,
+            deep_selectivity: false,
+            passband_cutoff_frac: default_passband_cutoff_frac(),
+            dolph_sidelobe_db: default_dolph_sidelobe_db(),
+            detector_mode: 0,
+            iq_apf_enabled: false,
+            iq_apf_width_hz: 60.0,
+            iq_apf_gain: 1.2,
+            iq_wiener_enabled: false,
+            iq_wiener_level: 0.28,
+            squelch_enabled: false,
+            squelch_open_thr: 0.02,
+            squelch_close_thr: 0.01,
+            squelch_hang_ms: 120.0,
             economy_filter: false,
             full_demod: true,
             decimation: 0,

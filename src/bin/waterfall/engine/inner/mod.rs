@@ -93,6 +93,8 @@ pub(crate) struct Engine {
     level_agc_gain: f32,
     level_agc_envelope: f32,
     level_iq_rf: f32,
+    level_estimated_wpm: f32,
+    level_keying_confident: bool,
     level_audio_scope: Vec<f32>,
 
     pipeline_avg: PipelineMetrics,

@@ -49,6 +49,18 @@ impl IqAudioDemod {
         self.channel.iq_rf_level()
     }
 
+    pub fn estimated_wpm(&self) -> f32 {
+        self.channel.estimated_wpm()
+    }
+
+    pub fn keying_speed_confident(&self) -> bool {
+        self.channel.keying_speed_confident()
+    }
+
+    pub fn suggested_passband_hz(&self) -> f32 {
+        self.channel.suggested_passband_hz()
+    }
+
     /// Demodulate `samples` into `out` (reused buffer, no per-call allocation).
     pub fn process(
         &mut self,

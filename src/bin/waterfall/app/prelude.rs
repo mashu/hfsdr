@@ -13,6 +13,7 @@ pub(crate) use hfsdr::{
     strongest_offset_hz, Continent,
     ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, CwSideband, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, SkimmerDecoderKind, channel_group_delay_ms, IirFilterKind,
+    CwDetectorMode,
     SidetoneEnvelopeShape, WindowKind, FftWindowKind, DEFAULT_KAISER_BETA,
     MAX_KAISER_BETA, MAX_NOTCHES, MIN_KAISER_BETA,
 };
@@ -82,6 +83,7 @@ pub(crate) use crate::app::codec::{
     skimmer_decoder_from_u8, skimmer_decoder_to_u8, spot_sort_from_u8, spot_sort_to_u8,
     st_envelope_shape_from_u8, st_envelope_shape_to_u8,
     sideband_from_u8, sideband_to_u8,
+    detector_mode_from_u8, detector_mode_to_u8,
     fft_window_from_u8, fft_window_to_u8,
     window_from_u8, window_to_u8,
 };

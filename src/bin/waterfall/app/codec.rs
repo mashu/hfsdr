@@ -1,7 +1,7 @@
 //! Settings serialization helpers and small shared utilities.
 
 use hfsdr::{
-    AgcMode, ChannelFilterKind, CwSideband, FftWindowKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
+    AgcMode, ChannelFilterKind, CwDetectorMode, CwSideband, FftWindowKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
     SidetoneEnvelopeShape, WindowKind, DecoderParams, EnvelopeSettings,
 };
 
@@ -21,6 +21,7 @@ pub(crate) const fn window_to_u8(w: WindowKind) -> u8 {
         WindowKind::RaisedCosine => 1,
         WindowKind::Blackman => 2,
         WindowKind::Kaiser => 3,
+        WindowKind::DolphChebyshev => 4,
     }
 }
 
@@ -29,7 +30,24 @@ pub(crate) fn window_from_u8(v: u8) -> WindowKind {
         1 => WindowKind::RaisedCosine,
         2 => WindowKind::Blackman,
         3 => WindowKind::Kaiser,
+        4 => WindowKind::DolphChebyshev,
         _ => WindowKind::Gaussian,
+    }
+}
+
+pub(crate) const fn detector_mode_to_u8(m: CwDetectorMode) -> u8 {
+    match m {
+        CwDetectorMode::Product => 0,
+        CwDetectorMode::Coherent => 1,
+        CwDetectorMode::MatchedDit => 2,
+    }
+}
+
+pub(crate) fn detector_mode_from_u8(v: u8) -> CwDetectorMode {
+    match v {
+        1 => CwDetectorMode::Coherent,
+        2 => CwDetectorMode::MatchedDit,
+        _ => CwDetectorMode::Product,
     }
 }
 
@@ -221,6 +239,7 @@ mod tests {
             WindowKind::RaisedCosine,
             WindowKind::Blackman,
             WindowKind::Kaiser,
+            WindowKind::DolphChebyshev,
         ] {
             assert_eq!(window_from_u8(window_to_u8(w)), w);
         }

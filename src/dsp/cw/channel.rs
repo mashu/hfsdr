@@ -3,8 +3,9 @@
 //! Fixed order (each optional stage is bypassed when disabled):
 //! ```text
 //! IQ → [noise blanker] → NCO shift → decimate → [manual IQ notches]
-//!    → channel filter → AGC/manual gain → product detector (BFO demod)
-//!    → [sidetone envelope] → [APF] → [auto-notch] → [noise reduction] → audio
+//!    → channel filter → [IQ APF] → [IQ Wiener NR] → AGC/manual gain
+//!    → [CW detector] → [sidetone envelope] → [APF] → [auto-notch]
+//!    → [noise reduction] → [squelch] → audio
 //! ```
 //! Manual notches and the channel filter run on complex IQ before demod.
 //! Auto-notch and NR are post-demod polish: auto-notch uses a BFO guard on audio;
@@ -19,16 +20,20 @@ use crate::source::Complex32;
 use super::agc::CwAgc;
 use super::apf::AudioPeakFilter;
 use super::autonotch::AutoNotch;
+use super::cw_detector::{CwDetector, CwDetectorMode};
 use super::decimator::Decimator;
-use super::detector::ProductDetector;
 use super::fir::{design_lowpass_with, FirFilter, LowpassDesign, WindowKind};
 use super::iir_channel::IirChannelFilter;
+use super::iq_apf::IqPeakFilter;
 use super::nco::ComplexNco;
 use super::noiseblanker::NoiseBlanker;
 use super::noisereduction::NoiseReduction;
 use super::notch::IqNotch;
 use super::sidetone_envelope::SidetoneEnvelope;
-use super::filter_plan::{DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
+use super::squelch::CwSquelch;
+use super::wiener_nr::IqWienerNr;
+use super::filter_plan::{self, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
+use super::keyer_speed::KeyerSpeedEstimator;
 use super::settings::{
     AgcMode, ChannelFilterKind, CwChannelSettings, DecimFilterKind, DEFAULT_CHANNEL_WINDOW,
     IirFilterKind, MAX_NOTCHES,
@@ -85,11 +90,15 @@ pub struct CwChannel {
     channel_fir: FirFilter,
     channel_iir: IirChannelFilter,
     agc: CwAgc,
-    detector: ProductDetector,
+    detector: CwDetector,
+    iq_apf: IqPeakFilter,
+    iq_wiener: IqWienerNr,
+    squelch: CwSquelch,
     sidetone_envelope: SidetoneEnvelope,
     apf: AudioPeakFilter,
     auto_notch: AutoNotch,
     noise_reduction: NoiseReduction,
+    keyer_speed: KeyerSpeedEstimator,
     snr_peak: f32,
     snr_floor: f32,
     /// Pre-software-AGC level for S-meter only (independent AGC loop ballistics).
@@ -105,6 +114,9 @@ pub struct CwChannel {
     last_window: WindowKind,
     last_kaiser_beta: f32,
     last_passband_flatten: bool,
+    last_cutoff_frac: f32,
+    last_deep_selectivity: bool,
+    last_dolph_sidelobe_db: f32,
     last_channel_filter: ChannelFilterKind,
     last_iir_filter: IirFilterKind,
     last_decim_filter: DecimFilterKind,
@@ -130,11 +142,15 @@ impl CwChannel {
             ),
             channel_iir: IirChannelFilter::new(),
             agc: CwAgc::new(),
-            detector: ProductDetector::new(),
+            detector: CwDetector::new(),
+            iq_apf: IqPeakFilter::new(),
+            iq_wiener: IqWienerNr::new(),
+            squelch: CwSquelch::new(),
             sidetone_envelope: SidetoneEnvelope::new(),
             apf: AudioPeakFilter::new(),
             auto_notch: AutoNotch::new(),
             noise_reduction: NoiseReduction::new(),
+            keyer_speed: KeyerSpeedEstimator::new(audio_rate),
             snr_peak: 1e-6,
             snr_floor: 1e-6,
             rf_meter: 1e-6,
@@ -149,6 +165,9 @@ impl CwChannel {
             last_window: DEFAULT_CHANNEL_WINDOW,
             last_kaiser_beta: DEFAULT_KAISER_BETA,
             last_passband_flatten: false,
+            last_cutoff_frac: filter_plan::DEFAULT_PASSBAND_CUTOFF_FRAC,
+            last_deep_selectivity: false,
+            last_dolph_sidelobe_db: filter_plan::DEFAULT_DOLPH_SIDELOBE_DB,
             last_channel_filter: ChannelFilterKind::LinearFir,
             last_iir_filter: IirFilterKind::Butterworth,
             last_decim_filter: DecimFilterKind::LinearFir,
@@ -162,6 +181,19 @@ impl CwChannel {
     /// Per-channel signal-to-noise estimate in dB (peak envelope vs slow floor).
     pub fn snr_db(&self) -> f32 {
         20.0 * (self.snr_peak / self.snr_floor.max(1e-7)).log10()
+    }
+
+    /// Adaptive keying speed from IQ envelope (default ~20 WPM until keyed).
+    pub fn estimated_wpm(&self) -> f32 {
+        self.keyer_speed.wpm()
+    }
+
+    pub fn keying_speed_confident(&self) -> bool {
+        self.keyer_speed.confident()
+    }
+
+    pub fn suggested_passband_hz(&self) -> f32 {
+        self.keyer_speed.suggested_passband_hz()
     }
 
     pub fn agc_gain(&self) -> f32 {
@@ -380,11 +412,42 @@ impl CwChannel {
         }
         for i in 0..self.work_iq.len() {
             let level = self.work_iq[i].norm().max(1e-7);
+            self.keyer_speed.feed(level, audio_rate);
             self.track_snr(level);
-            self.track_rf_meter(level);
+        }
+        if !self.work_iq.is_empty() {
+            let n = self.work_iq.len() as f32;
+            let sum_sq: f32 = self.work_iq.iter().map(|z| z.norm().powi(2)).sum();
+            let rms = (sum_sq / n).sqrt();
+            let peak = self
+                .work_iq
+                .iter()
+                .map(|z| z.norm())
+                .fold(0.0f32, f32::max);
+            // Blend RMS + peak: stable on noise, still tracks CW carrier strength.
+            let block_level = (0.65 * rms + 0.35 * peak).max(1e-7);
+            self.track_rf_meter(block_level, audio_rate, self.work_iq.len());
         }
         if let (Some(m), Some(t)) = (metrics.as_mut(), t_fir) {
             m.channel_filter_ns = t.elapsed().as_nanos() as u64;
+        }
+
+        if settings.iq_apf.enabled {
+            for z in &mut self.work_iq {
+                *z = self.iq_apf.process(
+                    *z,
+                    audio_rate,
+                    settings.iq_apf.width_hz,
+                    settings.iq_apf.gain,
+                );
+            }
+        }
+        if settings.iq_wiener.enabled {
+            for z in &mut self.work_iq {
+                *z = self
+                    .iq_wiener
+                    .process(*z, audio_rate, settings.iq_wiener.level);
+            }
         }
 
         let t_agc = metrics.as_ref().map(|_| std::time::Instant::now());
@@ -451,11 +514,23 @@ impl CwChannel {
         let t_det = metrics.as_ref().map(|_| std::time::Instant::now());
         out.reserve(out.len() + self.work_mix.len());
         for &scaled in &self.work_mix {
+            let matched_dit = if settings.detector_mode == CwDetectorMode::MatchedDit {
+                Some(self.keyer_speed.dit_samples(audio_rate))
+            } else {
+                None
+            };
             let raw = if diag.bfo {
                 scaled.re
             } else {
-                self.detector
-                    .process(scaled, settings.bfo_hz, audio_rate, settings.sideband)
+                self.detector.process(
+                    scaled,
+                    settings.bfo_hz,
+                    audio_rate,
+                    settings.sideband,
+                    settings.detector_mode,
+                    self.keyer_speed.wpm(),
+                    matched_dit,
+                )
             };
             let level = scaled.norm().max(1e-7);
             out.push(self.sidetone_envelope.process(
@@ -494,6 +569,16 @@ impl CwChannel {
                 *audio = self
                     .noise_reduction
                     .process(*audio, settings.noise_reduction.level);
+            }
+            if settings.squelch.enabled {
+                *audio = self.squelch.process(
+                    *audio,
+                    audio.abs(),
+                    audio_rate,
+                    settings.squelch.open_threshold,
+                    settings.squelch.close_threshold,
+                    settings.squelch.hang_ms,
+                );
             }
         }
         if let (Some(m), Some(t)) = (metrics.as_mut(), t_polish) {
@@ -550,12 +635,18 @@ impl CwChannel {
         }
     }
 
-    fn track_rf_meter(&mut self, level: f32) {
-        // Fast attack / moderate decay — classic S-meter ballistics, separate from IF AGC.
+    fn track_rf_meter(&mut self, peak: f32, sample_rate: f32, n_samples: usize) {
+        // Block envelope + long hang — S-meter shows carrier strength, not per-dit flicker.
+        const ATTACK_S: f32 = 0.28;
+        const HANG_S: f32 = 2.8;
+        let dt = n_samples as f32 / sample_rate.max(1.0);
+        let level = peak.max(1e-7);
         if level > self.rf_meter {
-            self.rf_meter += 0.40 * (level - self.rf_meter);
+            let alpha = 1.0 - (-dt / ATTACK_S).exp();
+            self.rf_meter += alpha * (level - self.rf_meter);
         } else {
-            self.rf_meter += 0.12 * (level - self.rf_meter);
+            let alpha = 1.0 - (-dt / HANG_S).exp();
+            self.rf_meter += alpha * (level - self.rf_meter);
         }
     }
 
@@ -585,6 +676,7 @@ impl CwChannel {
                 Decimator::with_factor(iq_rate, factor, settings.decim_filter);
             self.shift_nco.reset();
             self.detector.reset_state();
+            self.keyer_speed.reset_state();
             self.sidetone_envelope.reset_state();
             for notch in &mut self.notches {
                 notch.reset_state();
@@ -610,14 +702,13 @@ impl CwChannel {
                 .sync(audio_rate, bandwidth, settings.iir_filter);
             self.last_iir_filter = settings.iir_filter;
         }
-        let design = LowpassDesign {
-            window: settings.window,
-            kaiser_beta: settings.kaiser_beta,
-            passband_flatten: settings.passband_flatten,
-        };
+        let design = settings.lowpass_design();
         let design_changed = (bandwidth - self.last_bandwidth).abs() > 1.0
             || settings.window != self.last_window
             || settings.passband_flatten != self.last_passband_flatten
+            || (settings.passband_cutoff_frac - self.last_cutoff_frac).abs() > 0.005
+            || settings.deep_selectivity != self.last_deep_selectivity
+            || (settings.dolph_sidelobe_db - self.last_dolph_sidelobe_db).abs() > 0.5
             || (settings.window == WindowKind::Kaiser
                 && (settings.kaiser_beta - self.last_kaiser_beta).abs() > 0.05);
         if design_changed && eff_filter == ChannelFilterKind::LinearFir {
@@ -626,6 +717,9 @@ impl CwChannel {
             self.last_window = settings.window;
             self.last_kaiser_beta = settings.kaiser_beta;
             self.last_passband_flatten = settings.passband_flatten;
+            self.last_cutoff_frac = settings.passband_cutoff_frac;
+            self.last_deep_selectivity = settings.deep_selectivity;
+            self.last_dolph_sidelobe_db = settings.dolph_sidelobe_db;
         }
     }
 }
@@ -876,6 +970,7 @@ mod tests {
             agc_mode: AgcMode::Envelope,
             sidetone_envelope: super::super::settings::SidetoneEnvelopeSettings::default(),
             diagnostic: DiagnosticBypassSettings::default(),
+            ..Default::default()
         };
         let mut audio = Vec::new();
         let origin = ListenOrigin::from_settings(settings.listen_offset_hz);

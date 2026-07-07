@@ -18,12 +18,26 @@ pub const DEFAULT_CHANNEL_PASSBAND_HZ: f32 = 200.0;
 /// Ctrl+scroll / keyboard step for passband width (Hz).
 pub const PASSBAND_STEP_HZ: f32 = 25.0;
 
-/// Sinc cutoff as a fraction of GUI passband width (Hz). Main-plot edges use −3 dB
-/// half-width from [`super::filter_response::build_filter_overlay`].
-pub const PASSBAND_CUTOFF_FRAC: f32 = 0.34;
+/// Default sinc cutoff as a fraction of GUI passband width (Hz).
+pub const DEFAULT_PASSBAND_CUTOFF_FRAC: f32 = 0.34;
+
+/// Legacy alias — prefer [`DEFAULT_PASSBAND_CUTOFF_FRAC`].
+pub const PASSBAND_CUTOFF_FRAC: f32 = DEFAULT_PASSBAND_CUTOFF_FRAC;
+
+/// GUI range for adjustable passband cutoff fraction.
+pub const MIN_PASSBAND_CUTOFF_FRAC: f32 = 0.20;
+pub const MAX_PASSBAND_CUTOFF_FRAC: f32 = 0.50;
 
 /// Floor on lowpass cutoff (Hz) for ultra-narrow passbands.
 pub const MIN_PASSBAND_CUTOFF_HZ: f32 = 8.0;
+
+/// Group-delay ceiling when [`super::settings::CwChannelSettings::deep_selectivity`] is on.
+pub const DEEP_SELECTIVITY_MAX_GROUP_DELAY_MS: f32 = 50.0;
+
+/// Dolph–Chebyshev sidelobe attenuation (dB) — GUI range.
+pub const DEFAULT_DOLPH_SIDELOBE_DB: f32 = 60.0;
+pub const MIN_DOLPH_SIDELOBE_DB: f32 = 40.0;
+pub const MAX_DOLPH_SIDELOBE_DB: f32 = 80.0;
 
 /// Oversampling factor when deriving tap count from sample_rate / cutoff.
 pub const TAPS_PER_CUTOFF: f32 = 6.0;
@@ -76,12 +90,16 @@ pub fn clamp_passband_hz(hz: f32) -> f32 {
 }
 
 /// Lowpass cutoff (Hz) used when designing the channel FIR.
-pub fn passband_cutoff_hz(bandwidth_hz: f32) -> f32 {
-    (bandwidth_hz * PASSBAND_CUTOFF_FRAC).max(MIN_PASSBAND_CUTOFF_HZ)
+pub fn passband_cutoff_hz(bandwidth_hz: f32, cutoff_frac: f32) -> f32 {
+    let frac = cutoff_frac.clamp(MIN_PASSBAND_CUTOFF_FRAC, MAX_PASSBAND_CUTOFF_FRAC);
+    (bandwidth_hz * frac).max(MIN_PASSBAND_CUTOFF_HZ)
 }
 
 /// Maximum linear-phase group delay allowed for this passband width (ms).
-pub fn max_group_delay_ms(bandwidth_hz: f32) -> f32 {
+pub fn max_group_delay_ms(bandwidth_hz: f32, deep_selectivity: bool) -> f32 {
+    if deep_selectivity {
+        return DEEP_SELECTIVITY_MAX_GROUP_DELAY_MS;
+    }
     for tier in GROUP_DELAY_BUDGETS {
         if bandwidth_hz <= tier.max_passband_hz {
             return tier.max_group_delay_ms;
@@ -91,10 +109,15 @@ pub fn max_group_delay_ms(bandwidth_hz: f32) -> f32 {
 }
 
 /// Tap count for a channel filter (matches [`super::fir::design_lowpass_with`]).
-pub fn plan_num_taps(sample_rate: f32, bandwidth_hz: f32) -> usize {
-    let cutoff = passband_cutoff_hz(bandwidth_hz);
+pub fn plan_num_taps(
+    sample_rate: f32,
+    bandwidth_hz: f32,
+    cutoff_frac: f32,
+    deep_selectivity: bool,
+) -> usize {
+    let cutoff = passband_cutoff_hz(bandwidth_hz, cutoff_frac);
     let mut num_taps = ((sample_rate / cutoff) * TAPS_PER_CUTOFF).round() as usize;
-    let delay_ms = max_group_delay_ms(bandwidth_hz);
+    let delay_ms = max_group_delay_ms(bandwidth_hz, deep_selectivity);
     let max_taps_delay =
         ((sample_rate * delay_ms / 1000.0) * 2.0).round() as usize | 1;
     num_taps = num_taps
@@ -107,12 +130,33 @@ pub fn plan_num_taps(sample_rate: f32, bandwidth_hz: f32) -> usize {
 }
 
 /// Linear-phase group delay of the channel FIR (~half the tap count).
-pub fn channel_group_delay_ms(sample_rate: f32, bandwidth_hz: f32) -> f32 {
+pub fn channel_group_delay_ms(
+    sample_rate: f32,
+    bandwidth_hz: f32,
+    cutoff_frac: f32,
+    deep_selectivity: bool,
+) -> f32 {
     if sample_rate <= 0.0 {
         return 0.0;
     }
-    let n = plan_num_taps(sample_rate, bandwidth_hz) as f32;
+    let n = plan_num_taps(sample_rate, bandwidth_hz, cutoff_frac, deep_selectivity) as f32;
     (n - 1.0) * 0.5 / sample_rate * 1000.0
+}
+
+/// PARIS-standard dit duration (seconds) at `wpm`.
+pub fn dit_duration_s(wpm: f32) -> f32 {
+    1.2 / wpm.clamp(5.0, 60.0)
+}
+
+/// Audio samples per dit at `wpm` (matched-filter / coherent integration length).
+pub fn dit_samples(wpm: f32, sample_rate: f32) -> usize {
+    (sample_rate * dit_duration_s(wpm)).round().max(1.0) as usize
+}
+
+/// Suggested channel passband (Hz) for a keying speed — passes dit sidebands without excess noise BW.
+pub fn passband_hz_for_wpm(wpm: f32) -> f32 {
+    let dit_s = dit_duration_s(wpm);
+    (4.8 / dit_s).clamp(CHANNEL_PASSBAND_MIN_HZ, CHANNEL_PASSBAND_NARROW_MAX_HZ)
 }
 
 #[cfg(test)]
@@ -134,29 +178,53 @@ mod tests {
             prev = tier.max_passband_hz;
         }
         assert_eq!(
-            max_group_delay_ms(CHANNEL_PASSBAND_MIN_HZ),
+            max_group_delay_ms(CHANNEL_PASSBAND_MIN_HZ, false),
             GROUP_DELAY_BUDGETS[0].max_group_delay_ms
         );
         assert_eq!(
-            max_group_delay_ms(CHANNEL_PASSBAND_MAX_HZ),
+            max_group_delay_ms(CHANNEL_PASSBAND_MAX_HZ, false),
             DEFAULT_MAX_GROUP_DELAY_MS
+        );
+        assert_eq!(
+            max_group_delay_ms(CHANNEL_PASSBAND_MAX_HZ, true),
+            DEEP_SELECTIVITY_MAX_GROUP_DELAY_MS
         );
     }
 
     #[test]
     fn ultra_narrow_uses_longer_delay_budget() {
-        let ms = channel_group_delay_ms(12_000.0, CHANNEL_PASSBAND_MIN_HZ);
+        let ms = channel_group_delay_ms(
+            12_000.0,
+            CHANNEL_PASSBAND_MIN_HZ,
+            DEFAULT_PASSBAND_CUTOFF_FRAC,
+            false,
+        );
         assert!(ms > DEFAULT_MAX_GROUP_DELAY_MS);
         assert!(ms <= GROUP_DELAY_BUDGETS[0].max_group_delay_ms + 2.0);
-        let wide_ms = channel_group_delay_ms(12_000.0, 500.0);
+        let wide_ms = channel_group_delay_ms(12_000.0, 500.0, DEFAULT_PASSBAND_CUTOFF_FRAC, false);
         assert!(wide_ms <= GROUP_DELAY_BUDGETS[4].max_group_delay_ms + 2.0);
+        let deep_ms = channel_group_delay_ms(
+            12_000.0,
+            500.0,
+            DEFAULT_PASSBAND_CUTOFF_FRAC,
+            true,
+        );
+        assert!(deep_ms > wide_ms);
     }
 
     #[test]
     fn cutoff_scales_with_passband() {
-        let narrow = passband_cutoff_hz(25.0);
-        let wide = passband_cutoff_hz(200.0);
+        let narrow = passband_cutoff_hz(25.0, DEFAULT_PASSBAND_CUTOFF_FRAC);
+        let wide = passband_cutoff_hz(200.0, DEFAULT_PASSBAND_CUTOFF_FRAC);
         assert!(narrow < wide);
-        assert!((narrow / 25.0 - PASSBAND_CUTOFF_FRAC).abs() < 1e-6);
+        assert!((narrow / 25.0 - DEFAULT_PASSBAND_CUTOFF_FRAC).abs() < 1e-6);
+    }
+
+    #[test]
+    fn passband_for_wpm_is_reasonable() {
+        let bw20 = passband_hz_for_wpm(20.0);
+        assert!((bw20 - 80.0).abs() < 15.0, "20 WPM bw={bw20}");
+        let bw30 = passband_hz_for_wpm(30.0);
+        assert!(bw30 > bw20);
     }
 }

@@ -84,6 +84,8 @@ impl Engine {
             level_agc_gain: 1.0,
             level_agc_envelope: 0.0,
             level_iq_rf: 0.0,
+            level_estimated_wpm: 20.0,
+            level_keying_confident: false,
             level_audio_scope: Vec::new(),
             pipeline_avg: PipelineMetrics::default(),
             last_perf_log: Instant::now(),

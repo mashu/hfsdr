@@ -11,6 +11,7 @@ use super::mixer::IqRotator;
 pub struct IqShiftDecim {
     mixer: IqRotator,
     decim: FirDecimator,
+    mixed: Vec<Complex32>,
     output: Vec<Complex32>,
     iq_rate_hz: f32,
     decim_factor: usize,
@@ -29,6 +30,7 @@ impl IqShiftDecim {
         Self {
             mixer: IqRotator::default(),
             decim: FirDecimator::with_factor(iq_rate_hz, factor, wideband, filter_kind),
+            mixed: Vec::new(),
             output: Vec::new(),
             iq_rate_hz,
             decim_factor: factor,
@@ -75,15 +77,13 @@ impl IqShiftDecim {
         if input.is_empty() || iq_rate_hz <= 0.0 {
             return &self.output;
         }
-        self.output.reserve(input.len() / self.decim_factor.max(1));
-        self.mixer.mix_and_decimate(
-            input,
-            shift_hz,
-            iq_rate_hz,
-            &mut self.decim,
-            &mut self.output,
-            bypass_decim_fir,
-        );
+        self.mixed.clear();
+        self.mixer
+            .mix_block(input, &mut self.mixed, shift_hz, iq_rate_hz);
+        self.output
+            .reserve(self.mixed.len() / self.decim_factor.max(1));
+        self.decim
+            .decimate_block(&self.mixed, &mut self.output, bypass_decim_fir);
         &self.output
     }
 }

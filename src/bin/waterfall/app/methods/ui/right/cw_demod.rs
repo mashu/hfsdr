@@ -273,8 +273,7 @@ impl WaterfallApp {
                             let delay_note =
                                 if self.radio.cw.effective_channel_filter() == ChannelFilterKind::LinearFir
                                 {
-                                    let delay_ms =
-                                        channel_group_delay_ms(audio_rate, self.radio.cw.passband_hz);
+                                    let delay_ms = self.radio.cw.channel_group_delay_ms(audio_rate);
                                     let shape_hint = match self.radio.cw.window {
                                         WindowKind::Gaussian => {
                                             " · Blackman/Kaiser reject skirt noise better"
@@ -303,7 +302,10 @@ impl WaterfallApp {
                                     || self.radio.cw.iir_filter != IirFilterKind::Butterworth
                                     || self.radio.cw.window != WindowKind::RaisedCosine
                                     || self.radio.cw.passband_flatten
-                                    || self.radio.cw.window == WindowKind::Kaiser;
+                                    || self.radio.cw.deep_selectivity
+                                    || self.radio.cw.window == WindowKind::Kaiser
+                                    || self.radio.cw.window == WindowKind::DolphChebyshev
+                                    || self.radio.cw.detector_mode != CwDetectorMode::Product;
                             let design_hdr = egui::CollapsingHeader::new(
                                 egui::RichText::new("Filter design").small().color(MUTED),
                             )
@@ -319,6 +321,8 @@ impl WaterfallApp {
                                     crate::filter_design_panel::FilterDesignPanel {
                                         settings: &mut self.radio.cw,
                                         audio_rate,
+                                        estimated_wpm: self.engine_ui.stats.estimated_wpm,
+                                        keying_confident: self.engine_ui.stats.keying_confident,
                                     },
                                 );
                             });
@@ -341,6 +345,55 @@ impl WaterfallApp {
                 popup_section(ui, "Level (AGC)", Some("IQ envelope gain before demod"), |ui| {
                     self.agc_controls(ui, !simple);
                 });
+
+                if !simple {
+                    popup_section(
+                        ui,
+                        "Weak-signal demod",
+                        Some("Coherent integration and dit-matched detector"),
+                        |ui| {
+                            let det_sel = match self.radio.cw.detector_mode {
+                                CwDetectorMode::Product => 0,
+                                CwDetectorMode::Coherent => 1,
+                                CwDetectorMode::MatchedDit => 2,
+                            };
+                            if let Some(i) = labeled_segment_choice(
+                                ui,
+                                "cw_detector_mode",
+                                "Detector",
+                                det_sel,
+                                &["Product", "Coherent", "Matched dit"],
+                                36.0,
+                            ) {
+                                self.radio.cw.detector_mode = match i {
+                                    1 => CwDetectorMode::Coherent,
+                                    2 => CwDetectorMode::MatchedDit,
+                                    _ => CwDetectorMode::Product,
+                                };
+                            }
+                            let hint = match self.radio.cw.detector_mode {
+                                CwDetectorMode::Product => {
+                                    "Classic BFO product detector — lowest latency".to_string()
+                                }
+                                CwDetectorMode::Coherent => {
+                                    "Complex integration before demod — several dB SNR gain".to_string()
+                                }
+                                CwDetectorMode::MatchedDit => {
+                                    let wpm = self.engine_ui.stats.estimated_wpm;
+                                    if self.engine_ui.stats.keying_confident {
+                                        format!(
+                                            "Dit-length matched filter — tracking ~{wpm:.0} WPM from keying"
+                                        )
+                                    } else {
+                                        "Dit-length matched filter — WPM adapts when keying is heard"
+                                            .to_string()
+                                    }
+                                }
+                            };
+                            ui.label(egui::RichText::new(hint).small().color(MUTED));
+                        },
+                    );
+                }
             },
         );
     }

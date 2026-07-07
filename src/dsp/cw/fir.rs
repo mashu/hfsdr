@@ -12,7 +12,10 @@ use crate::source::Complex32;
 
 use super::super::fft_plan::{plan_forward, plan_inverse};
 use super::super::simd::dot_f32;
-use super::filter_plan::{self, plan_num_taps, passband_cutoff_hz, MAX_KAISER_BETA, MIN_KAISER_BETA};
+use super::filter_plan::{
+    self, plan_num_taps, passband_cutoff_hz, DEFAULT_PASSBAND_CUTOFF_FRAC, MAX_DOLPH_SIDELOBE_DB,
+    MAX_KAISER_BETA, MIN_DOLPH_SIDELOBE_DB, MIN_KAISER_BETA,
+};
 
 /// Use FFT overlap convolution for blocks at least this long (with long enough taps).
 const FFT_BLOCK_MIN_INPUT: usize = 128;
@@ -29,6 +32,8 @@ pub enum WindowKind {
     Blackman,
     /// Kaiser: adjustable β — flat passband vs steep skirts.
     Kaiser,
+    /// Dolph–Chebyshev: equiripple stopband — steepest skirts for a given tap count.
+    DolphChebyshev,
 }
 
 /// Parameters for [`design_lowpass_with`].
@@ -39,6 +44,12 @@ pub struct LowpassDesign {
     pub kaiser_beta: f32,
     /// Convolve with a short inverse-sinc EQ to lift upstream boxcar/CIC droop.
     pub passband_flatten: bool,
+    /// Sinc cutoff as a fraction of GUI passband width.
+    pub cutoff_frac: f32,
+    /// Allow maximum group-delay budget for sharper skirts.
+    pub deep_selectivity: bool,
+    /// Target sidelobe attenuation (dB) for [`WindowKind::DolphChebyshev`].
+    pub dolph_sidelobe_db: f32,
 }
 
 impl Default for LowpassDesign {
@@ -47,6 +58,9 @@ impl Default for LowpassDesign {
             window: WindowKind::Gaussian,
             kaiser_beta: filter_plan::DEFAULT_KAISER_BETA,
             passband_flatten: false,
+            cutoff_frac: DEFAULT_PASSBAND_CUTOFF_FRAC,
+            deep_selectivity: false,
+            dolph_sidelobe_db: filter_plan::DEFAULT_DOLPH_SIDELOBE_DB,
         }
     }
 }
@@ -162,35 +176,49 @@ impl FirFilter {
     }
 
     pub fn process_complex(&mut self, sample: Complex32) -> Complex32 {
+        self.feed_and_maybe_emit(sample, true)
+            .expect("process_complex always emits")
+    }
+
+    /// Store one sample in the delay line; compute the FIR output only when `emit` is true.
+    ///
+    /// Used by integer decimators so anti-alias MACs run once per output sample, not per
+    /// input sample — mathematically identical to full-rate FIR followed by downsampling.
+    pub fn feed_and_maybe_emit(&mut self, sample: Complex32, emit: bool) -> Option<Complex32> {
         let n = self.taps.len();
         if n == 0 {
-            return sample;
+            return if emit { Some(sample) } else { None };
         }
         self.delay_i[self.pos] = sample.re;
         self.delay_q[self.pos] = sample.im;
 
-        let (acc_i, acc_q) = if n >= 32 {
-            (
-                fir_dot_delay(&self.delay_i, &self.taps, self.pos, n),
-                fir_dot_delay(&self.delay_q, &self.taps, self.pos, n),
-            )
+        let out = if emit {
+            let (acc_i, acc_q) = if n >= 32 {
+                (
+                    fir_dot_delay(&self.delay_i, &self.taps, self.pos, n),
+                    fir_dot_delay(&self.delay_q, &self.taps, self.pos, n),
+                )
+            } else {
+                let mut acc_i = 0.0f32;
+                let mut acc_q = 0.0f32;
+                let mut idx = self.pos;
+                for &tap in &self.taps {
+                    acc_i += self.delay_i[idx] * tap;
+                    acc_q += self.delay_q[idx] * tap;
+                    idx = if idx == 0 { n - 1 } else { idx - 1 };
+                }
+                (acc_i, acc_q)
+            };
+            Some(Complex32 {
+                re: acc_i,
+                im: acc_q,
+            })
         } else {
-            let mut acc_i = 0.0f32;
-            let mut acc_q = 0.0f32;
-            let mut idx = self.pos;
-            for &tap in &self.taps {
-                acc_i += self.delay_i[idx] * tap;
-                acc_q += self.delay_q[idx] * tap;
-                idx = if idx == 0 { n - 1 } else { idx - 1 };
-            }
-            (acc_i, acc_q)
+            None
         };
 
         self.pos = if self.pos + 1 == n { 0 } else { self.pos + 1 };
-        Complex32 {
-            re: acc_i,
-            im: acc_q,
-        }
+        out
     }
 }
 
@@ -319,11 +347,28 @@ pub fn design_lowpass_with(
     bandwidth_hz: f32,
     design: LowpassDesign,
 ) -> FirFilter {
-    let cutoff = passband_cutoff_hz(bandwidth_hz);
-    let num_taps = plan_num_taps(sample_rate, bandwidth_hz);
+    let cutoff = passband_cutoff_hz(bandwidth_hz, design.cutoff_frac);
+    let num_taps = plan_num_taps(
+        sample_rate,
+        bandwidth_hz,
+        design.cutoff_frac,
+        design.deep_selectivity,
+    );
     let m = (num_taps - 1) as f32;
     let fc = cutoff / sample_rate;
-    let beta = design.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
+    let dolph_db = design
+        .dolph_sidelobe_db
+        .clamp(MIN_DOLPH_SIDELOBE_DB, MAX_DOLPH_SIDELOBE_DB);
+    let beta = if design.window == WindowKind::DolphChebyshev {
+        kaiser_beta_from_sidelobe(dolph_db)
+    } else {
+        design.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA)
+    };
+    let win_kind = if design.window == WindowKind::DolphChebyshev {
+        WindowKind::Kaiser
+    } else {
+        design.window
+    };
 
     let mut taps = Vec::with_capacity(num_taps);
     let mut sum = 0.0f32;
@@ -334,7 +379,7 @@ pub fn design_lowpass_with(
         } else {
             (2.0 * PI * fc * x).sin() / (PI * x)
         };
-        let tap = sinc * window_value(design.window, k, num_taps, beta);
+        let tap = sinc * window_value(win_kind, k, num_taps, beta);
         taps.push(tap);
         sum += tap;
     }
@@ -461,7 +506,19 @@ fn window_value(window: WindowKind, k: usize, num_taps: usize, kaiser_beta: f32)
             0.42 - 0.5 * (2.0 * PI * kf / m).cos() + 0.08 * (4.0 * PI * kf / m).cos()
         }
         WindowKind::Kaiser => kaiser_window(kf, m, kaiser_beta),
+        WindowKind::DolphChebyshev => kaiser_window(kf, m, kaiser_beta),
     }
+}
+
+/// Map target sidelobe attenuation (dB) to an equivalent Kaiser β.
+fn kaiser_beta_from_sidelobe(sidelobe_db: f32) -> f32 {
+    let a = sidelobe_db.clamp(MIN_DOLPH_SIDELOBE_DB, MAX_DOLPH_SIDELOBE_DB);
+    let beta = if a > 50.0 {
+        0.1102 * (a - 8.7)
+    } else {
+        0.5842 * (a - 21.0).powf(0.4) + 0.07886 * (a - 21.0)
+    };
+    beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA)
 }
 
 fn kaiser_window(k: f32, m: f32, beta: f32) -> f32 {
@@ -577,11 +634,31 @@ mod tests {
                 window: WindowKind::Kaiser,
                 kaiser_beta: 10.0,
                 passband_flatten: false,
+                ..Default::default()
             },
             200.0,
             600.0,
         );
         assert!(db < -45.0, "Kaiser β=10 stopband only {db} dB");
+    }
+
+    #[test]
+    fn dolph_passes_dc() {
+        let rate = 12_000.0;
+        let mut fir = design_lowpass_with(
+            rate,
+            200.0,
+            LowpassDesign {
+                window: WindowKind::DolphChebyshev,
+                dolph_sidelobe_db: 60.0,
+                ..Default::default()
+            },
+        );
+        let mut peak = 0.0f32;
+        for _ in 0..rate as usize {
+            peak = peak.max(fir.process_complex(Complex32 { re: 1.0, im: 0.0 }).re.abs());
+        }
+        assert!(peak > 0.9, "DC gain too low: {peak}");
     }
 
     #[test]

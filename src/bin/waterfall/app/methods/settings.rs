@@ -19,6 +19,23 @@ impl WaterfallApp {
         self.radio.cw.window = window_from_u8(s.window);
         self.radio.cw.kaiser_beta = s.kaiser_beta.clamp(MIN_KAISER_BETA, MAX_KAISER_BETA);
         self.radio.cw.passband_flatten = s.passband_flatten;
+        self.radio.cw.deep_selectivity = s.deep_selectivity;
+        self.radio.cw.passband_cutoff_frac = s
+            .passband_cutoff_frac
+            .clamp(hfsdr::MIN_PASSBAND_CUTOFF_FRAC, hfsdr::MAX_PASSBAND_CUTOFF_FRAC);
+        self.radio.cw.dolph_sidelobe_db = s
+            .dolph_sidelobe_db
+            .clamp(hfsdr::MIN_DOLPH_SIDELOBE_DB, hfsdr::MAX_DOLPH_SIDELOBE_DB);
+        self.radio.cw.detector_mode = detector_mode_from_u8(s.detector_mode);
+        self.radio.cw.iq_apf.enabled = s.iq_apf_enabled;
+        self.radio.cw.iq_apf.width_hz = s.iq_apf_width_hz;
+        self.radio.cw.iq_apf.gain = s.iq_apf_gain;
+        self.radio.cw.iq_wiener.enabled = s.iq_wiener_enabled;
+        self.radio.cw.iq_wiener.level = s.iq_wiener_level;
+        self.radio.cw.squelch.enabled = s.squelch_enabled;
+        self.radio.cw.squelch.open_threshold = s.squelch_open_thr;
+        self.radio.cw.squelch.close_threshold = s.squelch_close_thr;
+        self.radio.cw.squelch.hang_ms = s.squelch_hang_ms;
         self.radio.cw.full_demod = s.full_demod;
         self.radio.cw.decimation = s.decimation;
         self.radio.cw.noise_blanker.enabled = s.nb_enabled;
@@ -157,6 +174,19 @@ impl WaterfallApp {
             window: window_to_u8(self.radio.cw.window),
             kaiser_beta: self.radio.cw.kaiser_beta,
             passband_flatten: self.radio.cw.passband_flatten,
+            deep_selectivity: self.radio.cw.deep_selectivity,
+            passband_cutoff_frac: self.radio.cw.passband_cutoff_frac,
+            dolph_sidelobe_db: self.radio.cw.dolph_sidelobe_db,
+            detector_mode: detector_mode_to_u8(self.radio.cw.detector_mode),
+            iq_apf_enabled: self.radio.cw.iq_apf.enabled,
+            iq_apf_width_hz: self.radio.cw.iq_apf.width_hz,
+            iq_apf_gain: self.radio.cw.iq_apf.gain,
+            iq_wiener_enabled: self.radio.cw.iq_wiener.enabled,
+            iq_wiener_level: self.radio.cw.iq_wiener.level,
+            squelch_enabled: self.radio.cw.squelch.enabled,
+            squelch_open_thr: self.radio.cw.squelch.open_threshold,
+            squelch_close_thr: self.radio.cw.squelch.close_threshold,
+            squelch_hang_ms: self.radio.cw.squelch.hang_ms,
             economy_filter: false,
             full_demod: self.radio.cw.full_demod,
             decimation: self.radio.cw.decimation,

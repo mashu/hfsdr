@@ -97,7 +97,20 @@ pub(crate) const SMETER_DBM_MIN: f32 = -127.0;
 pub(crate) const SMETER_DBM_MAX: f32 = -33.0;
 
 pub(crate) fn dbm_to_needle_t(dbm: f32) -> f32 {
+    if !dbm.is_finite() {
+        return 0.0;
+    }
     ((dbm - SMETER_DBM_MIN) / (SMETER_DBM_MAX - SMETER_DBM_MIN)).clamp(0.0, 1.0)
+}
+
+pub(crate) fn needle_t_to_dbm(t: f32) -> f32 {
+    if !t.is_finite() {
+        return SMETER_DBM_MIN;
+    }
+    (SMETER_DBM_MIN + t.clamp(0.0, 1.0) * (SMETER_DBM_MAX - SMETER_DBM_MIN)).clamp(
+        SMETER_DBM_MIN,
+        SMETER_DBM_MAX,
+    )
 }
 
 pub(crate) fn needle_angle(t: f32) -> f32 {
@@ -173,6 +186,12 @@ mod tests {
     fn iq_rf_level_nan_maps_to_floor() {
         assert_eq!(iq_rf_level_to_dbm(f32::NAN), -127.0);
         assert!(iq_rf_level_to_dbm(f32::NAN).is_finite());
+    }
+
+    #[test]
+    fn dbm_to_needle_t_handles_nan() {
+        assert_eq!(dbm_to_needle_t(f32::NAN), 0.0);
+        assert_eq!(dbm_to_needle_t(f32::INFINITY), 1.0);
     }
 
     #[test]

@@ -61,6 +61,10 @@ pub struct EngineStats {
     pub agc_envelope: f32,
     /// Pre-AGC IQ level for S-meter when hardware RSSI is unavailable.
     pub iq_rf_level: f32,
+    /// Adaptive keying speed (WPM) from IQ envelope; ~20 until keyed.
+    pub estimated_wpm: f32,
+    /// True once mark durations have been observed.
+    pub keying_confident: bool,
     /// KiwiSDR 2 reports `has_attn=1` when a hardware RF attenuator is present.
     pub kiwi_has_rf_attn: bool,
     /// Latest Kiwi hardware RF attenuator setting (dB).
@@ -105,6 +109,8 @@ impl Default for EngineStats {
             agc_gain: 1.0,
             agc_envelope: 0.0,
             iq_rf_level: 0.0,
+            estimated_wpm: 20.0,
+            keying_confident: false,
             kiwi_has_rf_attn: false,
             kiwi_rf_attn_db: 0.0,
             hw_rf_gain: None,

@@ -5,8 +5,12 @@
 //! node-graph compositor can reorder/connect these same stages without changing
 //! the DSP structs themselves.
 
-use super::filter_plan::{clamp_passband_hz, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
-use super::fir::WindowKind;
+use super::filter_plan::{
+    clamp_passband_hz, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_DOLPH_SIDELOBE_DB,
+    DEFAULT_KAISER_BETA, DEFAULT_PASSBAND_CUTOFF_FRAC, MAX_DOLPH_SIDELOBE_DB,
+    MAX_PASSBAND_CUTOFF_FRAC, MIN_DOLPH_SIDELOBE_DB, MIN_PASSBAND_CUTOFF_FRAC,
+};
+use super::fir::{LowpassDesign, WindowKind};
 use super::super::freq_offset::ChannelOffsetHz;
 
 pub use super::sidetone_envelope::{SidetoneEnvelopeSettings, SidetoneEnvelopeShape};
@@ -49,6 +53,62 @@ impl Default for NotchSpec {
             enabled: false,
             offset_hz: ChannelOffsetHz::ZERO,
             width_hz: 50.0,
+        }
+    }
+}
+
+pub use super::cw_detector::CwDetectorMode;
+
+/// IQ-domain resonant peak before demod.
+#[derive(Clone, Copy, Debug)]
+pub struct IqApfSettings {
+    pub enabled: bool,
+    pub width_hz: f32,
+    pub gain: f32,
+}
+
+impl Default for IqApfSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width_hz: 60.0,
+            gain: 1.2,
+        }
+    }
+}
+
+/// Pre-demod Wiener-style IQ noise suppression.
+#[derive(Clone, Copy, Debug)]
+pub struct IqWienerSettings {
+    pub enabled: bool,
+    pub level: f32,
+}
+
+impl Default for IqWienerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            level: 0.28,
+        }
+    }
+}
+
+/// CW squelch with hang (post-demod).
+#[derive(Clone, Copy, Debug)]
+pub struct SquelchSettings {
+    pub enabled: bool,
+    pub open_threshold: f32,
+    pub close_threshold: f32,
+    pub hang_ms: f32,
+}
+
+impl Default for SquelchSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            open_threshold: 0.02,
+            close_threshold: 0.01,
+            hang_ms: 120.0,
         }
     }
 }
@@ -227,6 +287,17 @@ pub struct CwChannelSettings {
     pub kaiser_beta: f32,
     /// Lift upstream SDR passband droop (inverse-sinc EQ convolved into channel FIR).
     pub passband_flatten: bool,
+    /// Sinc cutoff as a fraction of GUI passband width (soft ↔ sharp).
+    pub passband_cutoff_frac: f32,
+    /// Use maximum group-delay budget for steeper FIR skirts.
+    pub deep_selectivity: bool,
+    /// Target sidelobe attenuation (dB) for Dolph–Chebyshev FIR.
+    pub dolph_sidelobe_db: f32,
+    /// CW demod strategy (product / coherent / dit-matched).
+    pub detector_mode: CwDetectorMode,
+    pub iq_apf: IqApfSettings,
+    pub iq_wiener: IqWienerSettings,
+    pub squelch: SquelchSettings,
     /// Integer decimation factor override; `0` auto-selects from the IQ rate.
     pub decimation: u32,
     pub noise_blanker: NoiseBlankerSettings,
@@ -257,6 +328,13 @@ impl Default for CwChannelSettings {
             window: DEFAULT_CHANNEL_WINDOW,
             kaiser_beta: DEFAULT_KAISER_BETA,
             passband_flatten: false,
+            passband_cutoff_frac: DEFAULT_PASSBAND_CUTOFF_FRAC,
+            deep_selectivity: false,
+            dolph_sidelobe_db: DEFAULT_DOLPH_SIDELOBE_DB,
+            detector_mode: CwDetectorMode::Product,
+            iq_apf: IqApfSettings::default(),
+            iq_wiener: IqWienerSettings::default(),
+            squelch: SquelchSettings::default(),
             decimation: 0,
             noise_blanker: NoiseBlankerSettings::default(),
             notches: [NotchSpec::default(); MAX_NOTCHES],
@@ -280,6 +358,32 @@ impl CwChannelSettings {
 
     pub fn channel_bandwidth_hz(&self) -> f32 {
         clamp_passband_hz(self.passband_hz)
+    }
+
+    /// Build FIR design parameters from listen settings.
+    pub fn lowpass_design(&self) -> LowpassDesign {
+        LowpassDesign {
+            window: self.window,
+            kaiser_beta: self.kaiser_beta,
+            passband_flatten: self.passband_flatten,
+            cutoff_frac: self
+                .passband_cutoff_frac
+                .clamp(MIN_PASSBAND_CUTOFF_FRAC, MAX_PASSBAND_CUTOFF_FRAC),
+            deep_selectivity: self.deep_selectivity,
+            dolph_sidelobe_db: self
+                .dolph_sidelobe_db
+                .clamp(MIN_DOLPH_SIDELOBE_DB, MAX_DOLPH_SIDELOBE_DB),
+        }
+    }
+
+    /// Group delay of the channel FIR at the current audio rate (ms).
+    pub fn channel_group_delay_ms(&self, audio_rate: f32) -> f32 {
+        super::filter_plan::channel_group_delay_ms(
+            audio_rate,
+            self.channel_bandwidth_hz(),
+            self.passband_cutoff_frac,
+            self.deep_selectivity,
+        )
     }
 }
 
