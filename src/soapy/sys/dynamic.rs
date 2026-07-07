@@ -115,6 +115,10 @@ static API: OnceLock<Option<Api>> = OnceLock::new();
 
 /// Configure SoapySDR plugin search paths before the first library load.
 pub fn prepare_environment() {
+    if let Some(appdir) = appimage_appdir() {
+        isolate_appimage_soapy(&appdir);
+        return;
+    }
     if std::env::var("SOAPY_SDR_PLUGIN_PATH").is_ok() {
         return;
     }
@@ -131,6 +135,48 @@ pub fn prepare_environment() {
             return;
         }
     }
+}
+
+fn appimage_appdir() -> Option<String> {
+    std::env::var("APPDIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("APPIMAGE").ok().and_then(|p| {
+                std::path::Path::new(&p)
+                    .parent()
+                    .map(|d| d.to_string_lossy().into_owned())
+                    .filter(|s| !s.is_empty())
+            })
+        })
+}
+
+fn isolate_appimage_soapy(appdir: &str) {
+    let lib_dir = format!("{appdir}/usr/lib");
+    let modules = format!("{appdir}/usr/lib/SoapySDR/modules0.8");
+    if std::path::Path::new(&modules).is_dir() {
+        // SAFETY: before SoapySDR loads plugins; single-threaded init.
+        unsafe { std::env::set_var("SOAPY_SDR_PLUGIN_PATH", &modules) };
+    }
+    prepend_ld_library_path(&lib_dir);
+    prepend_ld_library_path(&format!("{appdir}/usr/lib/x86_64-linux-gnu"));
+    if std::env::var("HFSDR_LIB_DIR").is_err() && std::path::Path::new(&lib_dir).is_dir() {
+        unsafe { std::env::set_var("HFSDR_LIB_DIR", &lib_dir) };
+    }
+}
+
+fn prepend_ld_library_path(dir: &str) {
+    if !std::path::Path::new(dir).is_dir() {
+        return;
+    }
+    let mut ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+    if ld.is_empty() {
+        ld = dir.to_string();
+    } else if !ld.split(':').any(|p| p == dir) {
+        ld = format!("{dir}:{ld}");
+    }
+    // SAFETY: before SoapySDR loads plugins; single-threaded init.
+    unsafe { std::env::set_var("LD_LIBRARY_PATH", &ld) };
 }
 
 fn try_set_plugin_path(root: &std::path::Path) -> bool {

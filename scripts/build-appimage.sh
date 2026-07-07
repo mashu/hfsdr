@@ -3,6 +3,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=appimage/soapy-appimage-integration.sh
+source "${SCRIPT_DIR}/appimage/soapy-appimage-integration.sh"
 cd "$ROOT"
 
 VERSION="${HFSDR_VERSION:-$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')}"
@@ -158,6 +161,8 @@ if [[ ! -f "$ICON" ]] || [[ "$SVG" -nt "$ICON" ]]; then
     exit 1
   fi
 fi
+
+run_soapy_appimage_prep
 
 "$LINUXDEPLOY" \
   --appdir "$APPDIR" \
