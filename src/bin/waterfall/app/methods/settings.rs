@@ -36,6 +36,7 @@ impl WaterfallApp {
         self.radio.cw.squelch.open_threshold = s.squelch_open_thr;
         self.radio.cw.squelch.close_threshold = s.squelch_close_thr;
         self.radio.cw.squelch.hang_ms = s.squelch_hang_ms;
+        self.radio.cw.squelch.ramp_ms = s.squelch_ramp_ms;
         self.radio.cw.full_demod = s.full_demod;
         self.radio.cw.decimation = s.decimation;
         self.radio.cw.noise_blanker.enabled = s.nb_enabled;
@@ -59,6 +60,7 @@ impl WaterfallApp {
         self.radio.cw.sidetone_envelope.enabled = s.st_envelope_enabled;
         self.radio.cw.sidetone_envelope.rise_ms = s.st_rise_ms;
         self.radio.cw.sidetone_envelope.fall_ms = s.st_fall_ms;
+        self.radio.cw.sidetone_envelope.floor_gain = s.st_floor_gain;
         self.radio.cw.sidetone_envelope.shape =
             st_envelope_shape_from_u8(s.st_envelope_shape);
         for (slot, data) in self.radio.cw.notches.iter_mut().zip(s.notches.iter()) {
@@ -187,6 +189,7 @@ impl WaterfallApp {
             squelch_open_thr: self.radio.cw.squelch.open_threshold,
             squelch_close_thr: self.radio.cw.squelch.close_threshold,
             squelch_hang_ms: self.radio.cw.squelch.hang_ms,
+            squelch_ramp_ms: self.radio.cw.squelch.ramp_ms,
             economy_filter: false,
             full_demod: self.radio.cw.full_demod,
             decimation: self.radio.cw.decimation,
@@ -211,6 +214,7 @@ impl WaterfallApp {
             st_envelope_enabled: self.radio.cw.sidetone_envelope.enabled,
             st_rise_ms: self.radio.cw.sidetone_envelope.rise_ms,
             st_fall_ms: self.radio.cw.sidetone_envelope.fall_ms,
+            st_floor_gain: self.radio.cw.sidetone_envelope.floor_gain,
             st_envelope_shape: st_envelope_shape_to_u8(self.radio.cw.sidetone_envelope.shape),
             notches: self
                 .radio.cw

@@ -336,6 +336,12 @@ impl WaterfallApp {
                             20.0..=500.0,
                             "Hang ms",
                         );
+                        scroll_slider_f32(
+                            ui,
+                            &mut self.radio.cw.squelch.ramp_ms,
+                            0.5..=20.0,
+                            "Ramp ms",
+                        );
                     }
                 });
             },

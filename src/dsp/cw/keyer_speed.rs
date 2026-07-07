@@ -4,6 +4,7 @@
 //! and BW hints follow the operator's actual fist — no manual WPM entry.
 
 use super::filter_plan::{dit_duration_s, passband_hz_for_wpm};
+use super::smoothing::alpha_for_tau;
 
 /// PARIS dot length → WPM.
 pub fn wpm_from_dot_seconds(dot_seconds: f32) -> f32 {
@@ -12,6 +13,13 @@ pub fn wpm_from_dot_seconds(dot_seconds: f32) -> f32 {
     }
     1.2 / dot_seconds
 }
+
+/// Envelope/threshold ballistics (seconds) — rate-invariant defaults.
+const ENV_ATTACK_S: f32 = 0.001;
+const ENV_RELEASE_S: f32 = 0.021;
+const PEAK_DECAY_S: f32 = 0.83;
+const NOISE_FALL_S: f32 = 0.0028;
+const NOISE_RISE_S: f32 = 0.28;
 
 /// Lightweight adaptive WPM tracker (same dot-length law as the skimmer decoder).
 #[derive(Clone, Debug)]
@@ -24,6 +32,11 @@ pub struct KeyerSpeedEstimator {
     peak: f32,
     noise: f32,
     confident: bool,
+    env_attack: f32,
+    env_release: f32,
+    peak_keep: f32,
+    noise_fall: f32,
+    noise_rise: f32,
 }
 
 impl Default for KeyerSpeedEstimator {
@@ -44,6 +57,11 @@ impl KeyerSpeedEstimator {
             peak: 0.0,
             noise: 0.0,
             confident: false,
+            env_attack: alpha_for_tau(rate, ENV_ATTACK_S),
+            env_release: alpha_for_tau(rate, ENV_RELEASE_S),
+            peak_keep: 1.0 - alpha_for_tau(rate, PEAK_DECAY_S),
+            noise_fall: alpha_for_tau(rate, NOISE_FALL_S),
+            noise_rise: alpha_for_tau(rate, NOISE_RISE_S),
         }
     }
 
@@ -57,6 +75,11 @@ impl KeyerSpeedEstimator {
         if (rate - self.sample_rate).abs() > 1.0 {
             self.sample_rate = rate;
             self.dot_samples = self.clamp_dot(self.dot_samples);
+            self.env_attack = alpha_for_tau(rate, ENV_ATTACK_S);
+            self.env_release = alpha_for_tau(rate, ENV_RELEASE_S);
+            self.peak_keep = 1.0 - alpha_for_tau(rate, PEAK_DECAY_S);
+            self.noise_fall = alpha_for_tau(rate, NOISE_FALL_S);
+            self.noise_rise = alpha_for_tau(rate, NOISE_RISE_S);
         }
     }
 
@@ -65,19 +88,19 @@ impl KeyerSpeedEstimator {
         self.sync_rate(sample_rate);
         let inst = level.max(0.0);
         if inst > self.env {
-            self.env += 0.08 * (inst - self.env);
+            self.env += self.env_attack * (inst - self.env);
         } else {
-            self.env += 0.004 * (inst - self.env);
+            self.env += self.env_release * (inst - self.env);
         }
         if self.env > self.peak {
             self.peak = self.env;
         } else {
-            self.peak *= 0.9999;
+            self.peak *= self.peak_keep;
         }
         if self.env < self.noise {
-            self.noise += 0.03 * (self.env - self.noise);
+            self.noise += self.noise_fall * (self.env - self.noise);
         } else {
-            self.noise += 0.0003 * (self.env - self.noise);
+            self.noise += self.noise_rise * (self.env - self.noise);
         }
 
         let span = (self.peak - self.noise).max(0.0);

@@ -100,6 +100,8 @@ pub struct SquelchSettings {
     pub open_threshold: f32,
     pub close_threshold: f32,
     pub hang_ms: f32,
+    /// Gate open/close ramp (ms) — longer is softer, shorter is snappier.
+    pub ramp_ms: f32,
 }
 
 impl Default for SquelchSettings {
@@ -109,6 +111,7 @@ impl Default for SquelchSettings {
             open_threshold: 0.02,
             close_threshold: 0.01,
             hang_ms: 120.0,
+            ramp_ms: super::squelch::DEFAULT_SQUELCH_RAMP_MS,
         }
     }
 }

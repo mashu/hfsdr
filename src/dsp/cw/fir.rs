@@ -75,7 +75,7 @@ pub struct FirFilter {
     h_fft: Vec<Complex<f32>>,
     fft_n: usize,
     scratch: Vec<Complex<f32>>,
-    h_fft_key: usize,
+    hist: Vec<Complex<f32>>,
 }
 
 impl FirFilter {
@@ -89,7 +89,7 @@ impl FirFilter {
             h_fft: Vec::new(),
             fft_n: 0,
             scratch: Vec::new(),
-            h_fft_key: 0,
+            hist: Vec::new(),
         }
     }
 
@@ -111,7 +111,13 @@ impl FirFilter {
         self.pos = 0;
     }
 
-    /// Block FIR (FFT when profitable); carries delay state across calls like [`Self::process_complex`].
+    /// Block FIR via overlap-save (FFT when profitable); carries delay state
+    /// across calls like [`Self::process_complex`].
+    ///
+    /// The FFT size depends only on the tap count, so the filter spectrum is
+    /// computed once per design, not per input-length change; long inputs are
+    /// processed in fixed-size segments. Real taps commute with complex input,
+    /// so I and Q ride through a single complex convolution.
     pub fn process_complex_block(
         &mut self,
         input: &[Complex32],
@@ -132,47 +138,73 @@ impl FirFilter {
             }
             return;
         }
-        let mut out_i = vec![0.0f32; input.len()];
-        let mut out_q = vec![0.0f32; input.len()];
-        let in_i: Vec<f32> = input.iter().map(|s| s.re).collect();
-        let in_q: Vec<f32> = input.iter().map(|s| s.im).collect();
+
         let l = self.taps.len();
-        let pos = self.pos;
-        let hist_i = linearize_delay(&self.delay_i, pos, l);
-        let hist_q = linearize_delay(&self.delay_q, pos, l);
-        block_fft_real(
-            &self.taps,
-            &mut self.scratch,
-            &mut self.h_fft,
-            &mut self.fft_n,
-            &mut self.h_fft_key,
-            &hist_i,
-            &in_i,
-            &mut out_i,
-        );
-        block_fft_real(
-            &self.taps,
-            &mut self.scratch,
-            &mut self.h_fft,
-            &mut self.fft_n,
-            &mut self.h_fft_key,
-            &hist_q,
-            &in_q,
-            &mut out_q,
-        );
-        let mut tail_i = hist_i;
-        tail_i.extend_from_slice(&in_i);
-        let mut tail_q = hist_q;
-        tail_q.extend_from_slice(&in_q);
-        self.pos = reseed_delay_rail(&mut self.delay_i, &tail_i, l);
-        let _ = reseed_delay_rail(&mut self.delay_q, &tail_q, l);
-        output.reserve(input.len());
-        for i in 0..input.len() {
-            output.push(Complex32 {
-                re: out_i[i],
-                im: out_q[i],
-            });
+        let fft_n = fft_size_for_taps(l);
+        let seg = fft_n - (l - 1);
+        self.ensure_h_fft(fft_n);
+
+        // Linearize the delay line into complex history (oldest first).
+        self.hist.clear();
+        self.hist.resize(l - 1, Complex::new(0.0, 0.0));
+        let dlen = self.delay_i.len();
+        for k in 0..l - 1 {
+            let idx = (self.pos + dlen - 1 - k) % dlen;
+            self.hist[l - 2 - k] = Complex::new(self.delay_i[idx], self.delay_q[idx]);
         }
+
+        output.resize(input.len(), Complex32 { re: 0.0, im: 0.0 });
+        let mut done = 0usize;
+        while done < input.len() {
+            let chunk = (input.len() - done).min(seg);
+            self.scratch.resize(fft_n, Complex::new(0.0, 0.0));
+            self.scratch.fill(Complex::new(0.0, 0.0));
+            self.scratch[..l - 1].copy_from_slice(&self.hist);
+            self.scratch[l - 1..l - 1 + chunk].copy_from_slice(&input[done..done + chunk]);
+            plan_forward(fft_n).process(&mut self.scratch);
+            for (s, h) in self.scratch.iter_mut().zip(self.h_fft.iter()) {
+                *s *= h;
+            }
+            plan_inverse(fft_n).process(&mut self.scratch);
+            let scale = 1.0 / fft_n as f32;
+            // input[done] sits at ext index l-1, so its streaming-equivalent
+            // output is the linear convolution at l-1.
+            for k in 0..chunk {
+                output[done + k] = self.scratch[l - 1 + k] * scale;
+            }
+            // Advance history: newest l-1 samples ending at input[done+chunk-1].
+            if chunk >= l - 1 {
+                self.hist
+                    .copy_from_slice(&input[done + chunk - (l - 1)..done + chunk]);
+            } else {
+                self.hist.copy_within(chunk.., 0);
+                let keep = l - 1 - chunk;
+                self.hist[keep..].copy_from_slice(&input[done..done + chunk]);
+            }
+            done += chunk;
+        }
+
+        // Reseed the shared delay line so scalar processing can continue.
+        self.delay_i.fill(0.0);
+        self.delay_q.fill(0.0);
+        for (k, h) in self.hist.iter().enumerate() {
+            self.delay_i[k] = h.re;
+            self.delay_q[k] = h.im;
+        }
+        self.pos = (l - 1) % dlen;
+    }
+
+    fn ensure_h_fft(&mut self, fft_n: usize) {
+        if self.fft_n == fft_n && self.h_fft.len() == fft_n {
+            return;
+        }
+        self.h_fft.clear();
+        self.h_fft.resize(fft_n, Complex::new(0.0, 0.0));
+        for (i, &t) in self.taps.iter().enumerate() {
+            self.h_fft[i] = Complex::new(t, 0.0);
+        }
+        plan_forward(fft_n).process(&mut self.h_fft);
+        self.fft_n = fft_n;
     }
 
     pub fn process_complex(&mut self, sample: Complex32) -> Complex32 {
@@ -222,81 +254,10 @@ impl FirFilter {
     }
 }
 
-fn linearize_delay(delay: &[f32], pos: usize, taps_len: usize) -> Vec<f32> {
-    let n = taps_len.saturating_sub(1);
-    let mut hist = vec![0.0f32; n];
-    if n == 0 || delay.is_empty() {
-        return hist;
-    }
-    for i in 0..n {
-        let idx = (pos + delay.len() - 1).wrapping_sub(i) % delay.len();
-        hist[n - 1 - i] = delay[idx];
-    }
-    hist
-}
-
-fn reseed_delay_rail(delay: &mut [f32], tail: &[f32], taps_len: usize) -> usize {
-    delay.fill(0.0);
-    let keep = taps_len.saturating_sub(1).min(tail.len());
-    if keep == 0 {
-        return 0;
-    }
-    let start = tail.len() - keep;
-    for i in 0..keep {
-        delay[i] = tail[start + i];
-    }
-    keep % delay.len()
-}
-
-fn block_fft_real(
-    taps: &[f32],
-    scratch: &mut Vec<Complex<f32>>,
-    h_fft: &mut Vec<Complex<f32>>,
-    fft_n_slot: &mut usize,
-    h_key: &mut usize,
-    hist: &[f32],
-    input: &[f32],
-    output: &mut [f32],
-) {
-    let l = taps.len();
-    let conv_len = l + hist.len() + input.len() - 1;
-    let fft_n = conv_len.next_power_of_two().max(256);
-    if scratch.len() != fft_n {
-        scratch.resize(fft_n, Complex::new(0.0, 0.0));
-    }
-    if h_fft.len() != fft_n || *h_key != l {
-        h_fft.resize(fft_n, Complex::new(0.0, 0.0));
-        h_fft.fill(Complex::new(0.0, 0.0));
-        for (i, &t) in taps.iter().enumerate() {
-            h_fft[i] = Complex::new(t, 0.0);
-        }
-        plan_forward(fft_n).process(h_fft);
-        *h_key = l;
-        *fft_n_slot = fft_n;
-    }
-
-    scratch.fill(Complex::new(0.0, 0.0));
-    for (i, &v) in hist.iter().enumerate() {
-        scratch[i] = Complex::new(v, 0.0);
-    }
-    for (i, &v) in input.iter().enumerate() {
-        scratch[hist.len() + i] = Complex::new(v, 0.0);
-    }
-    plan_forward(fft_n).process(scratch);
-    for i in 0..fft_n {
-        scratch[i] *= h_fft[i];
-    }
-    plan_inverse(fft_n).process(scratch);
-    let scale = 1.0 / fft_n as f32;
-    for i in 0..fft_n {
-        scratch[i] *= scale;
-    }
-    // input[0] sits at ext index hist.len(), so the streaming-equivalent output
-    // for input[i] is the linear convolution at hist.len() + i.
-    let base = hist.len();
-    for (i, slot) in output.iter_mut().enumerate() {
-        *slot = scratch[base + i].re;
-    }
+/// Overlap-save FFT size for a tap count — fixed per filter design so the
+/// filter spectrum is cached regardless of how block lengths vary.
+fn fft_size_for_taps(taps_len: usize) -> usize {
+    (4 * taps_len).next_power_of_two().max(256)
 }
 
 /// Reverse-order delay line dot product (linear-phase FIR).
