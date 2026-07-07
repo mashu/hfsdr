@@ -57,6 +57,7 @@ pub(crate) fn synthetic_streaming_poll(frame: usize) -> EnginePoll {
         latest,
         last_error: None,
         audio_scope: vec![0.0; 128],
+        audio_waveform: Vec::new(),
     }
 }
 
@@ -69,6 +70,7 @@ fn poll_with_latest(latest: Vec<f32>, rows: Vec<Vec<f32>>) -> EnginePoll {
         latest,
         last_error: None,
         audio_scope: vec![0.0; 128],
+        audio_waveform: Vec::new(),
     }
 }
 
@@ -82,6 +84,7 @@ fn poll_with_stats(stats: EngineStats) -> EnginePoll {
         latest,
         last_error: None,
         audio_scope: vec![0.0; 128],
+        audio_waveform: Vec::new(),
     }
 }
 
@@ -282,6 +285,7 @@ fn reconnecting_shows_retry_label() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     harness.run_steps(2);
     harness.get_by_label("RECONNECT #1 (2s)");
@@ -302,6 +306,7 @@ fn connecting_shows_connecting_badge() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     harness.run_steps(2);
     harness.get_by_label("CONNECTING");
@@ -328,6 +333,7 @@ fn disconnected_after_error_poll_stays_finite() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: Some("connection stalled (no data)".into()),
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     harness.run_steps(2);
     harness.get_by_label("OFFLINE");

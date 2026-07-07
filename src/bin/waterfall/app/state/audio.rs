@@ -6,4 +6,5 @@ pub struct AudioUiState {
     pub audio_enabled: bool,
     pub volume: f32,
     pub audio_scope: Vec<f32>,
+    pub audio_waveform: Vec<f32>,
 }

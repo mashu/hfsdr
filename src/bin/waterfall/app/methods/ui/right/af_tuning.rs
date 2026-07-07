@@ -32,8 +32,10 @@ impl WaterfallApp {
             );
             meters::show_af_tuning_panel(
                 ui,
+                &mut self.meter_display.af_scope_view,
                 &AfScopeParams {
                     envelope: self.meter_display.af_scope.envelope(),
+                    waveform: &self.audio.audio_waveform,
                     peak: self.engine_ui.stats.audio_peak,
                     peak_display: self.meter_display.display.af_scope_peak,
                     rms: self.engine_ui.stats.audio_rms,

@@ -164,6 +164,7 @@ fn reconnecting_poll_updates_conn_state() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     app.pump_engine();
     assert!(matches!(
@@ -283,6 +284,7 @@ fn slow_link_shows_unstable_badge() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     app.pump_engine();
     let (label, _) = app.connection_status_pill();
@@ -301,6 +303,7 @@ fn streaming_poll_appends_waterfall_rows() {
         latest: row,
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     app.pump_engine();
     assert_eq!(app.plot.rows.len(), 2);
@@ -417,6 +420,7 @@ fn pump_engine_ingests_skimmer_spots() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     app.pump_engine();
     assert_eq!(app.skimmer_ui.skimmer_spots.len(), 1);
@@ -457,6 +461,7 @@ fn fft_size_change_on_poll_resets_row_buffer() {
         latest: vec![-90.0; 1024],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     app.pump_engine();
     assert_eq!(app.plot.latest.len(), 1024);
@@ -808,6 +813,7 @@ fn pump_engine_ingests_injected_poll() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: vec![0.0; 64],
+        audio_waveform: Vec::new(),
     });
     app.pump_engine();
     assert_eq!(app.radio.sample_rate, 12_000.0);

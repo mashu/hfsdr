@@ -276,6 +276,12 @@ pub struct AppSettings {
     /// AF tuning scope visible in the CW demod panel.
     #[serde(default)]
     pub show_af_scope: bool,
+    /// AF scope display mode: 0 = level, 1 = waveform.
+    #[serde(default)]
+    pub af_scope_mode: u8,
+    /// AF scope accuracy: 0 = coarse, 1 = medium, 2 = fine.
+    #[serde(default)]
+    pub af_scope_accuracy: u8,
     /// Essential CW layout: BFO, BW, AGC only; hides skimmer/IQ/performance chrome.
     #[serde(default)]
     pub cw_simple_ui: bool,
@@ -417,6 +423,8 @@ impl Default for AppSettings {
             show_left: true,
             show_right: true,
             show_af_scope: true,
+            af_scope_mode: 0,
+            af_scope_accuracy: 0,
             show_smeter: default_show_smeter(),
             cw_simple_ui: false,
             recent_hosts: Vec::new(),

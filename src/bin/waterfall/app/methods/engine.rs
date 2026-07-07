@@ -164,6 +164,7 @@ impl WaterfallApp {
         self.engine_ui.last_error = poll.last_error;
         self.skimmer_ui.skimmer_spots = poll.spots;
         self.audio.audio_scope = poll.audio_scope;
+        self.audio.audio_waveform = poll.audio_waveform;
         let latest = poll.latest;
         let new_rows = poll.rows;
         if matches!(self.engine_ui.conn_state, ConnState::Streaming)

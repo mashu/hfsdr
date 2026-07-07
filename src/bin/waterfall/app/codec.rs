@@ -153,6 +153,36 @@ pub(crate) fn st_envelope_shape_from_u8(v: u8) -> SidetoneEnvelopeShape {
     }
 }
 
+pub(crate) fn af_scope_mode_to_u8(m: crate::meters::AfScopeMode) -> u8 {
+    match m {
+        crate::meters::AfScopeMode::Level => 0,
+        crate::meters::AfScopeMode::Waveform => 1,
+    }
+}
+
+pub(crate) fn af_scope_mode_from_u8(v: u8) -> crate::meters::AfScopeMode {
+    match v {
+        1 => crate::meters::AfScopeMode::Waveform,
+        _ => crate::meters::AfScopeMode::Level,
+    }
+}
+
+pub(crate) fn af_scope_accuracy_to_u8(a: crate::meters::AfScopeAccuracy) -> u8 {
+    match a {
+        crate::meters::AfScopeAccuracy::Coarse => 0,
+        crate::meters::AfScopeAccuracy::Medium => 1,
+        crate::meters::AfScopeAccuracy::Fine => 2,
+    }
+}
+
+pub(crate) fn af_scope_accuracy_from_u8(v: u8) -> crate::meters::AfScopeAccuracy {
+    match v {
+        1 => crate::meters::AfScopeAccuracy::Medium,
+        2 => crate::meters::AfScopeAccuracy::Fine,
+        _ => crate::meters::AfScopeAccuracy::Coarse,
+    }
+}
+
 pub(crate) fn spot_sort_to_u8(s: SpotSort) -> u8 {
     match s {
         SpotSort::SnrDesc => 0,

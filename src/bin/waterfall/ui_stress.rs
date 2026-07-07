@@ -86,6 +86,7 @@ fn corrupt_poll(frame: usize) -> EnginePoll {
             None
         },
         audio_scope: vec![0.0; 128],
+        audio_waveform: Vec::new(),
     }
 }
 
@@ -166,6 +167,7 @@ fn connection_state_machine_perturbation() {
                 None
             },
             audio_scope: vec![0.0; 64],
+            audio_waveform: Vec::new(),
         });
         harness.run_steps(2);
         assert_ui_finite(harness.state());
@@ -267,6 +269,7 @@ fn fft_size_change_mid_stream() {
                 latest,
                 last_error: None,
                 audio_scope: vec![0.0; 64],
+                audio_waveform: Vec::new(),
             },
             2,
         );
@@ -357,6 +360,7 @@ fn empty_then_full_spectrum_oscillation() {
                 latest: Vec::new(),
                 last_error: None,
                 audio_scope: Vec::new(),
+                audio_waveform: Vec::new(),
             }
         } else {
             synthetic_streaming_poll(frame)
@@ -389,6 +393,7 @@ fn wideband_stats_perturbation() {
                 latest,
                 last_error: None,
                 audio_scope: vec![0.0; 128],
+                audio_waveform: Vec::new(),
             },
             3,
         );

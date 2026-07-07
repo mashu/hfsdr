@@ -190,6 +190,7 @@ impl WaterfallApp {
                 audio_enabled: true,
                 volume: 1.0,
                 audio_scope: Vec::new(),
+                audio_waveform: Vec::new(),
             },
             skimmer_ui: SkimmerUiState {
                 skimmer_enabled: true,

@@ -6,12 +6,30 @@ const NEEDLE_DECAY_TAU_S: f32 = 2.8;
 /// Light spring on the smoothed target — visible momentum without bounce.
 const NEEDLE_PERIOD_S: f32 = 0.72;
 const NEEDLE_ZETA: f32 = 0.92;
-const BAR_PERIOD_S: f32 = 0.34;
-const BAR_ZETA: f32 = 1.18;
+const BAR_SPRING_PERIOD_S: f32 = 0.72;
+const BAR_SPRING_ZETA: f32 = 1.05;
+/// IF IQ AGC bar — gain moves slowly; avoids flicker between CW elements.
+const IF_BAR_ATTACK_TAU_S: f32 = 0.45;
+const IF_BAR_DECAY_TAU_S: f32 = 2.2;
+/// AF peak bar — quick rise on key-down, slow fall between dits (VU-style).
+const AF_BAR_ATTACK_TAU_S: f32 = 0.22;
+const AF_BAR_DECAY_TAU_S: f32 = 2.6;
 const SCOPE_PEAK_PERIOD_S: f32 = 0.55;
 const SCOPE_PEAK_ZETA: f32 = 1.15;
 
 fn ballistic_step(current: f32, target: f32, dt: f32, attack_tau: f32, decay_tau: f32) -> f32 {
+    ballistic_step_range(current, target, dt, attack_tau, decay_tau, 0.0, 1.0)
+}
+
+fn ballistic_step_range(
+    current: f32,
+    target: f32,
+    dt: f32,
+    attack_tau: f32,
+    decay_tau: f32,
+    lo: f32,
+    hi: f32,
+) -> f32 {
     let dt = dt.clamp(0.0, 0.1);
     if dt <= 0.0 {
         return current;
@@ -27,7 +45,7 @@ fn ballistic_step(current: f32, target: f32, dt: f32, attack_tau: f32, decay_tau
         decay_tau
     };
     let alpha = 1.0 - (-dt / tau.max(0.02)).exp();
-    (current + alpha * (target - current)).clamp(0.0, 1.0)
+    (current + alpha * (target - current)).clamp(lo, hi)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -73,10 +91,15 @@ impl Spring {
 pub struct MeterDisplayState {
     needle: Spring,
     needle_ballistic: f32,
+    if_fill_ballistic: f32,
+    af_fill_ballistic: f32,
+    if_gain_ballistic: f32,
+    af_peak_ballistic: f32,
     if_fill: Spring,
     af_fill: Spring,
     af_scope_peak: Spring,
     pub af_scope: super::af_scope_display::AfScopeDisplayState,
+    pub af_scope_view: super::af_scope_state::AfScopeViewState,
     pub display: MeterSmoothed,
 }
 
@@ -86,6 +109,8 @@ pub struct MeterTargets {
     pub needle_t: f32,
     pub if_fill: f32,
     pub af_fill: f32,
+    pub if_gain: f32,
+    pub af_peak: f32,
     pub af_scope_peak: f32,
     pub live: bool,
 }
@@ -96,6 +121,8 @@ pub struct MeterSmoothed {
     pub needle_t: f32,
     pub if_fill: f32,
     pub af_fill: f32,
+    pub if_gain_display: f32,
+    pub af_peak_display: f32,
     pub af_scope_peak: f32,
 }
 
@@ -104,14 +131,19 @@ impl MeterDisplayState {
         if !targets.live {
             self.needle.snap(0.0);
             self.needle_ballistic = 0.0;
+            self.if_fill_ballistic = 0.0;
+            self.af_fill_ballistic = 0.0;
+            self.if_gain_ballistic = 0.0;
+            self.af_peak_ballistic = 0.0;
             self.if_fill.snap(0.0);
             self.af_fill.snap(0.0);
             self.af_scope_peak.snap(0.0);
-            self.af_scope.reset();
             self.display = MeterSmoothed {
                 needle_t: 0.0,
                 if_fill: 0.0,
                 af_fill: 0.0,
+                if_gain_display: 0.0,
+                af_peak_display: 0.0,
                 af_scope_peak: 0.0,
             };
             return self.display;
@@ -133,22 +165,58 @@ impl MeterDisplayState {
             0.0,
             1.0,
         );
-        let if_fill = self.if_fill.step(
-            targets.if_fill,
+
+        self.if_fill_ballistic = ballistic_step(
+            self.if_fill_ballistic,
+            targets.if_fill.clamp(0.0, 1.0),
             dt,
-            BAR_PERIOD_S,
-            BAR_ZETA,
+            IF_BAR_ATTACK_TAU_S,
+            IF_BAR_DECAY_TAU_S,
+        );
+        let if_fill = self.if_fill.step(
+            self.if_fill_ballistic,
+            dt,
+            BAR_SPRING_PERIOD_S,
+            BAR_SPRING_ZETA,
             0.0,
             1.0,
+        );
+
+        self.af_fill_ballistic = ballistic_step(
+            self.af_fill_ballistic,
+            targets.af_fill.clamp(0.0, 1.0),
+            dt,
+            AF_BAR_ATTACK_TAU_S,
+            AF_BAR_DECAY_TAU_S,
         );
         let af_fill = self.af_fill.step(
-            targets.af_fill,
+            self.af_fill_ballistic,
             dt,
-            BAR_PERIOD_S,
-            BAR_ZETA,
+            BAR_SPRING_PERIOD_S,
+            BAR_SPRING_ZETA,
             0.0,
             1.0,
         );
+
+        self.if_gain_ballistic = ballistic_step_range(
+            self.if_gain_ballistic,
+            targets.if_gain.max(0.0),
+            dt,
+            IF_BAR_ATTACK_TAU_S,
+            IF_BAR_DECAY_TAU_S,
+            0.0,
+            128.0,
+        );
+        self.af_peak_ballistic = ballistic_step_range(
+            self.af_peak_ballistic,
+            targets.af_peak.max(0.0),
+            dt,
+            AF_BAR_ATTACK_TAU_S,
+            AF_BAR_DECAY_TAU_S,
+            0.0,
+            2.0,
+        );
+
         let af_scope_peak = self.af_scope_peak.step(
             targets.af_scope_peak,
             dt,
@@ -161,6 +229,8 @@ impl MeterDisplayState {
             needle_t,
             if_fill,
             af_fill,
+            if_gain_display: self.if_gain_ballistic,
+            af_peak_display: self.af_peak_ballistic,
             af_scope_peak,
         };
         self.display
@@ -203,6 +273,8 @@ mod tests {
                     needle_t: 1.0,
                     if_fill: 0.0,
                     af_fill: 0.0,
+                    if_gain: 1.0,
+                    af_peak: 0.0,
                     af_scope_peak: 0.0,
                     live: true,
                 },
@@ -217,6 +289,8 @@ mod tests {
                     needle_t: 0.0,
                     if_fill: 0.0,
                     af_fill: 0.0,
+                    if_gain: 1.0,
+                    af_peak: 0.0,
                     af_scope_peak: 0.0,
                     live: true,
                 },
@@ -232,6 +306,8 @@ mod tests {
             needle_t: 0.8,
             if_fill: 0.5,
             af_fill: 0.4,
+            if_gain: 12.0,
+            af_peak: 0.35,
             af_scope_peak: 0.3,
             live: true,
         };

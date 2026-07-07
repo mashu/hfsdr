@@ -43,17 +43,7 @@ impl WaterfallApp {
                     } else {
                         None
                     },
-                    agc_gain: if live {
-                        self.engine_ui.stats.agc_gain
-                    } else {
-                        1.0
-                    },
                     agc_enabled: live && self.radio.cw.agc.enabled,
-                    audio_peak: if live {
-                        self.engine_ui.stats.audio_peak
-                    } else {
-                        0.0
-                    },
                     streaming: live,
                 },
                 self.meter_display.display,

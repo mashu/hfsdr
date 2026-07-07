@@ -172,8 +172,10 @@ pub struct EngineShared {
     pub spots: Vec<Spot>,
     pub last_error: Option<String>,
     pub rows_seq: u64,
-    /// Recent demod audio samples for the AF scope (oldest first).
+    /// Recent demod audio envelope slots for the AF scope (oldest first).
     pub audio_scope: Vec<f32>,
+    /// Recent raw demod audio for waveform / phosphor view (oldest first).
+    pub audio_waveform: Vec<f32>,
 }
 
 impl Default for EngineShared {
@@ -187,6 +189,7 @@ impl Default for EngineShared {
             last_error: None,
             rows_seq: 0,
             audio_scope: Vec::new(),
+            audio_waveform: Vec::new(),
         }
     }
 }
@@ -249,6 +252,7 @@ pub struct EnginePoll {
     pub latest: Vec<f32>,
     pub last_error: Option<String>,
     pub audio_scope: Vec<f32>,
+    pub audio_waveform: Vec<f32>,
 }
 
 fn finite_or(value: f32, fallback: f32) -> f32 {
@@ -309,6 +313,11 @@ impl EnginePoll {
                 *sample = 0.0;
             }
         }
+        for sample in &mut self.audio_waveform {
+            if !sample.is_finite() {
+                *sample = 0.0;
+            }
+        }
         self
     }
 }
@@ -341,6 +350,7 @@ mod tests {
             latest: Vec::new(),
             last_error: None,
             audio_scope: vec![f32::NAN, 1.0],
+            audio_waveform: Vec::new(),
         };
         let poll = poll.sanitized(FFT_SIZE);
         assert_eq!(poll.latest.len(), FFT_SIZE);
@@ -361,6 +371,7 @@ mod tests {
             latest,
             last_error: None,
             audio_scope: Vec::new(),
+            audio_waveform: Vec::new(),
         };
         let poll = poll.sanitized(8);
         assert!(poll.latest.iter().all(|v| v.is_finite()));
@@ -377,6 +388,7 @@ mod tests {
             latest: vec![-90.0; 8],
             last_error: None,
             audio_scope: Vec::new(),
+            audio_waveform: Vec::new(),
         };
         let poll = poll.sanitized(8);
         assert_eq!(poll.rows[0].len(), 8);

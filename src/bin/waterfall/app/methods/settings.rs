@@ -126,6 +126,9 @@ impl WaterfallApp {
         self.chrome.show_af_scope = s.show_af_scope;
         self.chrome.show_smeter = s.show_smeter;
         self.chrome.cw_simple_ui = s.cw_simple_ui;
+        self.meter_display.af_scope_view.mode = crate::app::codec::af_scope_mode_from_u8(s.af_scope_mode);
+        self.meter_display.af_scope_view.accuracy =
+            crate::app::codec::af_scope_accuracy_from_u8(s.af_scope_accuracy);
 
         self.connection.form.recent_hosts = s.recent_hosts.clone();
         self.connection.form.kiwi = s.kiwi.clone();
@@ -284,6 +287,10 @@ impl WaterfallApp {
             show_left: self.chrome.show_left,
             show_right: self.chrome.show_right,
             show_af_scope: self.chrome.show_af_scope,
+            af_scope_mode: crate::app::codec::af_scope_mode_to_u8(self.meter_display.af_scope_view.mode),
+            af_scope_accuracy: crate::app::codec::af_scope_accuracy_to_u8(
+                self.meter_display.af_scope_view.accuracy,
+            ),
             show_smeter: self.chrome.show_smeter,
             cw_simple_ui: self.chrome.cw_simple_ui,
             recent_hosts: self.connection.form.recent_hosts.clone(),
