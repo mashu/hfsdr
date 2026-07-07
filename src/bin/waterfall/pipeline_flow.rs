@@ -6,7 +6,7 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke,
     StrokeKind, Ui, Vec2,
 };
-use hfsdr::{AgcMode, ChannelFilterKind, CwChannelSettings};
+use hfsdr::{AgcMode, ChannelFilterKind, CwChannelSettings, CwDetectorMode};
 
 use crate::engine::EngineStats;
 use crate::theme::{chip_hovered, ACCENT, MUTED, OK, TRACE, WARN};
@@ -19,11 +19,15 @@ pub enum PipelineStage {
     ListenNco,
     DecimatorFir,
     ChannelFir,
+    IqApf,
+    IqWiener,
     Agc,
     Bfo,
+    Sidetone,
     Apf,
     AutoNotch,
     NoiseReduction,
+    Squelch,
     Skimmer,
     AudioOutput,
 }
@@ -36,11 +40,15 @@ impl PipelineStage {
             Self::ListenNco => "NCO / listen shift",
             Self::DecimatorFir => "Decimator anti-alias FIR",
             Self::ChannelFir => "Channel filter",
+            Self::IqApf => "IQ peak filter",
+            Self::IqWiener => "IQ Wiener NR",
             Self::Agc => "AGC",
             Self::Bfo => "BFO detector",
+            Self::Sidetone => "Sidetone envelope",
             Self::Apf => "Audio peak filter",
             Self::AutoNotch => "Auto-notch",
             Self::NoiseReduction => "Noise reduction",
+            Self::Squelch => "Squelch",
             Self::Skimmer => "Skimmer",
             Self::AudioOutput => "Audio output",
         }
@@ -57,7 +65,7 @@ impl PipelineStage {
 const NODE_W: f32 = 136.0;
 const NODE_H: f32 = 48.0;
 const CANVAS_W: f32 = 820.0;
-const CANVAS_H: f32 = 600.0;
+const CANVAS_H: f32 = 700.0;
 /// Matches `WidebandCwIngress` / `IqAudioDemod` wideband path selection.
 const LISTEN_WIDEBAND_RATE_HZ: f32 = 96_000.0;
 
@@ -74,11 +82,15 @@ enum NodeId {
     Decimator,
     Notches,
     ChannelFir,
+    IqApf,
+    IqWiener,
     Agc,
     Bfo,
+    Sidetone,
     Apf,
     AutoNotch,
     NoiseReduction,
+    Squelch,
     AudioOut,
     SpectrumFront,
     Fft,
@@ -370,6 +382,22 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             PipelineStage::ChannelFir,
         ),
         node_toggle(
+            NodeId::IqApf,
+            "IQ peak filter",
+            format!("±{:.0} Hz · {:.1}×", snap.cw.iq_apf.width_hz, snap.cw.iq_apf.gain),
+            snap.cw.iq_apf.enabled,
+            NodeKind::Process,
+            PipelineStage::IqApf,
+        ),
+        node_toggle(
+            NodeId::IqWiener,
+            "IQ Wiener NR",
+            format!("level {:.0}%", snap.cw.iq_wiener.level * 100.0),
+            snap.cw.iq_wiener.enabled,
+            NodeKind::Process,
+            PipelineStage::IqWiener,
+        ),
+        node_toggle(
             NodeId::Agc,
             "AGC",
             if snap.cw.agc.enabled {
@@ -392,10 +420,28 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
         node_toggle(
             NodeId::Bfo,
             "BFO detector",
-            format!("tone {:.0} Hz", snap.cw.bfo_hz),
+            {
+                let det = match snap.cw.detector_mode {
+                    CwDetectorMode::Product => "product",
+                    CwDetectorMode::Coherent => "coherent",
+                    CwDetectorMode::MatchedDit => "matched dit",
+                };
+                format!("{det} · {:.0} Hz BFO", snap.cw.bfo_hz)
+            },
             !snap.cw.diagnostic.bfo,
             NodeKind::Process,
             PipelineStage::Bfo,
+        ),
+        node_toggle(
+            NodeId::Sidetone,
+            "Sidetone envelope",
+            format!(
+                "{:.0}/{:.0} ms",
+                snap.cw.sidetone_envelope.rise_ms, snap.cw.sidetone_envelope.fall_ms
+            ),
+            snap.cw.sidetone_envelope.enabled,
+            NodeKind::Process,
+            PipelineStage::Sidetone,
         ),
         node_toggle(
             NodeId::Apf,
@@ -420,6 +466,14 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             snap.cw.noise_reduction.enabled,
             NodeKind::Process,
             PipelineStage::NoiseReduction,
+        ),
+        node_toggle(
+            NodeId::Squelch,
+            "Squelch",
+            format!("hang {:.0} ms", snap.cw.squelch.hang_ms),
+            snap.cw.squelch.enabled,
+            NodeKind::Process,
+            PipelineStage::Squelch,
         ),
         node_toggle(
             NodeId::AudioOut,
@@ -533,11 +587,15 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
     let listen_tail = [
         NodeId::Notches,
         NodeId::ChannelFir,
+        NodeId::IqApf,
+        NodeId::IqWiener,
         NodeId::Agc,
         NodeId::Bfo,
+        NodeId::Sidetone,
         NodeId::Apf,
         NodeId::AutoNotch,
         NodeId::NoiseReduction,
+        NodeId::Squelch,
         NodeId::AudioOut,
     ];
     let listen_head: Vec<NodeId> = if wideband_listen {
@@ -786,12 +844,16 @@ fn default_pos(id: NodeId) -> Pos2 {
         NodeId::Decimator => Pos2::new(24.0, 328.0),
         NodeId::Notches => Pos2::new(24.0, 388.0),
         NodeId::ChannelFir => Pos2::new(24.0, 448.0),
-        NodeId::Agc => Pos2::new(24.0, 508.0),
+        NodeId::IqApf => Pos2::new(24.0, 508.0),
+        NodeId::IqWiener => Pos2::new(24.0, 568.0),
+        NodeId::Agc => Pos2::new(24.0, 628.0),
         NodeId::Bfo => Pos2::new(168.0, 208.0),
-        NodeId::Apf => Pos2::new(168.0, 268.0),
-        NodeId::AutoNotch => Pos2::new(168.0, 328.0),
-        NodeId::NoiseReduction => Pos2::new(168.0, 388.0),
-        NodeId::AudioOut => Pos2::new(168.0, 460.0),
+        NodeId::Sidetone => Pos2::new(168.0, 268.0),
+        NodeId::Apf => Pos2::new(168.0, 328.0),
+        NodeId::AutoNotch => Pos2::new(168.0, 388.0),
+        NodeId::NoiseReduction => Pos2::new(168.0, 448.0),
+        NodeId::Squelch => Pos2::new(168.0, 508.0),
+        NodeId::AudioOut => Pos2::new(168.0, 568.0),
         NodeId::SpectrumFront => Pos2::new(346.0, 224.0),
         NodeId::Fft => Pos2::new(346.0, 304.0),
         NodeId::Waterfall => Pos2::new(346.0, 384.0),
@@ -1186,6 +1248,33 @@ mod tests {
     }
 
     #[test]
+    fn build_graph_links_weak_signal_stages_before_agc() {
+        let cw = CwChannelSettings::default();
+        let stats = EngineStats::default();
+        let snap = PipelineSnapshot {
+            source_label: "test",
+            streaming: true,
+            device_rate_hz: 12_000.0,
+            ingress_decim: 1,
+            cw: &cw,
+            skimmer_enabled: false,
+            audio_enabled: true,
+            rf_gain_db: 0.0,
+            stats: &stats,
+        };
+        let graph = build_graph(&snap);
+        assert!(graph.nodes.iter().any(|n| n.id == NodeId::IqApf));
+        assert!(graph.nodes.iter().any(|n| n.id == NodeId::IqWiener));
+        assert!(graph.nodes.iter().any(|n| n.id == NodeId::Squelch));
+        assert!(graph.edges.iter().any(|e| {
+            e.from.node == NodeId::ChannelFir && e.to.node == NodeId::IqApf
+        }));
+        assert!(graph.edges.iter().any(|e| {
+            e.from.node == NodeId::IqWiener && e.to.node == NodeId::Agc
+        }));
+    }
+
+    #[test]
     fn build_graph_links_source_through_ring_and_gain() {
         let cw = CwChannelSettings::default();
         let stats = EngineStats::default();
@@ -1243,11 +1332,15 @@ mod tests {
             ListenNco,
             DecimatorFir,
             ChannelFir,
+            IqApf,
+            IqWiener,
             Agc,
             Bfo,
+            Sidetone,
             Apf,
             AutoNotch,
             NoiseReduction,
+            Squelch,
             Skimmer,
             AudioOutput,
         ] {

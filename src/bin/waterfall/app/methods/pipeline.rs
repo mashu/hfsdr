@@ -18,14 +18,27 @@ impl WaterfallApp {
             PipelineStage::ChannelFir => {
                 self.radio.cw.diagnostic.channel_fir = !self.radio.cw.diagnostic.channel_fir;
             }
+            PipelineStage::IqApf => {
+                self.radio.cw.iq_apf.enabled = !self.radio.cw.iq_apf.enabled;
+            }
+            PipelineStage::IqWiener => {
+                self.radio.cw.iq_wiener.enabled = !self.radio.cw.iq_wiener.enabled;
+            }
+            PipelineStage::Agc => self.radio.cw.agc.enabled = !self.radio.cw.agc.enabled,
             PipelineStage::Bfo => {
                 self.radio.cw.diagnostic.bfo = !self.radio.cw.diagnostic.bfo;
             }
-            PipelineStage::Agc => self.radio.cw.agc.enabled = !self.radio.cw.agc.enabled,
             PipelineStage::Apf => self.radio.cw.apf.enabled = !self.radio.cw.apf.enabled,
+            PipelineStage::Sidetone => {
+                self.radio.cw.sidetone_envelope.enabled =
+                    !self.radio.cw.sidetone_envelope.enabled;
+            }
             PipelineStage::AutoNotch => self.radio.cw.auto_notch.enabled = !self.radio.cw.auto_notch.enabled,
             PipelineStage::NoiseReduction => {
                 self.radio.cw.noise_reduction.enabled = !self.radio.cw.noise_reduction.enabled;
+            }
+            PipelineStage::Squelch => {
+                self.radio.cw.squelch.enabled = !self.radio.cw.squelch.enabled;
             }
             PipelineStage::Skimmer => self.skimmer_ui.skimmer_enabled = !self.skimmer_ui.skimmer_enabled,
             PipelineStage::AudioOutput => self.audio.audio_enabled = !self.audio.audio_enabled,
@@ -36,11 +49,15 @@ impl WaterfallApp {
             PipelineStage::ListenNco => !self.radio.cw.diagnostic.listen_nco,
             PipelineStage::DecimatorFir => !self.radio.cw.diagnostic.decim_fir,
             PipelineStage::ChannelFir => !self.radio.cw.diagnostic.channel_fir,
-            PipelineStage::Bfo => !self.radio.cw.diagnostic.bfo,
+            PipelineStage::IqApf => self.radio.cw.iq_apf.enabled,
+            PipelineStage::IqWiener => self.radio.cw.iq_wiener.enabled,
             PipelineStage::Agc => self.radio.cw.agc.enabled,
+            PipelineStage::Bfo => !self.radio.cw.diagnostic.bfo,
             PipelineStage::Apf => self.radio.cw.apf.enabled,
+            PipelineStage::Sidetone => self.radio.cw.sidetone_envelope.enabled,
             PipelineStage::AutoNotch => self.radio.cw.auto_notch.enabled,
             PipelineStage::NoiseReduction => self.radio.cw.noise_reduction.enabled,
+            PipelineStage::Squelch => self.radio.cw.squelch.enabled,
             PipelineStage::Skimmer => self.skimmer_ui.skimmer_enabled,
             PipelineStage::AudioOutput => self.audio.audio_enabled,
         };
