@@ -1,43 +1,78 @@
 //! Beam-search CW decoder with a callsign-oriented bigram language model.
+//!
+//! Shares the adaptive front-end (envelope tracker, debounced keyer, dit/dah
+//! clock) with [`super::adaptive::AdaptiveCwDecoder`], but keeps several
+//! hypotheses alive when a mark duration falls near the dit/dah boundary.
+//! Each hypothesis is scored with a duration log-likelihood plus a bigram
+//! prior biased toward CQ/DE/callsign text. Beams collapse at word gaps so
+//! emitted text is always a single consistent hypothesis.
 
 use super::config::DecoderParams;
 use super::decoder::{wpm_from_dot_seconds, CwDecoder};
 use super::envelope::KeyingEnvelope;
 use super::morse::decode_elements;
+use super::timing::{Element, KeyEvent, Keyer, SpaceKind};
+use super::timing::ElementClock;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Key {
-    Down,
-    Up,
-}
+/// Longest real Morse pattern in the table is 6 elements.
+const MAX_ELEMENTS: usize = 7;
+/// |ln(duration / boundary)| below which a mark spawns both interpretations.
+const AMBIGUITY_LOG: f32 = 0.30;
+/// Log-duration sigma for the element likelihood.
+const DURATION_SIGMA: f32 = 0.40;
+/// Collapse even without a word gap once the best text grows this long.
+const MAX_PENDING_CHARS: usize = 24;
 
 #[derive(Clone, Debug)]
 struct Hypothesis {
-    dot_samples: f32,
     symbol: String,
     text: String,
     score: f32,
-    space_phase: u8,
-    emitted_any: bool,
-    ends_with_space: bool,
+    poisoned: bool,
+    last_char: Option<char>,
 }
 
 impl Hypothesis {
-    fn new(sample_rate: f32, initial_wpm: f32) -> Self {
-        let dot = (1.2 / initial_wpm.max(1.0)) * sample_rate;
+    fn new() -> Self {
         Self {
-            dot_samples: dot,
             symbol: String::new(),
             text: String::new(),
             score: 0.0,
-            space_phase: 2,
-            emitted_any: false,
-            ends_with_space: true,
+            poisoned: false,
+            last_char: None,
         }
     }
 
-    fn clamp_dot(&self, sample_rate: f32, dot: f32) -> f32 {
-        dot.clamp(0.02 * sample_rate, 0.20 * sample_rate)
+    fn push_element(&mut self, el: char, weight: f32) {
+        if self.symbol.len() >= MAX_ELEMENTS {
+            self.poisoned = true;
+        } else {
+            self.symbol.push(el);
+        }
+        self.score += weight;
+    }
+
+    fn flush_symbol(&mut self) {
+        let ch = if self.poisoned {
+            self.poisoned = false;
+            self.symbol.clear();
+            '?'
+        } else if self.symbol.is_empty() {
+            return;
+        } else {
+            let ch = decode_elements(&self.symbol).unwrap_or('?');
+            self.symbol.clear();
+            ch
+        };
+        if ch == '?' {
+            self.score -= 1.5;
+            if self.last_char == Some('?') {
+                return;
+            }
+        }
+        self.score += bigram_log(self.last_char, ch);
+        self.text.push(ch);
+        self.last_char = Some(ch);
     }
 }
 
@@ -47,15 +82,17 @@ pub struct BigramCwDecoder {
     sample_rate: f32,
     params: DecoderParams,
     envelope: KeyingEnvelope,
-    key: Key,
-    run: usize,
+    key_down: bool,
+    keyer: Keyer,
+    clock: ElementClock,
     beams: Vec<Hypothesis>,
-    emitted_len: usize,
+    /// 0 = collecting a char, 1 = char flushed, 2 = word gap handled.
+    space_flushed: u8,
 }
 
 impl Default for BigramCwDecoder {
     fn default() -> Self {
-        Self::with_params(12_000.0, DecoderParams::default())
+        Self::with_params(500.0, DecoderParams::default())
     }
 }
 
@@ -67,163 +104,132 @@ impl BigramCwDecoder {
     pub fn with_params(sample_rate: f32, params: DecoderParams) -> Self {
         let params = params.clamped();
         let sample_rate = sample_rate.max(1.0);
+        let clock = ElementClock::new(params.initial_wpm);
+        let mut keyer = Keyer::new(sample_rate);
+        keyer.set_dot_seconds(clock.dot_seconds());
         Self {
             sample_rate,
-            envelope: KeyingEnvelope::new(params.envelope),
-            key: Key::Up,
-            run: 0,
-            beams: vec![Hypothesis::new(sample_rate, params.initial_wpm)],
-            emitted_len: 0,
+            envelope: KeyingEnvelope::new(params.envelope, sample_rate),
+            key_down: false,
+            keyer,
+            clock,
+            beams: vec![Hypothesis::new()],
+            space_flushed: 2,
             params,
         }
     }
 
-    fn best_beam(&self) -> &Hypothesis {
+    fn process_sample(&mut self, x: f32, out: &mut String) {
+        let step = self.envelope.update(x);
+        self.key_down = if !step.signal_present {
+            false
+        } else if self.key_down {
+            step.env >= step.thr_low
+        } else {
+            step.env > step.thr_high
+        };
+
+        if let Some(KeyEvent::Mark(secs)) = self.keyer.step(self.key_down) {
+            self.on_mark(secs);
+        }
+
+        if self.keyer.in_space() && self.space_flushed < 2 {
+            let kind = self.clock.space_kind(self.keyer.space_seconds());
+            if kind >= SpaceKind::Char && self.space_flushed < 1 {
+                for h in &mut self.beams {
+                    h.flush_symbol();
+                }
+                self.prune();
+                self.space_flushed = 1;
+                if self.best().text.len() >= MAX_PENDING_CHARS {
+                    self.collapse(out, false);
+                }
+            }
+            if kind == SpaceKind::Word {
+                self.collapse(out, true);
+                self.space_flushed = 2;
+            }
+        }
+    }
+
+    fn on_mark(&mut self, secs: f32) {
+        let el = self.clock.classify_mark(secs);
+        self.keyer.set_dot_seconds(self.clock.dot_seconds());
+        let boundary = self.clock.mark_boundary_s().max(1e-4);
+        let lr = (secs.max(1e-4) / boundary).ln();
+        let ll = |expected: f32| -> f32 {
+            let r = (secs.max(1e-4) / expected.max(1e-4)).ln() / DURATION_SIGMA;
+            -0.5 * r * r
+        };
+        if lr.abs() < AMBIGUITY_LOG {
+            let dot_w = ll(self.clock.dot_seconds());
+            let dash_w = ll(self.clock.dash_seconds());
+            let mut next = Vec::with_capacity(self.beams.len() * 2);
+            for h in self.beams.drain(..) {
+                let mut dash = h.clone();
+                dash.push_element('-', dash_w);
+                next.push(dash);
+                let mut dot = h;
+                dot.push_element('.', dot_w);
+                next.push(dot);
+            }
+            self.beams = next;
+            self.prune();
+        } else {
+            let ch = match el {
+                Element::Dot => '.',
+                Element::Dash => '-',
+            };
+            for h in &mut self.beams {
+                h.push_element(ch, 0.0);
+            }
+        }
+        self.space_flushed = 0;
+    }
+
+    fn prune(&mut self) {
+        self.beams
+            .sort_by(|a, b| b.score.total_cmp(&a.score));
+        // Merge hypotheses that converged to identical text.
+        self.beams
+            .dedup_by(|a, b| a.text == b.text && a.symbol == b.symbol);
+        self.beams.truncate(self.params.beam_width.max(1));
+        if self.beams.is_empty() {
+            self.beams.push(Hypothesis::new());
+        }
+    }
+
+    fn best(&self) -> &Hypothesis {
         self.beams
             .iter()
             .max_by(|a, b| a.score.total_cmp(&b.score))
-            .unwrap_or(&self.beams[0])
+            .expect("at least one beam")
     }
 
-    fn drain_new_text(&mut self) -> String {
-        let best_len = self.best_beam().text.len();
-        if best_len <= self.emitted_len {
-            return String::new();
-        }
-        let delta = self.best_beam().text[self.emitted_len..].to_string();
-        self.emitted_len = best_len;
-        delta
-    }
-
-    fn process_sample(&mut self, x: f32) {
-        let step = self.envelope.update(x);
-
-        let want = if !step.signal_present {
-            Key::Up
-        } else {
-            match self.key {
-                Key::Up if step.env > step.thr_high => Key::Down,
-                Key::Down if step.env < step.thr_low => Key::Up,
-                k => k,
-            }
-        };
-
-        if want == self.key {
-            self.run += 1;
-            if self.key == Key::Up {
-                self.advance_space_all();
-            }
-            return;
-        }
-
-        if self.key == Key::Down {
-            self.end_mark_all();
-        } else {
-            for h in &mut self.beams {
-                h.space_phase = 0;
-            }
-        }
-        self.key = want;
-        self.run = 1;
-    }
-
-    fn end_mark_all(&mut self) {
-        let run = self.run as f32;
-        let mut next = Vec::new();
-        for h in self.beams.drain(..) {
-            next.extend(branch_mark(h, run, self.sample_rate));
-        }
-        self.beams = prune_beams(next, self.params.beam_width, self.sample_rate, self.params.initial_wpm);
-    }
-
-    fn advance_space_all(&mut self) {
-        let run = self.run as f32;
-        for h in &mut self.beams {
-            if h.space_phase < 1 && run >= 2.0 * h.dot_samples {
-                Self::flush_symbol(h);
-                h.space_phase = 1;
-            }
-            if h.space_phase < 2 && run >= 5.0 * h.dot_samples {
-                if h.emitted_any && !h.ends_with_space {
-                    h.text.push(' ');
-                    h.ends_with_space = true;
-                    h.score += 0.1;
-                }
-                h.space_phase = 2;
-            }
-        }
-    }
-
-    fn flush_symbol(h: &mut Hypothesis) {
-        if h.symbol.is_empty() {
-            return;
-        }
-        let ch = decode_elements(&h.symbol).unwrap_or('?');
-        let prev = h.text.chars().last();
-        h.score += bigram_log(prev, ch);
-        if ch == '?' {
-            h.score -= 1.5;
-        }
-        h.text.push(ch);
-        h.symbol.clear();
-        h.emitted_any = true;
-        h.ends_with_space = false;
-    }
-
-    fn best_dot(&self) -> f32 {
-        self.beams
+    /// Emit the best hypothesis and restart the beam from it.
+    fn collapse(&mut self, out: &mut String, word_gap: bool) {
+        let best_idx = self
+            .beams
             .iter()
-            .map(|h| h.dot_samples)
-            .sum::<f32>()
-            / self.beams.len().max(1) as f32
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.score.total_cmp(&b.score))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let mut best = self.beams.swap_remove(best_idx);
+        if !best.text.is_empty() {
+            out.push_str(&best.text);
+            if word_gap {
+                out.push(' ');
+            }
+            best.text.clear();
+        }
+        best.score = 0.0;
+        self.beams.clear();
+        self.beams.push(best);
     }
 }
 
-fn branch_mark(h: Hypothesis, run: f32, sample_rate: f32) -> Vec<Hypothesis> {
-    if run < 0.35 * h.dot_samples {
-        return vec![h];
-    }
-
-    let mut out = Vec::new();
-    let dit_hi = 2.2 * h.dot_samples;
-    let dah_lo = 1.8 * h.dot_samples;
-
-    let mut push_branch = |el: char, weight: f32, dot_scale: f32| {
-        let mut b = h.clone();
-        b.symbol.push(el);
-        b.dot_samples = b.clamp_dot(sample_rate, 0.85 * b.dot_samples + 0.15 * dot_scale);
-        b.score += weight;
-        out.push(b);
-    };
-
-    if run < dah_lo {
-        push_branch('.', 0.2, run);
-    } else if run > dit_hi {
-        push_branch('-', 0.2, run / 3.0);
-    } else {
-        push_branch('.', 0.0, run);
-        let mut dah = h;
-        dah.symbol.push('-');
-        dah.dot_samples = dah.clamp_dot(sample_rate, 0.85 * dah.dot_samples + 0.15 * (run / 3.0));
-        out.push(dah);
-    }
-    out
-}
-
-fn prune_beams(
-    mut beams: Vec<Hypothesis>,
-    beam_width: usize,
-    sample_rate: f32,
-    initial_wpm: f32,
-) -> Vec<Hypothesis> {
-    beams.sort_by(|a, b| b.score.total_cmp(&a.score));
-    beams.truncate(beam_width.max(1));
-    if beams.is_empty() {
-        beams.push(Hypothesis::new(sample_rate, initial_wpm));
-    }
-    beams
-}
-
+/// Log-prior for character bigrams, biased toward CQ/DE and callsign shapes.
 fn bigram_log(prev: Option<char>, ch: char) -> f32 {
     let p = prev.unwrap_or(' ');
     let c = ch.to_ascii_uppercase();
@@ -237,6 +243,7 @@ fn bigram_log(prev: Option<char>, ch: char) -> f32 {
         ('E', ' ') => 0.4,
         (' ', 'W') | (' ', 'K') | (' ', 'N') | (' ', 'V') | (' ', 'G') => 0.9,
         ('W', d) | ('K', d) | ('N', d) | ('V', d) | ('G', d) if d.is_ascii_digit() => 1.0,
+        (a, b) if a.is_ascii_digit() && b.is_ascii_digit() => 0.6,
         (a, b) if a.is_ascii_digit() && b.is_ascii_alphabetic() => 0.7,
         (a, b) if a.is_ascii_alphabetic() && b.is_ascii_digit() => 0.6,
         (a, b) if a.is_ascii_alphabetic() && b.is_ascii_alphabetic() => 0.15,
@@ -249,20 +256,20 @@ impl CwDecoder for BigramCwDecoder {
     fn push_audio(&mut self, audio: &[f32], sample_rate: f32) -> String {
         if (sample_rate - self.sample_rate).abs() > 1.0 && sample_rate > 0.0 {
             self.sample_rate = sample_rate;
-            for h in &mut self.beams {
-                h.dot_samples = h.clamp_dot(sample_rate, h.dot_samples);
-            }
+            self.envelope = KeyingEnvelope::new(self.params.envelope, sample_rate);
+            self.keyer = Keyer::new(sample_rate);
+            self.keyer.set_dot_seconds(self.clock.dot_seconds());
+            self.key_down = false;
         }
         let mut out = String::new();
         for &x in audio {
-            self.process_sample(x);
-            out.push_str(&self.drain_new_text());
+            self.process_sample(x, &mut out);
         }
         out
     }
 
     fn wpm(&self) -> f32 {
-        wpm_from_dot_seconds(self.best_dot() / self.sample_rate)
+        wpm_from_dot_seconds(self.clock.dot_seconds())
     }
 
     fn reset(&mut self) {
@@ -324,6 +331,17 @@ mod tests {
         let mut dec = BigramCwDecoder::new(sr);
         let out = dec.push_audio(&audio, sr);
         assert!(out.contains("CQ"), "got {out:?}");
-        assert!(out.contains('W'), "got {out:?}");
+        assert!(out.contains("W1AW"), "got {out:?}");
+    }
+
+    #[test]
+    fn decodes_across_speed_range() {
+        for wpm in [12.0, 18.0, 25.0, 32.0, 40.0] {
+            let sr = 8_000.0;
+            let audio = keyed_tone("CQ CQ DE OH2BH OH2BH K", wpm, sr, 600.0);
+            let mut dec = BigramCwDecoder::new(sr);
+            let out = dec.push_audio(&audio, sr);
+            assert!(out.contains("OH2BH"), "failed at {wpm} wpm: got {out:?}");
+        }
     }
 }
