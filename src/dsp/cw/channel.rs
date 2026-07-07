@@ -395,6 +395,7 @@ impl CwChannel {
         self.work_decim = decimated;
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_audio_chain(
         &mut self,
         decimated: &[Complex32],

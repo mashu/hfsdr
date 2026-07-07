@@ -412,7 +412,7 @@ impl Engine {
             };
             let is_kiwi = self.conn.as_ref().is_some_and(|c| c.is_kiwi);
             let throttle = skimmer_throttle(is_kiwi, skimmer_iq_rate);
-            if self.pump_serial % throttle == 0 {
+            if self.pump_serial.is_multiple_of(throttle) {
                 let mut cfg = params.skimmer.clone();
                 cfg.source_label = "rx".to_string();
                 self.skimmer.set_config(cfg);
@@ -459,7 +459,7 @@ impl Engine {
         self.last_pipeline = sample.clone();
         self.pipeline_avg.blend(sample, 0.15);
         if slow && self.last_perf_log.elapsed() >= Duration::from_secs(5) {
-            log::warn(&pipeline_perf_summary("slow link", &self.pipeline_avg));
+            log::warn(pipeline_perf_summary("slow link", &self.pipeline_avg));
             self.last_perf_log = Instant::now();
         }
     }

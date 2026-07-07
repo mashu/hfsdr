@@ -161,6 +161,7 @@ impl CwDetector {
         mixed.re
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         sample: Complex32,

@@ -194,6 +194,7 @@ fn fill_under_curve(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_curve(
     painter: &Painter,
     inner: Rect,

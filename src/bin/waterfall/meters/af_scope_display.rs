@@ -21,14 +21,14 @@ pub fn envelope_columns(samples: &[f32], cols: usize) -> Vec<f32> {
     }
     let mut out = vec![0.0f32; cols];
     let n = samples.len();
-    for col in 0..cols {
+    for (col, cell) in out.iter_mut().enumerate().take(cols) {
         let i0 = col * n / cols;
         let i1 = ((col + 1) * n / cols).max(i0 + 1).min(n);
         let mut peak = 0.0f32;
         for &s in &samples[i0..i1] {
             peak = peak.max(s.abs());
         }
-        out[col] = peak;
+        *cell = peak;
     }
     out
 }

@@ -8,6 +8,7 @@ use crate::theme::{GRID, TRACE, TRACE_GLOW};
 use super::smooth::{self, spatial_smooth};
 
 /// Update smoothed display trace from latest FFT row (in-place).
+#[allow(clippy::too_many_arguments)]
 pub fn update_trace(
     latest: &[f32],
     smoothed: &mut Vec<f32>,

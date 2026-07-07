@@ -300,7 +300,7 @@ impl AirspyHf {
         }
         #[cfg(airspyhf_extended_api)]
         {
-            return check("airspyhf_set_frontend_options", sys::airspyhf_set_frontend_options(self.dev, flags));
+            check("airspyhf_set_frontend_options", sys::airspyhf_set_frontend_options(self.dev, flags))
         }
         #[cfg(not(airspyhf_extended_api))]
         {
@@ -319,7 +319,7 @@ impl AirspyHf {
         {
             let mut flags = 0u32;
             let rc = sys::airspyhf_get_frontend_options(self.dev, &mut flags);
-            return check("airspyhf_get_frontend_options", rc).map(|_| flags);
+            check("airspyhf_get_frontend_options", rc).map(|_| flags)
         }
         #[cfg(not(airspyhf_extended_api))]
         Err(extended_api_unsupported("frontend options"))
@@ -335,7 +335,7 @@ impl AirspyHf {
         }
         #[cfg(airspyhf_extended_api)]
         {
-            return check("airspyhf_set_bias_tee", sys::airspyhf_set_bias_tee(self.dev, on as i8));
+            check("airspyhf_set_bias_tee", sys::airspyhf_set_bias_tee(self.dev, on as i8))
         }
         #[cfg(not(airspyhf_extended_api))]
         {

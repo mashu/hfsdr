@@ -17,7 +17,7 @@ impl Engine {
 pub(super) fn handle_command(&mut self, cmd: EngineCommand) {
         match cmd {
             EngineCommand::Connect(req) => {
-                self.request = Some(req.clone());
+                self.request = Some((*req).clone());
                 self.reconnect_attempt = 0;
                 self.retry_at = None;
                 self.start_connect(&req);

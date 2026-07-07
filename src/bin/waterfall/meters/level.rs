@@ -41,7 +41,7 @@ pub fn classify_level(
     if peak > 0.88 || agc_saturated || rf_hot {
         return AudioLevelHint::TooHot;
     }
-    if peak >= 0.10 && peak <= 0.70 && !agc_starved && !agc_saturated {
+    if (0.10..=0.70).contains(&peak) && !agc_starved && !agc_saturated {
         return AudioLevelHint::SweetSpot;
     }
     if peak > 0.70 {
@@ -97,8 +97,11 @@ pub(crate) const SMETER_DBM_MIN: f32 = -127.0;
 pub(crate) const SMETER_DBM_MAX: f32 = -33.0;
 
 pub(crate) fn dbm_to_needle_t(dbm: f32) -> f32 {
-    if !dbm.is_finite() {
+    if dbm.is_nan() {
         return 0.0;
+    }
+    if dbm.is_infinite() {
+        return if dbm.is_sign_positive() { 1.0 } else { 0.0 };
     }
     ((dbm - SMETER_DBM_MIN) / (SMETER_DBM_MAX - SMETER_DBM_MIN)).clamp(0.0, 1.0)
 }

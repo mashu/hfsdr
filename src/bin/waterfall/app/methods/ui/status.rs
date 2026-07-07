@@ -177,6 +177,7 @@ impl WaterfallApp {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn status_telemetry(
         &mut self,
         ui: &mut egui::Ui,

@@ -194,7 +194,7 @@ impl Default for EngineShared {
 /// Discrete actions from the UI to the engine.
 #[derive(Clone, Debug)]
 pub enum EngineCommand {
-    Connect(ConnectRequest),
+    Connect(Box<ConnectRequest>),
     Disconnect,
     Tune(f64),
     SetRfAgc(bool),

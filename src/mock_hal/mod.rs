@@ -32,6 +32,12 @@ pub fn enabled() -> bool {
 /// RAII toggle for mock HAL in unit tests.
 pub struct MockGuard;
 
+impl Default for MockGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockGuard {
     pub fn new() -> Self {
         enable();

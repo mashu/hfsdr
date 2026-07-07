@@ -84,7 +84,7 @@ fn fft_window_sample(k: f32, m: f32, kind: FftWindowKind, kaiser_beta: f32) -> f
         FftWindowKind::Flattop => {
             const A0: f32 = 0.21557895;
             const A1: f32 = 0.41663158;
-            const A2: f32 = 0.277263158;
+            const A2: f32 = 0.277_263_16;
             const A3: f32 = 0.083578947;
             const A4: f32 = 0.006947368;
             A0 - A1 * phase.cos()

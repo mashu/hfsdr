@@ -105,7 +105,7 @@ impl WaterfallApp {
         self.remember_host(&req);
         self.apply_default_view_zoom();
         log::info(format!("connecting to {}", req.label()));
-        self.engine.send(EngineCommand::Connect(req));
+        self.engine.send(EngineCommand::Connect(Box::new(req)));
     }
 
     pub(crate) fn cancel_connection(&mut self) {

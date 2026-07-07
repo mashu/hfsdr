@@ -464,6 +464,7 @@ fn paint_filter_curve(painter: &Painter, rect: Rect, live: &DiagnosticCurves, vi
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_dashed_curve_line(
     painter: &Painter,
     inner: Rect,
@@ -523,6 +524,7 @@ fn draw_dashed_curve_line(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_curve_line(
     painter: &Painter,
     inner: Rect,

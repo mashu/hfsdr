@@ -7,6 +7,8 @@ use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, R
 #[cfg(feature = "soapy")]
 use crate::source::SoapySettings;
 
+type KiwiDirectoryFetch = Receiver<Result<(Option<GeoLocation>, Vec<KiwiReceiver>), String>>;
+
 #[derive(Debug)]
 pub struct ConnectionFormState {
     pub pending_connect: Option<ConnectRequest>,
@@ -44,7 +46,7 @@ pub struct ConnectionFormState {
 pub struct KiwiDirectoryState {
     pub geo: Option<GeoLocation>,
     pub nearby: Vec<KiwiReceiver>,
-    pub fetch_rx: Option<Receiver<Result<(Option<GeoLocation>, Vec<KiwiReceiver>), String>>>,
+    pub fetch_rx: Option<KiwiDirectoryFetch>,
     pub error: Option<String>,
 }
 

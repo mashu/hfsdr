@@ -3,8 +3,8 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, Stroke,
-    StrokeKind, Ui, Vec2,
+    self, Align, Align2, Button, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText,
+    Sense, Stroke, StrokeKind, Ui, Vec2,
 };
 
 use crate::theme::{chip_hovered, ACCENT, MUTED, PANEL, SURFACE, WARN};
@@ -313,6 +313,9 @@ pub fn band_preset_grid(
     rx_center_hz: f64,
     bands: &[(&str, f64)],
 ) -> Option<usize> {
+    const CHIP_W: f32 = 36.0;
+    const CHIP_H: f32 = 24.0;
+
     let mut picked = None;
     ui.push_id(id, |ui| {
         Frame::new()
@@ -326,39 +329,62 @@ pub fn band_preset_grid(
                     ui.spacing_mut().item_spacing = Vec2::new(2.0, 2.0);
                     for (i, (label, center_hz)) in bands.iter().enumerate() {
                         let selected = (rx_center_hz - center_hz).abs() < 0.5;
-                        let resp = ui.add(
-                            Button::new(
-                                RichText::new(*label)
-                                    .small()
-                                    .color(if selected { ACCENT } else { MUTED }),
+                        let (rect, resp) =
+                            ui.allocate_exact_size(Vec2::new(CHIP_W, CHIP_H), Sense::click());
+                        let hovered = chip_hovered(ui, rect, &resp);
+
+                        let fill = if selected {
+                            Color32::from_rgba_unmultiplied(
+                                ACCENT.r(),
+                                ACCENT.g(),
+                                ACCENT.b(),
+                                40,
                             )
-                            .fill(if selected {
-                                Color32::from_rgba_unmultiplied(
-                                    ACCENT.r(),
-                                    ACCENT.g(),
-                                    ACCENT.b(),
-                                    40,
-                                )
-                            } else {
-                                Color32::TRANSPARENT
-                            })
-                            // Transparent 1px stroke keeps cell size stable when selection changes.
-                            .stroke(if selected {
-                                Stroke::new(
-                                    1.0,
-                                    Color32::from_rgba_unmultiplied(
-                                        ACCENT.r(),
-                                        ACCENT.g(),
-                                        ACCENT.b(),
-                                        120,
-                                    ),
-                                )
-                            } else {
-                                Stroke::new(1.0, Color32::TRANSPARENT)
-                            })
-                            .corner_radius(CornerRadius::same(5))
-                            .min_size(Vec2::new(0.0, 24.0)),
+                        } else if hovered {
+                            Color32::from_rgba_unmultiplied(
+                                ACCENT.r(),
+                                ACCENT.g(),
+                                ACCENT.b(),
+                                18,
+                            )
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        // Inside stroke keeps cell size stable across hover/selection.
+                        let border = if selected {
+                            Color32::from_rgba_unmultiplied(
+                                ACCENT.r(),
+                                ACCENT.g(),
+                                ACCENT.b(),
+                                120,
+                            )
+                        } else if hovered {
+                            Color32::from_rgba_unmultiplied(
+                                ACCENT.r(),
+                                ACCENT.g(),
+                                ACCENT.b(),
+                                70,
+                            )
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+
+                        let painter = ui.painter_at(rect);
+                        painter.rect(
+                            rect,
+                            CornerRadius::same(5),
+                            fill,
+                            Stroke::new(1.0, border),
+                            StrokeKind::Inside,
                         );
+                        painter.text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            *label,
+                            FontId::proportional(11.0),
+                            if selected { ACCENT } else { MUTED },
+                        );
+
                         let mhz = center_hz / 1_000_000.0;
                         let clicked = resp.clicked();
                         resp.on_hover_text(format!("{mhz:.3} MHz · CW segment"));

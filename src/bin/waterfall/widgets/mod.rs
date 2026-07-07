@@ -74,6 +74,7 @@ impl PanadapterPlot {
     }
 
     /// Scope + frequency axis + waterfall with one shared frequency map and one interaction target.
+    #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
         ui: &mut Ui,
