@@ -162,6 +162,7 @@ fn test_config() -> SkimmerConfig {
         min_snr_db: 10.0,
         min_decode_snr_db: 8.0,
         max_channels: 12,
+        focus_span_hz: 0.0, // whole band — focus behaviour has its own test
         ..SkimmerConfig::default()
     }
 }
@@ -276,6 +277,31 @@ fn decodes_crowded_band_without_false_calls() {
         assert!(
             expected.contains(&c.as_str()),
             "false callsign {c} spotted; all spots {calls:?}"
+        );
+    }
+}
+
+#[test]
+fn decode_focus_limits_channels_to_tuned_span() {
+    let stations = vec![
+        Station::new("CQ CQ DE W1AW W1AW K", 24.0, 400.0, 1.0),
+        Station::new("CQ CQ DE OH2BH OH2BH K", 24.0, 2_500.0, 1.0),
+    ];
+    let iq = synth_iq(&stations, 40.0, 0.2, 9);
+    let mut config = test_config();
+    config.focus_span_hz = 3_000.0; // ±1.5 kHz around the tuned frequency
+    config.focus_center_hz = 0.0;
+    let skimmer = run_skimmer(&iq, config, SAMPLE_SCP);
+    let calls = spotted_calls(&skimmer);
+    assert!(calls.iter().any(|c| c == "W1AW"), "in-focus station missed: {calls:?}");
+    assert!(
+        !calls.iter().any(|c| c == "OH2BH"),
+        "out-of-focus station decoded: {calls:?}"
+    );
+    for (off, _, _) in skimmer.debug_channels() {
+        assert!(
+            off.abs() <= 1_600.0,
+            "channel outside decode focus at {off} Hz"
         );
     }
 }

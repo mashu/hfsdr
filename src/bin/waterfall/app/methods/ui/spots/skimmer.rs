@@ -50,6 +50,17 @@ impl WaterfallApp {
         });
 
         popup_section(ui, "Peak finder", Some("How signals are split into channels"), |ui| {
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer_ui.skimmer.focus_span_hz,
+                0.0..=12_000.0,
+                "Decode span Hz (0 = all)",
+            );
+            ui.label(
+                egui::RichText::new("Span follows the tuned frequency — bounds CPU use")
+                    .small()
+                    .color(MUTED),
+            );
             scroll_slider_f32(ui, &mut self.skimmer_ui.skimmer.bucket_hz, 20.0..=200.0, "Bucket Hz");
             let mut sep = self.skimmer_ui.skimmer.min_separation_bins as i32;
             ui.horizontal(|ui| {

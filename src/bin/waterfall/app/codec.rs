@@ -239,6 +239,8 @@ pub(crate) fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
         decoder: skimmer_decoder_from_u8(s.skimmer_decoder),
         lpf_cutoff_hz: migrate_default(s.skimmer_lpf_cutoff_hz, 120.0, 50.0),
         decode_gate_ms: s.skimmer_decode_gate_ms,
+        focus_span_hz: s.skimmer_focus_span_hz,
+        focus_center_hz: 0.0,
         decoder_params: DecoderParams {
             initial_wpm: s.skimmer_initial_wpm,
             beam_width: s.skimmer_beam_width.max(1),

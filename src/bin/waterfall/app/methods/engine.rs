@@ -108,6 +108,8 @@ impl WaterfallApp {
     /// Scale skimmer decoder count with available bandwidth.
     pub(crate) fn effective_skimmer(&self) -> SkimmerConfig {
         let mut cfg = self.skimmer_ui.skimmer.clone().clamped();
+        // Decode focus follows the tuned (listen) frequency.
+        cfg.focus_center_hz = self.listen_offset_hz() as f32;
         if matches!(self.engine_ui.conn_state, ConnState::Streaming) {
             cfg.source_label = self.connection_alias();
         }
