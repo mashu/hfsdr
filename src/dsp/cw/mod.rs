@@ -30,6 +30,7 @@ mod noiseblanker;
 mod noisereduction;
 mod notch;
 mod sidetone_envelope;
+mod smoothing;
 mod squelch;
 mod wiener_nr;
 mod settings;

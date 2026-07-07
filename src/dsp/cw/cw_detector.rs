@@ -31,13 +31,10 @@ pub struct CwDetector {
     coherent_pos: usize,
     coherent_sum: Complex32,
     coherent_len: usize,
-    last_coherent_len: usize,
     dit_power_buf: Vec<f32>,
     dit_power_sum: f32,
     dit_pos: usize,
     dit_len: usize,
-    last_dit_len: usize,
-    last_wpm: f32,
 }
 
 impl Default for CwDetector {
@@ -55,13 +52,10 @@ impl CwDetector {
             coherent_pos: 0,
             coherent_sum: Complex32::new(0.0, 0.0),
             coherent_len: 1,
-            last_coherent_len: 0,
             dit_power_buf: Vec::new(),
             dit_power_sum: 0.0,
             dit_pos: 0,
             dit_len: 1,
-            last_dit_len: 0,
-            last_wpm: 0.0,
         }
     }
 
@@ -91,12 +85,24 @@ impl CwDetector {
                 .unwrap_or_else(|| dit_samples(wpm, sample_rate))
                 .max(1),
         };
-        if coherent_len != self.last_coherent_len {
-            self.coherent_buf = vec![Complex32::new(0.0, 0.0); coherent_len.max(1)];
-            self.coherent_pos = 0;
-            self.coherent_sum = Complex32::new(0.0, 0.0);
-            self.coherent_len = coherent_len.max(1);
-            self.last_coherent_len = coherent_len;
+        let coherent_len = coherent_len.max(1);
+        if coherent_len != self.coherent_len {
+            // Preserve ring contents: the WPM estimate refines continuously, so
+            // the window resizes by a sample or two — zeroing the state here
+            // collapses the integrator and dents the audio on every change.
+            resize_ring_oldest_first(
+                &mut self.coherent_buf,
+                &mut self.coherent_pos,
+                coherent_len,
+                Complex32::new(0.0, 0.0),
+            );
+            self.coherent_sum = self
+                .coherent_buf
+                .iter()
+                .fold(Complex32::new(0.0, 0.0), |acc, z| {
+                    Complex32::new(acc.re + z.re, acc.im + z.im)
+                });
+            self.coherent_len = coherent_len;
         }
         let dit_len = if mode == CwDetectorMode::MatchedDit {
             matched_dit_samples
@@ -105,14 +111,10 @@ impl CwDetector {
         } else {
             1
         };
-        if dit_len != self.last_dit_len || (mode == CwDetectorMode::MatchedDit && wpm != self.last_wpm)
-        {
-            self.dit_power_buf = vec![0.0; dit_len.max(1)];
-            self.dit_power_sum = 0.0;
-            self.dit_pos = 0;
-            self.dit_len = dit_len.max(1);
-            self.last_dit_len = dit_len;
-            self.last_wpm = wpm;
+        if dit_len != self.dit_len {
+            resize_ring_oldest_first(&mut self.dit_power_buf, &mut self.dit_pos, dit_len, 0.0);
+            self.dit_power_sum = self.dit_power_buf.iter().sum();
+            self.dit_len = dit_len;
         }
         self.mode = mode;
     }
@@ -181,6 +183,29 @@ impl CwDetector {
     }
 }
 
+/// Resize a ring buffer, keeping the newest samples and leaving `pos` pointing
+/// at the oldest slot (the next write target). Grows pad with `fill` as the
+/// oldest entries; shrinks drop the oldest entries.
+fn resize_ring_oldest_first<T: Copy>(buf: &mut Vec<T>, pos: &mut usize, new_len: usize, fill: T) {
+    let old_len = buf.len();
+    if old_len == new_len {
+        return;
+    }
+    if old_len == 0 {
+        buf.resize(new_len, fill);
+        *pos = 0;
+        return;
+    }
+    // Reorder in place to oldest..newest, then trim/pad at the front.
+    buf.rotate_left(*pos % old_len);
+    if new_len < old_len {
+        buf.drain(..old_len - new_len);
+    } else {
+        buf.splice(0..0, std::iter::repeat_n(fill, new_len - old_len));
+    }
+    *pos = 0;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +233,42 @@ mod tests {
             peak = peak.max(out.abs());
         }
         assert!(peak > 0.5, "peak={peak}");
+    }
+
+    #[test]
+    fn matched_dit_window_resize_preserves_envelope() {
+        // The WPM estimate jitters the dit window by a sample or two; the
+        // matched-envelope integrator must carry its state across resizes
+        // instead of collapsing to zero (which dents the audio).
+        let rate = 12_000.0;
+        let mut det = CwDetector::new();
+        let carrier = Complex32::new(0.2, 0.0);
+        for _ in 0..600 {
+            let _ = det.process(
+                carrier,
+                650.0,
+                rate,
+                CwSideband::Lower,
+                CwDetectorMode::MatchedDit,
+                20.0,
+                Some(90),
+            );
+        }
+        // One sample after the window grows, the envelope must still be hot.
+        let _ = det.process(
+            carrier,
+            650.0,
+            rate,
+            CwSideband::Lower,
+            CwDetectorMode::MatchedDit,
+            20.0,
+            Some(92),
+        );
+        let env = (det.dit_power_sum / det.dit_len as f32).sqrt();
+        assert!(
+            env > 0.15,
+            "matched envelope collapsed on window resize: {env}"
+        );
     }
 
     #[test]

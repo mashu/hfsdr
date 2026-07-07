@@ -167,7 +167,15 @@ impl Engine {
         }
         let wideband = is_wideband_rate(device_rate);
         let batch = Arc::new(std::mem::take(&mut self.drain));
-        self.drain = Vec::with_capacity(self.max_drain());
+        // `self.drain` is left empty here; the batch Vec is reclaimed from the
+        // Arc at the end of the pump instead of allocating a fresh one.
+
+        // Samples skipped by the demod tail cap (full_demod off) — the audio
+        // stream jumps in time, so the seam gets a short fade-in below.
+        let demod_skipped = batch.len()
+            - self
+                .demod_input(batch.as_slice(), device_rate, cw.full_demod)
+                .len();
 
         let t_demod = Instant::now();
         if !dual_ring && ingress_decim > 1 {
@@ -189,18 +197,23 @@ impl Engine {
             }
         }
 
-        let use_ingress_worker = !dual_ring
+        let want_ingress_worker = !dual_ring
             && wideband
             && ingress_decim > 1
             && self.spectrum_decim <= 1
-            && self.ingress_worker.as_ref().is_some_and(|w| {
+            && self.ingress_worker.is_some();
+        let use_ingress_worker = want_ingress_worker && {
+            let reuse = std::mem::take(&mut self.drain_decim);
+            self.ingress_worker.as_ref().is_some_and(|w| {
                 w.start(
                     Arc::clone(&batch),
                     device_rate,
                     ingress_decim,
                     cw.decim_filter,
+                    reuse,
                 )
-            });
+            })
+        };
 
         if use_ingress_worker {
             self.demod.process(
@@ -300,6 +313,11 @@ impl Engine {
             metrics.spectrum_front_ns = t_spec_front.elapsed().as_nanos() as u64;
         }
 
+        if demod_skipped > 0 && !self.audio_scratch.is_empty() {
+            // The demod input jumped forward in time — soften the seam.
+            let audio_rate = hfsdr::audio_sample_rate(device_rate, params.cw.decimation);
+            fade_in_seam(&mut self.audio_scratch, audio_rate);
+        }
         if params.audio_enabled {
             if self.audio.is_none() {
                 self.audio_device_open(0);
@@ -410,6 +428,12 @@ impl Engine {
         }
         if perf {
             metrics.skimmer_submit_ns = t_skimmer.elapsed().as_nanos() as u64;
+        }
+
+        // Reclaim the drained batch buffer for the next pump (no per-pump alloc).
+        if let Ok(mut v) = Arc::try_unwrap(batch) {
+            v.clear();
+            self.drain = v;
         }
 
         let snr = self.demod.snr_db();
@@ -695,6 +719,16 @@ impl Engine {
 fn effective_rf_gain_db(rf_gain_db: f32, conn: Option<&Connection>) -> f32 {
     let extra = conn.map(Connection::kiwi_software_man_gain_db).unwrap_or(0.0);
     (rf_gain_db + extra).clamp(-80.0, 80.0)
+}
+
+/// Half-cosine fade-in (~4 ms) over the start of `audio` — masks the click
+/// when the demod input skipped ahead in time (full_demod off on catch-up).
+fn fade_in_seam(audio: &mut [f32], audio_rate: f32) {
+    let n = ((audio_rate * 0.004) as usize).clamp(1, audio.len());
+    for (k, sample) in audio[..n].iter_mut().enumerate() {
+        let t = k as f32 / n as f32;
+        *sample *= 0.5 - 0.5 * (std::f32::consts::PI * t).cos();
+    }
 }
 
 /// Scale IQ in place by a software RF gain in dB (no-op at 0 dB).
