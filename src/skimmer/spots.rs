@@ -80,7 +80,22 @@ impl SpotStore {
         wpm: f32,
         source: &str,
     ) {
-        let key = self.key(frequency_hz);
+        // The same call decoded on an adjacent channel (keying sidebands can
+        // spawn decoders ~100 Hz apart) is one station, not two spots.
+        let mut key = self.key(frequency_hz);
+        if let Some(ref call) = callsign {
+            if let Some(&near_key) = self
+                .spots
+                .iter()
+                .find(|(_, s)| {
+                    s.callsign.as_deref() == Some(call.as_str())
+                        && (s.frequency_hz - frequency_hz).abs() <= 300.0
+                })
+                .map(|(k, _)| k)
+            {
+                key = near_key;
+            }
+        }
         let now = Instant::now();
         let entry = self.spots.entry(key).or_insert_with(|| Spot {
             frequency_hz,
@@ -93,7 +108,10 @@ impl SpotStore {
             sources: Vec::new(),
             callsign_rank: 0,
         });
-        entry.frequency_hz = frequency_hz;
+        // The strongest observation owns the frequency estimate.
+        if snr_db >= entry.snr_db || (entry.frequency_hz - frequency_hz).abs() < 1.0 {
+            entry.frequency_hz = frequency_hz;
+        }
         entry.kind = kind;
         entry.snr_db = snr_db;
         entry.wpm = wpm;
@@ -146,6 +164,17 @@ impl SpotStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_call_on_adjacent_channels_merges() {
+        let mut store = SpotStore::new();
+        store.observe(14_019_000.0, Some("F6FJI".into()), 100, SpotKind::Answering, 33.0, 22.0, "rx");
+        store.observe(14_019_100.0, Some("F6FJI".into()), 100, SpotKind::Answering, 9.0, 22.0, "rx");
+        assert_eq!(store.len(), 1, "sideband channel duplicated the spot");
+        let spot = &store.sorted(SpotSort::SnrDesc)[0];
+        // The weaker observation must not steal the frequency.
+        assert!((spot.frequency_hz - 14_019_000.0).abs() < 1.0);
+    }
 
     #[test]
     fn merges_nearby_frequencies() {
