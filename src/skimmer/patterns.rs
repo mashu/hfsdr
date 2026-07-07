@@ -153,23 +153,38 @@ pub fn analyze(text: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option
 
     let calling_cq = is_calling_cq(&upper, &tokens);
 
-    // SCP full-text scan first — catches callsigns glued to decoder garbage.
-    let mut callsign = scp.and_then(|db| db.find_in_text(&upper, require_scp));
-
-    if callsign.is_none() && calling_cq {
+    // Candidates in priority order: SCP full-text scan (catches callsigns
+    // glued to decoder garbage), tokens right after CQ/QRZ, then any token.
+    let mut candidates: Vec<String> = Vec::new();
+    let push_candidate = |c: Option<String>, candidates: &mut Vec<String>| {
+        if let Some(c) = c {
+            if !candidates.contains(&c) {
+                candidates.push(c);
+            }
+        }
+    };
+    push_candidate(
+        scp.and_then(|db| db.find_in_text(&upper, require_scp)),
+        &mut candidates,
+    );
+    if calling_cq {
         if let Some(pos) = tokens.iter().position(|&t| t == "CQ" || t == "QRZ") {
-            callsign = tokens
-                .iter()
-                .skip(pos + 1)
-                .filter(|t| !STOPWORDS.contains(t))
-                .find_map(|t| validate_token(t, scp, require_scp));
+            for t in tokens.iter().skip(pos + 1).filter(|t| !STOPWORDS.contains(t)) {
+                push_candidate(validate_token(t, scp, require_scp), &mut candidates);
+            }
         }
     }
-    if callsign.is_none() {
-        callsign = tokens
-            .iter()
-            .find_map(|t| validate_token(t, scp, require_scp));
+    for t in &tokens {
+        push_candidate(validate_token(t, scp, require_scp), &mut candidates);
     }
+
+    // Whatever the validation source, demand corroboration: a repeat of the
+    // call, or CQ/QRZ/DE context. A lone callsign-shaped token in garbled
+    // text is the main source of false spots.
+    let callsign = candidates.into_iter().find(|call| {
+        callsign_confirmed(&upper, &tokens, call, scp, calling_cq)
+            || (calling_cq && call_exact_occurrences(&upper, call) >= 1)
+    });
 
     let kind = if calling_cq {
         SpotKind::CallingCq
@@ -178,21 +193,6 @@ pub fn analyze(text: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option
     } else {
         SpotKind::Heard
     };
-
-    if let Some(ref call) = callsign {
-        let confirmed = callsign_confirmed(&upper, &tokens, call, scp, calling_cq);
-        let relaxed_cq = calling_cq
-            && upper
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .collect::<String>()
-                .contains("CQCQ")
-            && call_exact_occurrences(&upper, call) >= 1;
-        let cq_single = calling_cq && call_exact_occurrences(&upper, call) >= 1;
-        if require_scp && !confirmed && !relaxed_cq && !cq_single {
-            callsign = None;
-        }
-    }
 
     if callsign.is_none() && !calling_cq {
         return None;

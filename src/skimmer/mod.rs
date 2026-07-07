@@ -11,6 +11,7 @@ pub mod patterns;
 pub mod peaks;
 pub mod scp;
 pub mod spots;
+pub mod timing;
 
 pub use adaptive::AdaptiveCwDecoder;
 pub use bigram::BigramCwDecoder;
