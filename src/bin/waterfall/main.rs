@@ -31,6 +31,7 @@ mod settings;
 mod skimmer;
 mod source;
 mod spot_filter;
+mod status_icons;
 mod status_widgets;
 mod theme;
 mod widgets;

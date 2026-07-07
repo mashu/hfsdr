@@ -82,7 +82,7 @@ pub fn bottom_panel_frame() -> Frame {
 pub fn status_panel_frame() -> Frame {
     Frame::new()
         .fill(PANEL)
-        .inner_margin(eframe::egui::Margin::symmetric(10, 6))
+        .inner_margin(eframe::egui::Margin::symmetric(8, 4))
         .stroke(Stroke::new(1.0, Color32::from_rgb(38, 46, 62)))
         .corner_radius(CornerRadius {
             nw: 0,
@@ -90,35 +90,6 @@ pub fn status_panel_frame() -> Frame {
             sw: 8,
             se: 8,
         })
-}
-
-/// Compact panel visibility toggle for the status bar.
-pub fn panel_toggle(ui: &mut Ui, on: &mut bool, label: &str, tooltip: &str) -> bool {
-    let accent = if *on { ACCENT } else { MUTED };
-    let bg = if *on {
-        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 34)
-    } else {
-        Color32::from_rgb(30, 36, 48)
-    };
-    let border = Color32::from_rgba_unmultiplied(
-        accent.r(),
-        accent.g(),
-        accent.b(),
-        if *on { 150 } else { 70 },
-    );
-    let resp = ui.add(
-        Button::new(RichText::new(label).small().color(accent))
-            .fill(bg)
-            .stroke(Stroke::new(1.0, border))
-            .min_size(Vec2::new(34.0, 20.0)),
-    );
-    let mut changed = false;
-    if resp.clicked() {
-        *on = !*on;
-        changed = true;
-    }
-    resp.on_hover_text(tooltip);
-    changed
 }
 
 pub fn section_frame() -> eframe::egui::Frame {

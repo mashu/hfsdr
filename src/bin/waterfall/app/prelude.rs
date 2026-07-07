@@ -65,7 +65,7 @@ pub(crate) use crate::spot_filter::{
 };
 pub(crate) use crate::theme::{
     apply, attach_rich_tooltip, band_lock_toggle, clickable_badge, collapsible_section,
-    panel_toggle, section_card, section_frame, section_heading, section_heading_with_tip, section_hint,
+    section_card, section_frame, section_heading, section_heading_with_tip, section_hint,
     side_panel_frame, stat_row, stage_toggle, status_panel_frame, bottom_panel_frame, toggle, ACCENT, MUTED, OK, WARN,
 };
 pub(crate) use crate::widgets::{
