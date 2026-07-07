@@ -22,11 +22,6 @@ pub enum StatusIcon {
     Engine,
     Filters,
     Envelope,
-    Iq,
-    #[allow(dead_code)]
-    Record,
-    #[allow(dead_code)]
-    Play,
 }
 
 const TOGGLE_SIZE: Vec2 = Vec2::new(24.0, 22.0);
@@ -120,9 +115,6 @@ fn paint_icon(painter: &Painter, rect: Rect, icon: StatusIcon, color: Color32) {
         StatusIcon::Engine => draw_engine(painter, inner, stroke),
         StatusIcon::Filters => draw_filters(painter, inner, stroke),
         StatusIcon::Envelope => draw_envelope(painter, inner, stroke),
-        StatusIcon::Iq => draw_iq_label(painter, inner, color),
-        StatusIcon::Record => draw_record(painter, inner, stroke, color),
-        StatusIcon::Play => draw_play(painter, inner, color),
     }
 }
 
@@ -306,34 +298,6 @@ fn draw_envelope(painter: &Painter, r: Rect, stroke: Stroke) {
     for pair in pts.windows(2) {
         painter.line_segment([pair[0], pair[1]], stroke);
     }
-}
-
-fn draw_iq_label(painter: &Painter, r: Rect, color: Color32) {
-    painter.text(
-        r.center(),
-        Align2::CENTER_CENTER,
-        "IQ",
-        FontId::monospace(9.0),
-        color,
-    );
-}
-
-fn draw_record(painter: &Painter, r: Rect, stroke: Stroke, fill: Color32) {
-    let c = r.center();
-    let rad = r.width().min(r.height()) * 0.32;
-    painter.circle_stroke(c, rad, stroke);
-    painter.circle_filled(c, rad * 0.55, fill);
-}
-
-fn draw_play(painter: &Painter, r: Rect, color: Color32) {
-    let c = r.center();
-    let s = r.width().min(r.height()) * 0.35;
-    let pts = [
-        Pos2::new(c.x - s * 0.4, c.y - s),
-        Pos2::new(c.x + s * 0.7, c.y),
-        Pos2::new(c.x - s * 0.4, c.y + s),
-    ];
-    painter.add(egui::Shape::convex_polygon(pts.to_vec(), color, Stroke::NONE));
 }
 
 /// Width reserved for the right-hand icon toolbar (icons + separators + help/fullscreen).

@@ -21,9 +21,6 @@ pub const PASSBAND_STEP_HZ: f32 = 25.0;
 /// Default sinc cutoff as a fraction of GUI passband width (Hz).
 pub const DEFAULT_PASSBAND_CUTOFF_FRAC: f32 = 0.34;
 
-/// Legacy alias — prefer [`DEFAULT_PASSBAND_CUTOFF_FRAC`].
-pub const PASSBAND_CUTOFF_FRAC: f32 = DEFAULT_PASSBAND_CUTOFF_FRAC;
-
 /// GUI range for adjustable passband cutoff fraction.
 pub const MIN_PASSBAND_CUTOFF_FRAC: f32 = 0.20;
 pub const MAX_PASSBAND_CUTOFF_FRAC: f32 = 0.50;

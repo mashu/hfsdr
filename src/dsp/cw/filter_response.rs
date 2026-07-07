@@ -7,8 +7,7 @@ use std::f32::consts::TAU;
 
 use super::super::biquad::Biquad;
 use super::filter_plan::{
-    clamp_passband_hz, passband_cutoff_hz, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_PASSBAND_CUTOFF_FRAC,
-    CHANNEL_PASSBAND_MAX_HZ,
+    clamp_passband_hz, passband_cutoff_hz, DEFAULT_CHANNEL_PASSBAND_HZ, CHANNEL_PASSBAND_MAX_HZ,
 };
 use super::fir::design_lowpass_with;
 use super::iir_channel::iir_2pole_lowpass_q;
@@ -521,6 +520,7 @@ mod tests {
 
     #[test]
     fn gui_edge_wider_than_fir_cutoff() {
+        use super::filter_plan::DEFAULT_PASSBAND_CUTOFF_FRAC;
         let pb = 200.0;
         assert!(gui_passband_edge_hz(pb) > fir_cutoff_hz(pb, DEFAULT_PASSBAND_CUTOFF_FRAC));
     }
