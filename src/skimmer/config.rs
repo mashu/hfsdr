@@ -24,8 +24,8 @@ pub struct EnvelopeSettings {
 impl Default for EnvelopeSettings {
     fn default() -> Self {
         Self {
-            thr_low: 0.55,
-            thr_high: 0.72,
+            thr_low: 0.38,
+            thr_high: 0.55,
             min_span_fraction: 0.10,
         }
     }
@@ -88,8 +88,8 @@ pub struct SkimmerConfig {
     pub source_label: String,
     pub require_scp: bool,
     pub decoder: SkimmerDecoderKind,
+    /// Single-sided channel filter cutoff (Hz) — half the keying passband.
     pub lpf_cutoff_hz: f32,
-    pub target_audio_rate_hz: f32,
     /// Sustained keyed energy required before Morse decode (ms).
     pub decode_gate_ms: f32,
     pub decoder_params: DecoderParams,
@@ -108,8 +108,7 @@ impl Default for SkimmerConfig {
             source_label: "rx".to_string(),
             require_scp: true,
             decoder: SkimmerDecoderKind::Bigram,
-            lpf_cutoff_hz: 100.0,
-            target_audio_rate_hz: 12_000.0,
+            lpf_cutoff_hz: 50.0,
             decode_gate_ms: 80.0,
             decoder_params: DecoderParams::default(),
         }
@@ -125,8 +124,7 @@ impl SkimmerConfig {
         self.max_channels = self.max_channels.max(1);
         self.channel_timeout_secs = self.channel_timeout_secs.clamp(1.0, 120.0);
         self.spot_store_max_age_secs = self.spot_store_max_age_secs.max(0.0);
-        self.lpf_cutoff_hz = self.lpf_cutoff_hz.clamp(40.0, 800.0);
-        self.target_audio_rate_hz = self.target_audio_rate_hz.clamp(4_000.0, 48_000.0);
+        self.lpf_cutoff_hz = self.lpf_cutoff_hz.clamp(25.0, 250.0);
         self.decode_gate_ms = self.decode_gate_ms.clamp(20.0, 500.0);
         self.decoder_params = self.decoder_params.clamped();
         self
@@ -148,7 +146,6 @@ impl SkimmerConfig {
     pub fn channel_dsp_changed(&self, other: &Self) -> bool {
         self.decoder != other.decoder
             || (self.lpf_cutoff_hz - other.lpf_cutoff_hz).abs() > f32::EPSILON
-            || (self.target_audio_rate_hz - other.target_audio_rate_hz).abs() > f32::EPSILON
             || (self.decode_gate_ms - other.decode_gate_ms).abs() > f32::EPSILON
             || (self.min_decode_snr_db - other.min_decode_snr_db).abs() > f32::EPSILON
             || self.decoder_params != other.decoder_params
@@ -177,11 +174,13 @@ mod tests {
 
     #[test]
     fn clamped_enforces_min_channels_and_decode_snr_floor() {
-        let mut cfg = SkimmerConfig::default();
-        cfg.max_channels = 0;
-        cfg.min_snr_db = 20.0;
-        cfg.min_decode_snr_db = 5.0;
-        let cfg = cfg.clamped();
+        let cfg = SkimmerConfig {
+            max_channels: 0,
+            min_snr_db: 20.0,
+            min_decode_snr_db: 5.0,
+            ..SkimmerConfig::default()
+        }
+        .clamped();
         assert!(cfg.max_channels >= 1);
         assert!(cfg.min_decode_snr_db >= cfg.min_snr_db);
     }

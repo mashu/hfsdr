@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-use crate::dsp::{design_gaussian_lowpass, FirFilter, IqRotator};
+use crate::dsp::{design_gaussian_lowpass, DecimFilterKind, Decimator, FirFilter, IqRotator};
 use crate::source::Complex32;
 
 use super::adaptive::AdaptiveCwDecoder;
@@ -21,36 +21,15 @@ use super::peaks::{
 use super::scp::MasterScp;
 use super::spots::{SpotKind, SpotStore};
 
-/// Gaussian FIR channel filter for skimmer isolation (replaces 2-pole IIR).
-struct ChannelFilter {
-    fir: FirFilter,
-    last_rate: f32,
-    last_cutoff: f32,
-}
-
-impl ChannelFilter {
-    fn new(sample_rate: f32, cutoff_hz: f32) -> Self {
-        Self {
-            fir: design_gaussian_lowpass(sample_rate, cutoff_hz * 2.0),
-            last_rate: sample_rate,
-            last_cutoff: cutoff_hz,
-        }
-    }
-
-    fn sync(&mut self, sample_rate: f32, cutoff_hz: f32) {
-        if (sample_rate - self.last_rate).abs() > 1.0
-            || (cutoff_hz - self.last_cutoff).abs() > 1.0
-        {
-            self.fir = design_gaussian_lowpass(sample_rate, cutoff_hz * 2.0);
-            self.last_rate = sample_rate;
-            self.last_cutoff = cutoff_hz;
-        }
-    }
-
-    fn process(&mut self, sample: Complex32) -> Complex32 {
-        self.fir.process_complex(sample)
-    }
-}
+/// Intermediate complex rate after anti-aliased decimation.
+const MID_RATE_TARGET_HZ: f32 = 2_000.0;
+/// Envelope rate the Morse decoders run at.
+const ENV_RATE_TARGET_HZ: f32 = 500.0;
+/// Slow AFC pull range — recenters the narrow filter on the exact carrier
+/// (spectrum peak bins can be tens of Hz coarse on wideband inputs).
+const AFC_MAX_DEV_HZ: f32 = 30.0;
+/// Fraction of the measured residual applied per processed block.
+const AFC_GAIN: f32 = 0.2;
 
 enum ChannelDecoder {
     Adaptive(AdaptiveCwDecoder),
@@ -86,16 +65,22 @@ impl ChannelDecoder {
 
 struct DecoderChannel {
     offset_hz: f32,
+    /// Fine frequency correction from the AFC discriminator.
+    afc_hz: f32,
+    afc_prev: Complex32,
     rotator: IqRotator,
-    decim_factor: usize,
-    decim_counter: usize,
-    filter: ChannelFilter,
-    lpf_cutoff_hz: f32,
-    audio_rate: f32,
+    decim: Decimator,
+    mid_rate: f32,
+    fir: FirFilter,
+    fir_cutoff_hz: f32,
+    env_decim: usize,
+    env_acc: f32,
+    env_count: usize,
+    env_rate: f32,
+    env_buf: Vec<f32>,
     gate_env: KeyingEnvelope,
     gate: DecodeGate,
     decoder: ChannelDecoder,
-    audio: Vec<f32>,
     text: String,
     last_seen: Instant,
     snr_db: f32,
@@ -104,21 +89,29 @@ struct DecoderChannel {
 
 impl DecoderChannel {
     fn new(offset_hz: f32, iq_rate: f32, snr_db: f32, config: &SkimmerConfig) -> Self {
-        let target = config.target_audio_rate_hz.max(1_000.0);
-        let decim_factor = (iq_rate / target).round().clamp(1.0, 256.0) as usize;
-        let audio_rate = iq_rate / decim_factor as f32;
+        let iq_rate = iq_rate.max(1.0);
+        let d1 = (iq_rate / MID_RATE_TARGET_HZ).round().clamp(1.0, 256.0) as usize;
+        let mid_rate = iq_rate / d1 as f32;
+        let cutoff = channel_cutoff_hz(config.lpf_cutoff_hz, mid_rate);
+        let env_decim = (mid_rate / ENV_RATE_TARGET_HZ).round().max(1.0) as usize;
+        let env_rate = mid_rate / env_decim as f32;
         Self {
             offset_hz,
+            afc_hz: 0.0,
+            afc_prev: Complex32 { re: 0.0, im: 0.0 },
             rotator: IqRotator::new(false),
-            decim_factor,
-            decim_counter: 0,
-            filter: ChannelFilter::new(audio_rate, config.lpf_cutoff_hz),
-            lpf_cutoff_hz: config.lpf_cutoff_hz,
-            audio_rate,
-            gate_env: KeyingEnvelope::new(config.decoder_params.envelope),
-            gate: DecodeGate::new(audio_rate, config.decode_gate_ms),
-            decoder: ChannelDecoder::new(config.decoder, audio_rate, config.decoder_params),
-            audio: Vec::with_capacity(4096),
+            decim: Decimator::with_factor(iq_rate, d1, DecimFilterKind::LinearFir),
+            mid_rate,
+            fir: design_gaussian_lowpass(mid_rate, cutoff * 2.0),
+            fir_cutoff_hz: cutoff,
+            env_decim,
+            env_acc: 0.0,
+            env_count: 0,
+            env_rate,
+            env_buf: Vec::with_capacity(512),
+            gate_env: KeyingEnvelope::new(config.decoder_params.envelope, env_rate),
+            gate: DecodeGate::new(env_rate, config.decode_gate_ms),
+            decoder: ChannelDecoder::new(config.decoder, env_rate, config.decoder_params),
             text: String::new(),
             last_seen: Instant::now(),
             snr_db,
@@ -140,48 +133,76 @@ impl DecoderChannel {
         poll.is_multiple_of(4)
     }
 
+    fn sync_filter(&mut self, lpf_cutoff_hz: f32) {
+        let cutoff = channel_cutoff_hz(lpf_cutoff_hz, self.mid_rate);
+        if (cutoff - self.fir_cutoff_hz).abs() > 1.0 {
+            self.fir = design_gaussian_lowpass(self.mid_rate, cutoff * 2.0);
+            self.fir_cutoff_hz = cutoff;
+        }
+    }
+
     fn process(&mut self, iq: &[Complex32], iq_rate: f32, lpf_cutoff_hz: f32) -> String {
         if self.snr_db < self.min_decode_snr_db {
             self.gate.reset();
             return String::new();
         }
-        self.filter.sync(self.audio_rate, lpf_cutoff_hz);
-        self.lpf_cutoff_hz = lpf_cutoff_hz;
-        self.audio.clear();
-        let est_audio = iq.len() / self.decim_factor.max(1) + 1;
-        if self.audio.capacity() < est_audio {
-            self.audio.reserve(est_audio);
-        }
-        let offset = self.offset_hz;
-        let decim_factor = self.decim_factor;
-        let mut decim_counter = self.decim_counter;
-        self.rotator.sync_step(offset, iq_rate);
+        self.sync_filter(lpf_cutoff_hz);
+        self.env_buf.clear();
+        self.rotator
+            .sync_step(self.offset_hz + self.afc_hz, iq_rate);
+        let mut afc_prev = self.afc_prev;
+        let mut afc_acc = 0.0f64;
+        let mut afc_weight = 0.0f64;
         for &s in iq {
             let shifted = self.rotator.mix_sample(s);
-            decim_counter += 1;
-            if decim_counter >= decim_factor {
-                decim_counter = 0;
-                let filtered = self.filter.process(shifted);
-                self.audio.push(filtered.norm());
+            if let Some(mid) = self.decim.push(shifted, false) {
+                let z = self.fir.process_complex(mid);
+                // Magnitude-weighted frequency discriminator for the AFC.
+                let cross_re = z.re * afc_prev.re + z.im * afc_prev.im;
+                let cross_im = z.im * afc_prev.re - z.re * afc_prev.im;
+                let w = (cross_re * cross_re + cross_im * cross_im).sqrt();
+                if w > 0.0 {
+                    afc_acc += (cross_im.atan2(cross_re) * w) as f64;
+                    afc_weight += w as f64;
+                }
+                afc_prev = z;
+                self.env_acc += z.norm();
+                self.env_count += 1;
+                if self.env_count >= self.env_decim {
+                    self.env_buf.push(self.env_acc / self.env_decim as f32);
+                    self.env_acc = 0.0;
+                    self.env_count = 0;
+                }
             }
         }
-        self.decim_counter = decim_counter;
-        if self.audio.is_empty() {
+        self.afc_prev = afc_prev;
+        if afc_weight > 1e-12 {
+            let rad_per_sample = (afc_acc / afc_weight) as f32;
+            let residual_hz = rad_per_sample / std::f32::consts::TAU * self.mid_rate;
+            self.afc_hz =
+                (self.afc_hz + AFC_GAIN * residual_hz).clamp(-AFC_MAX_DEV_HZ, AFC_MAX_DEV_HZ);
+        }
+        if self.env_buf.is_empty() {
             return String::new();
         }
         self.last_seen = Instant::now();
-        let mut gated = false;
-        for &mag in &self.audio {
+        let mut armed = false;
+        for &mag in &self.env_buf {
             let step = self.gate_env.update(mag);
             if self.gate.feed(&step) {
-                gated = true;
+                armed = true;
             }
         }
-        if !gated || !self.gate.is_armed() {
+        if !armed {
             return String::new();
         }
-        self.decoder.push_audio(&self.audio, self.audio_rate)
+        self.decoder.push_audio(&self.env_buf, self.env_rate)
     }
+}
+
+/// Clamp the configured single-sided cutoff to what the mid rate supports.
+fn channel_cutoff_hz(lpf_cutoff_hz: f32, mid_rate: f32) -> f32 {
+    lpf_cutoff_hz.clamp(25.0, (0.35 * mid_rate).max(25.0))
 }
 
 /// Peak-driven bank of CW decoders feeding a spot store.
@@ -267,7 +288,8 @@ impl Skimmer {
         }
     }
 
-    #[cfg(test)]
+    /// Inject an SCP database directly (tests and capture replay).
+    #[doc(hidden)]
     pub fn replace_scp(&mut self, scp: MasterScp) {
         self.scp = scp;
     }

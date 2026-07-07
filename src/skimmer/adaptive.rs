@@ -1,19 +1,19 @@
 //! Adaptive-WPM envelope CW decoder.
 //!
-//! A sample-by-sample state machine: rectify the tone into an envelope, threshold
-//! it with an adaptive noise/peak tracker, time the mark/space runs, and classify
-//! them against a continuously-updated dot length.
+//! Pipeline per sample: adaptive Schmitt threshold over the tracked envelope
+//! ([`KeyingEnvelope`]), debounced run-length extraction ([`Keyer`] — bridges
+//! QSB dropouts, drops noise blips), then two-cluster dit/dah classification
+//! ([`ElementClock`]). Characters flush as soon as the inter-character gap is
+//! confirmed, so decode latency is one character.
 
 use super::config::DecoderParams;
 use super::decoder::{wpm_from_dot_seconds, CwDecoder};
 use super::envelope::KeyingEnvelope;
 use super::morse::decode_elements;
+use super::timing::{ElementClock, KeyEvent, Keyer, SpaceKind};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Key {
-    Down,
-    Up,
-}
+/// Longest real Morse pattern in the table is 6 elements.
+const MAX_ELEMENTS: usize = 7;
 
 /// Envelope/threshold CW decoder with adaptive speed tracking.
 #[derive(Clone, Debug)]
@@ -21,18 +21,21 @@ pub struct AdaptiveCwDecoder {
     sample_rate: f32,
     params: DecoderParams,
     envelope: KeyingEnvelope,
-    key: Key,
-    run: usize,
-    dot_samples: f32,
+    key_down: bool,
+    keyer: Keyer,
+    clock: ElementClock,
     symbol: String,
-    space_phase: u8,
-    ends_with_space: bool,
+    poisoned: bool,
+    /// 0 = collecting a char, 1 = char flushed, 2 = word gap emitted.
+    space_flushed: u8,
     emitted_any: bool,
+    ends_with_space: bool,
+    last_char: Option<char>,
 }
 
 impl Default for AdaptiveCwDecoder {
     fn default() -> Self {
-        Self::with_params(12_000.0, DecoderParams::default())
+        Self::with_params(500.0, DecoderParams::default())
     }
 }
 
@@ -44,104 +47,93 @@ impl AdaptiveCwDecoder {
     pub fn with_params(sample_rate: f32, params: DecoderParams) -> Self {
         let params = params.clamped();
         let sample_rate = sample_rate.max(1.0);
-        let dot_samples = dot_length(sample_rate, params.initial_wpm);
+        let clock = ElementClock::new(params.initial_wpm);
+        let mut keyer = Keyer::new(sample_rate);
+        keyer.set_dot_seconds(clock.dot_seconds());
         Self {
             sample_rate,
-            params,
-            envelope: KeyingEnvelope::new(params.envelope),
-            key: Key::Up,
-            run: 0,
-            dot_samples,
+            envelope: KeyingEnvelope::new(params.envelope, sample_rate),
+            key_down: false,
+            keyer,
+            clock,
             symbol: String::new(),
-            space_phase: 2,
-            ends_with_space: true,
+            poisoned: false,
+            space_flushed: 2,
             emitted_any: false,
+            ends_with_space: true,
+            last_char: None,
+            params,
         }
-    }
-
-    fn clamp_dot(&self, dot: f32) -> f32 {
-        dot.clamp(0.02 * self.sample_rate, 0.20 * self.sample_rate)
     }
 
     fn process_sample(&mut self, x: f32, out: &mut String) {
         let step = self.envelope.update(x);
-
-        let want = if !step.signal_present {
-            Key::Up
+        self.key_down = if !step.signal_present {
+            false
+        } else if self.key_down {
+            step.env >= step.thr_low
         } else {
-            match self.key {
-                Key::Up if step.env > step.thr_high => Key::Down,
-                Key::Down if step.env < step.thr_low => Key::Up,
-                k => k,
-            }
+            step.env > step.thr_high
         };
 
-        if want == self.key {
-            self.run += 1;
-            if self.key == Key::Up {
-                self.advance_space(out);
+        if let Some(KeyEvent::Mark(secs)) = self.keyer.step(self.key_down) {
+            let el = self.clock.classify_mark(secs);
+            self.keyer.set_dot_seconds(self.clock.dot_seconds());
+            if self.symbol.len() >= MAX_ELEMENTS {
+                self.poisoned = true;
+            } else {
+                self.symbol.push(el.as_char());
             }
-            return;
+            self.space_flushed = 0;
         }
 
-        match self.key {
-            Key::Down => self.end_mark(),
-            Key::Up => self.space_phase = 0,
-        }
-        self.key = want;
-        self.run = 1;
-    }
-
-    fn end_mark(&mut self) {
-        let run = self.run as f32;
-        if run < 0.35 * self.dot_samples {
-            return;
-        }
-        if run < 2.0 * self.dot_samples {
-            self.symbol.push('.');
-            self.dot_samples = self.clamp_dot(0.8 * self.dot_samples + 0.2 * run);
-        } else {
-            self.symbol.push('-');
-            self.dot_samples = self.clamp_dot(0.8 * self.dot_samples + 0.2 * (run / 3.0));
-        }
-    }
-
-    fn advance_space(&mut self, out: &mut String) {
-        let run = self.run as f32;
-        if self.space_phase < 1 && run >= 2.0 * self.dot_samples {
-            self.flush_symbol(out);
-            self.space_phase = 1;
-        }
-        if self.space_phase < 2 && run >= 5.0 * self.dot_samples {
-            if self.emitted_any && !self.ends_with_space {
-                out.push(' ');
-                self.ends_with_space = true;
+        if self.keyer.in_space() && self.space_flushed < 2 {
+            let kind = self.clock.space_kind(self.keyer.space_seconds());
+            if kind >= SpaceKind::Char && self.space_flushed < 1 {
+                self.flush_symbol(out);
+                self.space_flushed = 1;
             }
-            self.space_phase = 2;
+            if kind == SpaceKind::Word {
+                if self.emitted_any && !self.ends_with_space {
+                    out.push(' ');
+                    self.ends_with_space = true;
+                }
+                self.space_flushed = 2;
+            }
         }
     }
 
     fn flush_symbol(&mut self, out: &mut String) {
-        if self.symbol.is_empty() {
+        let ch = if self.poisoned {
+            self.poisoned = false;
+            self.symbol.clear();
+            '?'
+        } else if self.symbol.is_empty() {
+            return;
+        } else {
+            let ch = decode_elements(&self.symbol).unwrap_or('?');
+            self.symbol.clear();
+            ch
+        };
+        // Runs of '?' carry no information — keep one as a garble marker.
+        if ch == '?' && self.last_char == Some('?') {
             return;
         }
-        let ch = decode_elements(&self.symbol).unwrap_or('?');
         out.push(ch);
-        self.symbol.clear();
+        self.last_char = Some(ch);
         self.emitted_any = true;
         self.ends_with_space = false;
     }
-}
-
-fn dot_length(sample_rate: f32, wpm: f32) -> f32 {
-    (1.2 / wpm.max(1.0)) * sample_rate
 }
 
 impl CwDecoder for AdaptiveCwDecoder {
     fn push_audio(&mut self, audio: &[f32], sample_rate: f32) -> String {
         if (sample_rate - self.sample_rate).abs() > 1.0 && sample_rate > 0.0 {
             self.sample_rate = sample_rate;
-            self.dot_samples = self.clamp_dot(self.dot_samples);
+            self.envelope = KeyingEnvelope::new(self.params.envelope, sample_rate);
+            self.keyer = Keyer::new(sample_rate);
+            self.keyer.set_dot_seconds(self.clock.dot_seconds());
+            self.key_down = false;
         }
         let mut out = String::new();
         for &x in audio {
@@ -151,7 +143,7 @@ impl CwDecoder for AdaptiveCwDecoder {
     }
 
     fn wpm(&self) -> f32 {
-        wpm_from_dot_seconds(self.dot_samples / self.sample_rate)
+        wpm_from_dot_seconds(self.clock.dot_seconds())
     }
 
     fn reset(&mut self) {
@@ -219,12 +211,23 @@ mod tests {
     }
 
     #[test]
+    fn decodes_across_speed_range() {
+        for wpm in [10.0, 15.0, 20.0, 28.0, 36.0, 45.0] {
+            let out = decode("CQ CQ DE W1AW W1AW K", wpm);
+            assert!(
+                out.contains("W1AW"),
+                "failed at {wpm} wpm: got {out:?}"
+            );
+        }
+    }
+
+    #[test]
     fn tracks_speed_roughly() {
         let sr = 8_000.0;
         let audio = keyed_tone("PARIS PARIS", 30.0, sr, 600.0);
         let mut dec = AdaptiveCwDecoder::new(sr);
         dec.push_audio(&audio, sr);
         let wpm = dec.wpm();
-        assert!((20.0..40.0).contains(&wpm), "wpm estimate off: {wpm}");
+        assert!((24.0..38.0).contains(&wpm), "wpm estimate off: {wpm}");
     }
 }

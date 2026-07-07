@@ -60,8 +60,7 @@ operation; every tunable has a UI control and persists in settings.
 | **Algorithm** | **Bigram beam** (quality) or **Adaptive** (CPU) |
 | **Peak min SNR / separation** | Which FFT peaks spawn decoders |
 | **Max decoders** | Parallel channel cap |
-| **Channel LPF Hz** | Per-channel isolation before decode |
-| **Target audio rate** | Decimation target before decoder |
+| **Channel LPF Hz** | Per-channel filter half-width before decode |
 | **Initial WPM** | Dot-length seed before speed adapts |
 | **Beam width** | Bigram hypothesis count (Bigram only) |
 | **Key thr low / high** | Envelope key-down thresholds |

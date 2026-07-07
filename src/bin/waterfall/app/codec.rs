@@ -215,6 +215,15 @@ pub(crate) fn skimmer_decoder_from_u8(v: u8) -> SkimmerDecoderKind {
     }
 }
 
+/// Map a persisted value equal to a pre-rework default onto the new default.
+fn migrate_default(v: f32, old_default: f32, new_default: f32) -> f32 {
+    if (v - old_default).abs() < 1e-3 {
+        new_default
+    } else {
+        v
+    }
+}
+
 pub(crate) fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
     use hfsdr::{DecoderParams, EnvelopeSettings};
     SkimmerConfig {
@@ -228,15 +237,14 @@ pub(crate) fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
         source_label: "rx".to_string(),
         require_scp: s.scp_require,
         decoder: skimmer_decoder_from_u8(s.skimmer_decoder),
-        lpf_cutoff_hz: s.skimmer_lpf_cutoff_hz,
-        target_audio_rate_hz: s.skimmer_target_audio_rate_hz,
+        lpf_cutoff_hz: migrate_default(s.skimmer_lpf_cutoff_hz, 120.0, 50.0),
         decode_gate_ms: s.skimmer_decode_gate_ms,
         decoder_params: DecoderParams {
             initial_wpm: s.skimmer_initial_wpm,
             beam_width: s.skimmer_beam_width.max(1),
             envelope: EnvelopeSettings {
-                thr_low: s.skimmer_thr_low,
-                thr_high: s.skimmer_thr_high,
+                thr_low: migrate_default(s.skimmer_thr_low, 0.55, 0.38),
+                thr_high: migrate_default(s.skimmer_thr_high, 0.72, 0.55),
                 min_span_fraction: EnvelopeSettings::default().min_span_fraction,
             },
             max_text_chars: s.skimmer_max_decode_chars.max(16),

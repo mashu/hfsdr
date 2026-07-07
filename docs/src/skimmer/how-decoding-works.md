@@ -5,9 +5,21 @@ pattern matching turns characters into **spots**.
 
 ---
 
+## Channel front end
+
+Each detected peak gets its own narrowband receive chain: the IQ stream is
+mixed to baseband at the peak frequency, decimated with anti-alias filtering
+to ~2 kHz, run through a narrow Gaussian filter (the *Channel LPF*), and
+rectified into a ~500 Hz envelope stream. A slow AFC keeps the narrow filter
+centred on the carrier even when the spectrum peak bin is coarse. Narrow
+filtering plus the low envelope rate is what lets weak stations decode and
+keeps neighbours out of the channel.
+
+---
+
 ## Envelope and timing
 
-After the cheap channel filter, the signal is **amplitude vs time**:
+After the channel filter, the signal is **amplitude vs time**:
 
 ```text
   envelope
@@ -18,7 +30,15 @@ After the cheap channel filter, the signal is **amplitude vs time**:
       dot   dash   gap
 ```
 
-The decoder estimates **dot length** (speed in WPM) and classifies gaps:
+Key-down decisions come from an adaptive Schmitt trigger: the tracker follows
+the noise floor and key-down level separately (fast enough to ride through
+QSB fades) and places hysteresis thresholds between them. A debouncing keyer
+then bridges brief dropouts inside a dash and drops noise blips inside a gap
+before any timing is measured.
+
+The decoder estimates **dot length** with a two-cluster fit over recent mark
+durations — it locks onto a sender's speed within a few characters, from
+about 8 to 60 WPM — and classifies gaps:
 
 | Gap length (approx.) | Meaning |
 |----------------------|---------|
@@ -26,7 +46,7 @@ The decoder estimates **dot length** (speed in WPM) and classifies gaps:
 | ~3 dots | between letters |
 | ~7 dots | between words |
 
-Speed adapts over time — operators change keying; decoders track roughly.
+Speed adapts continuously — operators change keying; the cluster fit follows.
 
 ---
 
@@ -67,7 +87,9 @@ Once text accumulates (`CQ DL1ABC DE DL1ABC` fragments, etc.):
 | `DE` + valid call | **Answering** |
 | Valid call only | **Heard** |
 
-Without validation, random Morse becomes false callsigns.
+A callsign is only accepted with corroboration — a repeat of the call, or
+CQ/QRZ/DE context — whether or not MASTER.SCP is loaded. Without that,
+random Morse fragments become false callsigns.
 
 ---
 

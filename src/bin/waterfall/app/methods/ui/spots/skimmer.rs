@@ -76,14 +76,8 @@ impl WaterfallApp {
             scroll_slider_f32(
                 ui,
                 &mut self.skimmer_ui.skimmer.lpf_cutoff_hz,
-                40.0..=800.0,
+                25.0..=250.0,
                 "Channel LPF Hz",
-            );
-            scroll_slider_log_f32(
-                ui,
-                &mut self.skimmer_ui.skimmer.target_audio_rate_hz,
-                4_000.0..=48_000.0,
-                "Target audio rate",
             );
         });
 
