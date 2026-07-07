@@ -59,7 +59,7 @@ fn default_kiwi_man_gain() -> u8 {
 }
 
 const fn default_st_envelope_enabled() -> bool {
-    true
+    false
 }
 
 const fn default_st_rise_ms() -> f32 {
@@ -68,6 +68,14 @@ const fn default_st_rise_ms() -> f32 {
 
 const fn default_st_fall_ms() -> f32 {
     4.0
+}
+
+const fn default_st_floor_gain() -> f32 {
+    0.3
+}
+
+const fn default_squelch_ramp_ms() -> f32 {
+    3.0
 }
 
 const fn default_agc_lookahead_ms() -> f32 {
@@ -144,6 +152,8 @@ pub struct AppSettings {
     pub squelch_close_thr: f32,
     #[serde(default)]
     pub squelch_hang_ms: f32,
+    #[serde(default = "default_squelch_ramp_ms")]
+    pub squelch_ramp_ms: f32,
     #[serde(default)]
     pub economy_filter: bool,
     #[serde(default = "default_full_demod")]
@@ -177,6 +187,9 @@ pub struct AppSettings {
     pub st_fall_ms: f32,
     #[serde(default)]
     pub st_envelope_shape: u8,
+    /// Unkeyed sidetone-envelope gain (0 = full gate, 0.9 = barely dims).
+    #[serde(default = "default_st_floor_gain")]
+    pub st_floor_gain: f32,
     pub notches: Vec<NotchData>,
 
     // Receiver controls.
@@ -318,6 +331,7 @@ impl Default for AppSettings {
             squelch_open_thr: 0.02,
             squelch_close_thr: 0.01,
             squelch_hang_ms: 120.0,
+            squelch_ramp_ms: default_squelch_ramp_ms(),
             economy_filter: false,
             full_demod: true,
             decimation: 0,
@@ -342,6 +356,7 @@ impl Default for AppSettings {
             st_envelope_enabled: default_st_envelope_enabled(),
             st_rise_ms: default_st_rise_ms(),
             st_fall_ms: default_st_fall_ms(),
+            st_floor_gain: default_st_floor_gain(),
             st_envelope_shape: 0,
             notches: vec![NotchData::default(); 4],
             rit_hz: 0.0,

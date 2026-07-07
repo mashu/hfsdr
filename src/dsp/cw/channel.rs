@@ -14,6 +14,8 @@
 //! block passes; the post-decimation chain (notches → FIR → AGC → BFO → polish) stays
 //! sample-sequential because IIR/AGC state must be ordered.
 
+use std::collections::VecDeque;
+
 use super::super::freq_offset::ListenOrigin;
 use crate::source::Complex32;
 
@@ -30,6 +32,7 @@ use super::noiseblanker::NoiseBlanker;
 use super::noisereduction::NoiseReduction;
 use super::notch::IqNotch;
 use super::sidetone_envelope::SidetoneEnvelope;
+use super::smoothing;
 use super::squelch::CwSquelch;
 use super::wiener_nr::IqWienerNr;
 use super::filter_plan::{self, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_KAISER_BETA};
@@ -99,8 +102,15 @@ pub struct CwChannel {
     auto_notch: AutoNotch,
     noise_reduction: NoiseReduction,
     keyer_speed: KeyerSpeedEstimator,
+    /// Signal delay matching the lookahead AGC window ([`AgcMode::Lookahead`]).
+    agc_delay_line: VecDeque<Complex32>,
+    agc_delay_len: usize,
     snr_peak: f32,
     snr_floor: f32,
+    snr_alpha_rate: f32,
+    snr_peak_release: f32,
+    snr_floor_fall: f32,
+    snr_floor_rise: f32,
     /// Pre-software-AGC level for S-meter only (independent AGC loop ballistics).
     rf_meter: f32,
     work_iq: Vec<Complex32>,
@@ -151,8 +161,14 @@ impl CwChannel {
             auto_notch: AutoNotch::new(),
             noise_reduction: NoiseReduction::new(),
             keyer_speed: KeyerSpeedEstimator::new(audio_rate),
+            agc_delay_line: VecDeque::new(),
+            agc_delay_len: 0,
             snr_peak: 1e-6,
             snr_floor: 1e-6,
+            snr_alpha_rate: 0.0,
+            snr_peak_release: 0.0005,
+            snr_floor_fall: 0.5,
+            snr_floor_rise: 0.0001,
             rf_meter: 1e-6,
             work_iq: Vec::new(),
             work_mix: Vec::new(),
@@ -269,6 +285,7 @@ impl CwChannel {
                 self.noise_blanker.process_block(
                     input,
                     &mut self.work_iq,
+                    iq_rate,
                     nb.threshold,
                     nb.width,
                 );
@@ -277,6 +294,7 @@ impl CwChannel {
                 self.noise_blanker.process_block(
                     input,
                     &mut self.work_iq,
+                    iq_rate,
                     nb.threshold,
                     nb.width,
                 );
@@ -415,6 +433,7 @@ impl CwChannel {
             self.apply_channel_filter(&notched, audio_rate, settings, channel_filter);
             self.work_mix = notched;
         }
+        self.sync_snr_alphas(audio_rate);
         let mut sum_sq = 0.0f32;
         let mut peak = 0.0f32;
         for i in 0..self.work_iq.len() {
@@ -477,14 +496,32 @@ impl CwChannel {
                 settings.agc.decay_ms,
                 settings.agc.lookahead_ms,
             );
+            // Delay the signal by the lookahead window so each gain lands on
+            // the sample whose forward window produced it (true lookahead).
+            let delay = CwAgc::lookahead_delay_samples(audio_rate, settings.agc.lookahead_ms);
+            if delay != self.agc_delay_len {
+                self.agc_delay_line.clear();
+                self.agc_delay_line
+                    .resize(delay, Complex32 { re: 0.0, im: 0.0 });
+                self.agc_delay_len = delay;
+            }
             for (i, &filtered) in self.work_iq.iter().enumerate() {
+                self.agc_delay_line.push_back(filtered);
+                let delayed = self
+                    .agc_delay_line
+                    .pop_front()
+                    .unwrap_or(filtered);
                 let gain = self.agc_gains[i];
                 self.work_mix.push(Complex32 {
-                    re: filtered.re * gain,
-                    im: filtered.im * gain,
+                    re: delayed.re * gain,
+                    im: delayed.im * gain,
                 });
             }
         } else {
+            if self.agc_delay_len != 0 {
+                self.agc_delay_line.clear();
+                self.agc_delay_len = 0;
+            }
             for &filtered in &self.work_iq {
                 let level = filtered.norm().max(1e-7);
                 let gain = if settings.agc.enabled {
@@ -583,6 +620,7 @@ impl CwChannel {
                     settings.squelch.open_threshold,
                     settings.squelch.close_threshold,
                     settings.squelch.hang_ms,
+                    settings.squelch.ramp_ms,
                 );
             }
         }
@@ -655,18 +693,33 @@ impl CwChannel {
         }
     }
 
+    /// SNR ballistics (seconds) — rate-invariant.
+    const SNR_PEAK_RELEASE_S: f32 = 0.167;
+    const SNR_FLOOR_FALL_S: f32 = 0.000167;
+    const SNR_FLOOR_RISE_S: f32 = 0.83;
+
+    fn sync_snr_alphas(&mut self, sample_rate: f32) {
+        if (sample_rate - self.snr_alpha_rate).abs() <= 1.0 {
+            return;
+        }
+        self.snr_peak_release = smoothing::alpha_for_tau(sample_rate, Self::SNR_PEAK_RELEASE_S);
+        self.snr_floor_fall = smoothing::alpha_for_tau(sample_rate, Self::SNR_FLOOR_FALL_S);
+        self.snr_floor_rise = smoothing::alpha_for_tau(sample_rate, Self::SNR_FLOOR_RISE_S);
+        self.snr_alpha_rate = sample_rate;
+    }
+
     fn track_snr(&mut self, level: f32) {
         // Peak follows the keyed signal (fast up, slow down).
         self.snr_peak = if level > self.snr_peak {
             level
         } else {
-            0.9995 * self.snr_peak + 0.0005 * level
+            self.snr_peak + self.snr_peak_release * (level - self.snr_peak)
         };
         // Floor follows the noise between dits (fast down, slow up).
         self.snr_floor = if level < self.snr_floor {
-            0.5 * self.snr_floor + 0.5 * level
+            self.snr_floor + self.snr_floor_fall * (level - self.snr_floor)
         } else {
-            0.9999 * self.snr_floor + 0.0001 * level
+            self.snr_floor + self.snr_floor_rise * (level - self.snr_floor)
         };
     }
 

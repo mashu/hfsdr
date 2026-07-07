@@ -14,6 +14,8 @@ struct WorkerCmd {
     device_rate: f32,
     factor: usize,
     filter_kind: DecimFilterKind,
+    /// Recycled output buffer from a previous job (avoids a per-job Vec).
+    reuse: Vec<Complex32>,
 }
 
 struct WorkerDone {
@@ -43,12 +45,16 @@ impl IngressWorker {
     }
 
     /// Start decimation on `raw` (shared with the caller for parallel demod).
+    ///
+    /// `reuse` is an output buffer from a previous [`Self::finish`] (or empty)
+    /// that the worker recycles instead of allocating per job.
     pub fn start(
         &self,
         raw: Arc<Vec<Complex32>>,
         device_rate: f32,
         factor: usize,
         filter_kind: DecimFilterKind,
+        reuse: Vec<Complex32>,
     ) -> bool {
         self.cmd_tx
             .as_ref()
@@ -58,6 +64,7 @@ impl IngressWorker {
                     device_rate,
                     factor,
                     filter_kind,
+                    reuse,
                 })
                 .ok()
             })
@@ -110,8 +117,13 @@ fn worker_loop(cmd_rx: Receiver<WorkerCmd>, done_tx: SyncSender<WorkerDone>) {
             last_factor = cmd.factor;
             last_filter = cmd.filter_kind;
         }
-        let mut decimated = Vec::new();
-        decim.decimate_block(cmd.raw.as_slice(), &mut decimated, false);
+        let WorkerCmd { raw, reuse, .. } = cmd;
+        let mut decimated = reuse;
+        decimated.clear();
+        decim.decimate_block(raw.as_slice(), &mut decimated, false);
+        // Release the shared batch before signaling completion so the caller
+        // can reclaim its Arc as soon as finish() returns.
+        drop(raw);
         let _ = done_tx.send(WorkerDone { decimated });
     }
 }
@@ -134,7 +146,7 @@ mod tests {
             48_000.0,
             4,
             DecimFilterKind::LinearFir,
-        ));
+        Vec::new()));
         let out = worker.finish().expect("decimated output");
         assert!(!out.is_empty());
         assert!(out.len() < 64);
@@ -149,8 +161,8 @@ mod tests {
             48_000.0,
             2,
             DecimFilterKind::LinearFir,
-        ));
-        assert!(!worker.start(raw, 48_000.0, 2, DecimFilterKind::LinearFir));
+        Vec::new()));
+        assert!(!worker.start(raw, 48_000.0, 2, DecimFilterKind::LinearFir, Vec::new()));
         worker.finish();
     }
 
@@ -158,7 +170,7 @@ mod tests {
     fn try_take_before_finish_is_empty() {
         let worker = IngressWorker::spawn();
         let raw = Arc::new(vec![Complex32::new(1.0, 0.0); 32]);
-        assert!(worker.start(raw, 48_000.0, 2, DecimFilterKind::LinearFir));
+        assert!(worker.start(raw, 48_000.0, 2, DecimFilterKind::LinearFir, Vec::new()));
         assert!(worker.try_take().is_none());
         assert!(worker.finish().is_some());
     }
@@ -172,9 +184,9 @@ mod tests {
             48_000.0,
             2,
             DecimFilterKind::LinearFir,
-        ));
+        Vec::new()));
         worker.finish();
-        assert!(worker.start(raw, 96_000.0, 4, DecimFilterKind::Iir2Pole));
+        assert!(worker.start(raw, 96_000.0, 4, DecimFilterKind::Iir2Pole, Vec::new()));
         assert!(worker.finish().is_some());
     }
 }

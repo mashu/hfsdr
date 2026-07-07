@@ -167,6 +167,20 @@ impl WaterfallApp {
                                 0.5..=20.0,
                                 "Fall ms",
                             );
+                            scroll_slider_f32(
+                                ui,
+                                &mut self.radio.cw.sidetone_envelope.floor_gain,
+                                0.0..=0.9,
+                                "Floor gain",
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Unkeyed gain \u{2014} 0 gates fully, higher keeps weak \
+                                     signals audible between detections",
+                                )
+                                .small()
+                                .color(MUTED),
+                            );
                             let shape_sel = match self.radio.cw.sidetone_envelope.shape {
                                 SidetoneEnvelopeShape::Cosine => 0,
                                 SidetoneEnvelopeShape::Linear => 1,

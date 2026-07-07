@@ -42,6 +42,7 @@ fn ingress_worker_decimates_block() {
         48_000.0,
         4,
         hfsdr::DecimFilterKind::LinearFir,
+        Vec::new(),
     ));
     let out = worker.finish().expect("decimated");
     assert!(!out.is_empty());
