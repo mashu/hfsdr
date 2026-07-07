@@ -269,6 +269,7 @@ impl WaterfallApp {
             skimmer_decoder: skimmer_decoder_to_u8(self.skimmer_ui.skimmer.decoder),
             skimmer_beam_width: self.skimmer_ui.skimmer.decoder_params.beam_width,
             skimmer_lpf_cutoff_hz: self.skimmer_ui.skimmer.lpf_cutoff_hz,
+            skimmer_focus_span_hz: self.skimmer_ui.skimmer.focus_span_hz,
             skimmer_initial_wpm: self.skimmer_ui.skimmer.decoder_params.initial_wpm,
             skimmer_thr_low: self.skimmer_ui.skimmer.decoder_params.envelope.thr_low,
             skimmer_thr_high: self.skimmer_ui.skimmer.decoder_params.envelope.thr_high,

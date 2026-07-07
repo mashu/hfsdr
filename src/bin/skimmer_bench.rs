@@ -121,6 +121,9 @@ fn main() {
         min_decode_snr_db: 6.0,
         decode_gate_ms: 40.0,
         require_scp: false,
+        // Stress the full band; the app default focuses ±1.5 kHz around the
+        // tuned frequency, which costs proportionally less.
+        focus_span_hz: 0.0,
         ..SkimmerConfig::default()
     };
 

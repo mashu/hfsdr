@@ -52,6 +52,11 @@ impl Hypothesis {
         self.score += weight;
     }
 
+    fn discard_symbol(&mut self) {
+        self.symbol.clear();
+        self.poisoned = false;
+    }
+
     fn flush_symbol(&mut self) {
         let ch = if self.poisoned {
             self.poisoned = false;
@@ -129,15 +134,22 @@ impl BigramCwDecoder {
             step.env > step.thr_high
         };
 
-        if let Some(KeyEvent::Mark(secs)) = self.keyer.step(self.key_down) {
-            self.on_mark(secs);
+        match self.keyer.step(self.key_down) {
+            Some(KeyEvent::Mark(secs)) => self.on_mark(secs),
+            Some(KeyEvent::Space(secs)) => self.clock.record_space(secs),
+            None => {}
         }
 
         if self.keyer.in_space() && self.space_flushed < 2 {
             let kind = self.clock.space_kind(self.keyer.space_seconds());
             if kind >= SpaceKind::Char && self.space_flushed < 1 {
+                let confident = self.clock.is_confident();
                 for h in &mut self.beams {
-                    h.flush_symbol();
+                    if confident {
+                        h.flush_symbol();
+                    } else {
+                        h.discard_symbol();
+                    }
                 }
                 self.prune();
                 self.space_flushed = 1;
@@ -153,7 +165,9 @@ impl BigramCwDecoder {
     }
 
     fn on_mark(&mut self, secs: f32) {
-        let el = self.clock.classify_mark(secs);
+        let Some(el) = self.clock.classify_mark(secs) else {
+            return; // flutter fragment — not an element
+        };
         self.keyer.set_dot_seconds(self.clock.dot_seconds());
         let boundary = self.clock.mark_boundary_s().max(1e-4);
         let lr = (secs.max(1e-4) / boundary).ln();

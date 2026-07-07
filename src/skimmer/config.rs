@@ -92,6 +92,11 @@ pub struct SkimmerConfig {
     pub lpf_cutoff_hz: f32,
     /// Sustained keyed energy required before Morse decode (ms).
     pub decode_gate_ms: f32,
+    /// Only decode peaks within this span centred on `focus_center_hz`
+    /// (0 = whole band). Keeps CPU bounded near the tuned frequency.
+    pub focus_span_hz: f32,
+    /// Focus centre as an offset from the tuned centre (the listen offset).
+    pub focus_center_hz: f32,
     pub decoder_params: DecoderParams,
 }
 
@@ -110,6 +115,8 @@ impl Default for SkimmerConfig {
             decoder: SkimmerDecoderKind::Bigram,
             lpf_cutoff_hz: 50.0,
             decode_gate_ms: 50.0,
+            focus_span_hz: 3_000.0,
+            focus_center_hz: 0.0,
             decoder_params: DecoderParams::default(),
         }
     }
@@ -126,6 +133,11 @@ impl SkimmerConfig {
         self.spot_store_max_age_secs = self.spot_store_max_age_secs.max(0.0);
         self.lpf_cutoff_hz = self.lpf_cutoff_hz.clamp(25.0, 250.0);
         self.decode_gate_ms = self.decode_gate_ms.clamp(20.0, 500.0);
+        self.focus_span_hz = if self.focus_span_hz <= 0.0 {
+            0.0
+        } else {
+            self.focus_span_hz.clamp(500.0, 96_000.0)
+        };
         self.decoder_params = self.decoder_params.clamped();
         self
     }
