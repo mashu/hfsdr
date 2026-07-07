@@ -63,7 +63,6 @@ pub use fir::{
     WindowKind,
 };
 pub use iq_apf::IqPeakFilter;
-pub use keyer_speed::{KeyerSpeedEstimator, wpm_from_dot_seconds};
 pub use wiener_nr::IqWienerNr;
 pub use squelch::CwSquelch;
 pub use nco::ComplexNco;

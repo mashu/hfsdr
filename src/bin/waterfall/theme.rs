@@ -3,7 +3,7 @@
 use std::fmt::Display;
 
 use eframe::egui::{
-    Align2, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Label, Pos2, Rect,
+    Align2, Color32, CornerRadius, FontFamily, FontId, Frame, Label, Pos2, Rect,
     Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2, Visuals,
 };
 

@@ -10,6 +10,7 @@ impl WaterfallApp {
             let selected = source_kind_index(self.connection.form.kind);
             let btn_w = if labels.len() > 4 { 44.0 } else { 64.0 };
             if let Some(i) = segment_choice_sized(ui, "source_kind", selected, &labels, btn_w) {
+                #[cfg(feature = "soapy")]
                 let prev = self.connection.form.kind;
                 self.connection.form.kind = source_kind_from_index(i);
                 #[cfg(feature = "soapy")]
