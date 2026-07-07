@@ -14,7 +14,7 @@ impl WaterfallApp {
         if let Some(row) = self.plot.rows.get(row_index) {
             return Some(row.as_slice());
         }
-        (row_index == 0 && !self.plot.latest.is_empty()).then(|| self.plot.latest.as_slice())
+        (row_index == 0 && !self.plot.latest.is_empty()).then_some(self.plot.latest.as_slice())
     }
 
     pub(crate) fn waterfall_row_db_for_viewport(

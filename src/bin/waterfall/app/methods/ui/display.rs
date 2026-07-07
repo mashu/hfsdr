@@ -118,15 +118,15 @@ impl WaterfallApp {
                         if ui.small_button("Full IQ (F)").clicked() {
                             self.plot.plot_view.zoom_to_full_span();
                         }
-                        if self.radio.is_kiwi {
-                            if ui.small_button("CW band view").clicked() {
+                        if self.radio.is_kiwi
+                            && ui.small_button("CW band view").clicked()
+                        {
                                 let full_span = self.plot_full_span_hz();
                                 let max_zoom = self.plot_max_zoom_out();
                                 let segment = self.default_cw_segment_hz();
                                 self.plot
                                     .plot_view
                                     .zoom_to_cw_segment(segment, full_span, max_zoom);
-                            }
                         }
                     });
                 });
@@ -271,18 +271,17 @@ impl WaterfallApp {
                         self.plot.waterfall.force_texture_full = true;
                         self.plot.waterfall.textures_dirty = true;
                     }
-                    if self.display.spectrum_window == FftWindowKind::Kaiser {
-                        if scroll_slider_f32(
+                    if self.display.spectrum_window == FftWindowKind::Kaiser
+                        && scroll_slider_f32(
                             ui,
                             &mut self.display.spectrum_kaiser_beta,
                             MIN_KAISER_BETA..=MAX_KAISER_BETA,
                             "Kaiser β",
                         )
                         .changed()
-                        {
-                            self.plot.waterfall.force_texture_full = true;
-                            self.plot.waterfall.textures_dirty = true;
-                        }
+                    {
+                        self.plot.waterfall.force_texture_full = true;
+                        self.plot.waterfall.textures_dirty = true;
                     }
                 });
             },

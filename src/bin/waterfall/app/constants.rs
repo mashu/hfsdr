@@ -192,7 +192,7 @@ impl ViewportKey {
 /// Quantize plot width so minor egui layout jitter does not rebuild the waterfall texture every frame.
 pub(crate) fn stable_plot_width(raw: f32) -> usize {
     let w = raw.round().max(1.0) as usize;
-    ((w + 7) / 8) * 8
+    w.div_ceil(8) * 8
 }
 
 /// Max scroll credit (in rows) banked after a UI hitch — about two frames worth.

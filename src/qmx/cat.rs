@@ -119,7 +119,7 @@ impl CatPort {
                 return Err(SourceError::Unsupported("CAT read timeout".into()));
             }
             buf.extend_from_slice(&chunk[..n]);
-            if buf.iter().any(|&b| b == b';') {
+            if buf.contains(&b';') {
                 break;
             }
             if buf.len() > 256 {

@@ -55,6 +55,7 @@ pub(crate) fn draw_filter_band(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_notch_marker(
     painter: &Painter,
     rect: Rect,

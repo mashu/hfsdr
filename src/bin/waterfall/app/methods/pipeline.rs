@@ -62,7 +62,7 @@ impl WaterfallApp {
             PipelineStage::AudioOutput => self.audio.audio_enabled,
         };
         let tag = if stage.is_diagnostic() { "diag" } else { "pipeline" };
-        log::info(&format!(
+        log::info(format!(
             "{tag} {} {}",
             stage.label(),
             if on { "on" } else { "bypassed" }

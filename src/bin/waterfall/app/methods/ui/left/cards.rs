@@ -78,11 +78,11 @@ impl WaterfallApp {
                 ui.with_layout(
                     egui::Layout::bottom_up(egui::Align::Min),
                     |ui| {
-                        if band_lock_toggle(ui, &mut self.radio.lock_ham_bands) {
-                            if self.radio.lock_ham_bands {
-                                self.clamp_center_to_ham_bands();
-                                vfo_changed = true;
-                            }
+                        if band_lock_toggle(ui, &mut self.radio.lock_ham_bands)
+                            && self.radio.lock_ham_bands
+                        {
+                            self.clamp_center_to_ham_bands();
+                            vfo_changed = true;
                         }
                     },
                 );

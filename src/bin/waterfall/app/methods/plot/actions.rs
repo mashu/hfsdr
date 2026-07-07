@@ -92,8 +92,6 @@ impl WaterfallApp {
 
 
     /// Span of the spectrum FFT chain — base for zoom, pan, clicks, and waterfall storage.
-
-
     pub(crate) fn plot_full_span_hz(&self) -> f32 {
         rf_view::spectrum_plot_span_hz(self.engine_ui.stats.spectrum_rate, self.iq_passband_hz())
     }

@@ -464,7 +464,7 @@ fn connect_command_stores_request() {
         host: "rx.test".into(),
         ..ConnectRequest::default()
     };
-    engine.handle_command(EngineCommand::Connect(req.clone()));
+    engine.handle_command(EngineCommand::Connect(Box::new(req.clone())));
     assert_eq!(engine.request.as_ref().map(|r| r.host.as_str()), Some("rx.test"));
     assert!(matches!(
         shared.lock().expect("lock").state,

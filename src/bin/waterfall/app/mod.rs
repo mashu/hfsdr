@@ -307,7 +307,7 @@ impl eframe::App for WaterfallApp {
             req.center_hz = self.radio.center_khz * 1000.0;
             self.radio.last_center_khz = self.radio.center_khz;
             log::info(format!("connecting to {}", req.label()));
-            self.engine.send(EngineCommand::Connect(req));
+            self.engine.send(EngineCommand::Connect(Box::new(req)));
         }
 
         self.poll_scp_download();

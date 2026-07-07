@@ -78,6 +78,7 @@ fn record_link_lost(link_error: &Mutex<Option<String>>, detail: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_msg_text(
     ws: &mut Ws,
     text: &str,
@@ -116,14 +117,13 @@ fn handle_msg_text(
     if *iq_configured
         && has_attn_atomic.load(Ordering::Relaxed)
         && !*rf_attn_applied
+        && send_text(ws, &crate::kiwi::protocol::rf_attn_command(rx_setup.rf_attn_db))
     {
-        if send_text(ws, &crate::kiwi::protocol::rf_attn_command(rx_setup.rf_attn_db)) {
-            *rf_attn_applied = true;
-            rf_attn_cdb.store(
-                (rx_setup.rf_attn_db * 10.0).round() as i32,
-                Ordering::Relaxed,
-            );
-        }
+        *rf_attn_applied = true;
+        rf_attn_cdb.store(
+            (rx_setup.rf_attn_db * 10.0).round() as i32,
+            Ordering::Relaxed,
+        );
     }
     if let Some(rate) = audio_rate(text) {
         let _ = send_text(

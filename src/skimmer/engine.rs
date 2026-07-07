@@ -137,7 +137,7 @@ impl DecoderChannel {
         if self.snr_db >= self.min_decode_snr_db + 8.0 {
             return true;
         }
-        poll % 4 == 0
+        poll.is_multiple_of(4)
     }
 
     fn process(&mut self, iq: &[Complex32], iq_rate: f32, lpf_cutoff_hz: f32) -> String {

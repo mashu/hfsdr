@@ -179,7 +179,7 @@ mod tests {
             up = ballistic_step(up, 1.0, 1.0 / 60.0, NEEDLE_ATTACK_TAU_S, NEEDLE_DECAY_TAU_S);
             down = ballistic_step(down, 0.0, 1.0 / 60.0, NEEDLE_ATTACK_TAU_S, NEEDLE_DECAY_TAU_S);
         }
-        assert!(up > down);
+        assert!(up > 1.0 - down, "rise delta {up} should exceed fall delta {}", 1.0 - down);
     }
 
     #[test]

@@ -81,6 +81,7 @@ fn paint_modern_meter_bar(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_loop_meter(
     ui: &mut Ui,
     label: &str,

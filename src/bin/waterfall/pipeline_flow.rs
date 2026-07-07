@@ -242,7 +242,7 @@ impl PipelineFlow {
                 dragged = Some(node.id);
             }
             let node_hovered = chip_hovered(ui, body_rect, &node_resp);
-            paint_node(&painter, node_rect, &node, node_hovered);
+            paint_node(&painter, node_rect, node, node_hovered);
         }
 
         for node in &graph.nodes {
@@ -791,6 +791,7 @@ fn node_toggle(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn node_dual_toggle(
     id: NodeId,
     title: impl Into<String>,

@@ -13,6 +13,7 @@ fn overview_offset_to_x(offset_hz: f64, rect: Rect, overview_span_hz: f32) -> f3
     rect.left() + t * rect.width()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_band_overview(
     ui: &mut Ui,
     painter: &Painter,

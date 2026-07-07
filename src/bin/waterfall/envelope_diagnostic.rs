@@ -325,6 +325,7 @@ fn draw_dashed_hline(painter: &Painter, x0: f32, x1: f32, y: f32, color: Color32
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_waveform(
     painter: &Painter,
     inner: Rect,
@@ -419,7 +420,10 @@ mod tests {
 
     #[test]
     fn enabled_softens_first_keyed_sample() {
-        let settings = SidetoneEnvelopeSettings::default();
+        let settings = SidetoneEnvelopeSettings {
+            enabled: true,
+            ..SidetoneEnvelopeSettings::default()
+        };
         let curves = build_demo_curves(&settings, 12_000.0);
         let idx = curves
             .times_ms

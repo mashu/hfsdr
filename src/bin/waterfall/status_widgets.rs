@@ -77,7 +77,7 @@ pub fn iq_buffer_control(ui: &mut Ui, fill: f32, buffer_secs: f32, panel_open: b
     let painter = ui.painter_at(rect);
     let rounding = 4.0;
 
-    let accent = if panel_open { ACCENT } else if hovered { ACCENT } else { MUTED };
+    let accent = if panel_open || hovered { ACCENT } else { MUTED };
     let border = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), if hovered || panel_open { 200 } else { 110 });
     let bg = if hovered || panel_open {
         Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28)

@@ -69,6 +69,7 @@ impl SpotStore {
     }
 
     /// Insert or update a spot at `frequency_hz`.
+    #[allow(clippy::too_many_arguments)]
     pub fn observe(
         &mut self,
         frequency_hz: f64,

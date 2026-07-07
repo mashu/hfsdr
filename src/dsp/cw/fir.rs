@@ -402,7 +402,7 @@ fn design_droop_compensator() -> Vec<f32> {
     let pass_edge = 0.85 / N;
 
     let mut taps = vec![0.0f32; TAPS];
-    for i in 0..TAPS {
+    for (i, tap) in taps.iter_mut().enumerate().take(TAPS) {
         let mut acc = 0.0f32;
         for j in 0..TAPS {
             let f = j as f32 / TAPS as f32 * 0.5;
@@ -416,7 +416,7 @@ fn design_droop_compensator() -> Vec<f32> {
             acc += gain * phase.cos();
         }
         let hann = 0.5 - 0.5 * (2.0 * PI * i as f32 / m).cos();
-        taps[i] = acc / TAPS as f32 * hann;
+        *tap = acc / TAPS as f32 * hann;
     }
     let sum: f32 = taps.iter().sum();
     if sum.abs() > f32::EPSILON {

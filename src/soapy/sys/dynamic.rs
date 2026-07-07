@@ -233,7 +233,7 @@ extern "C" fn soapy_log_handler(level: i32, msg: *const c_char) {
         return;
     }
     match level {
-        1 | 2 | 3 => crate::log::error(format!("SoapySDR: {text}")),
+        1..=3 => crate::log::error(format!("SoapySDR: {text}")),
         4 => crate::log::warn(format!("SoapySDR: {text}")),
         5 | 6 => crate::log::info(format!("SoapySDR: {text}")),
         _ => crate::log::debug(format!("SoapySDR: {text}")),
@@ -253,7 +253,7 @@ pub fn load_driver_modules() {
     }
 }
 
-fn string_array(len: &mut usize, ptr: *mut *mut c_char) -> Vec<String> {
+fn string_array(len: &mut usize, mut ptr: *mut *mut c_char) -> Vec<String> {
     if ptr.is_null() || *len == 0 {
         return Vec::new();
     }
@@ -262,7 +262,7 @@ fn string_array(len: &mut usize, ptr: *mut *mut c_char) -> Vec<String> {
         out.push(cstr_lossy(unsafe { *ptr.add(i) }));
     }
     if let Some(a) = api() {
-        unsafe { (a.strings_clear)(&mut (ptr as *mut *mut c_char), *len) };
+        unsafe { (a.strings_clear)(&mut ptr, *len) };
     }
     out
 }
@@ -504,7 +504,7 @@ pub fn list_antennas(dev: *const SoapySDRDevice) -> Vec<String> {
         return Vec::new();
     };
     let mut len = 0usize;
-    let ptr = unsafe { (a.list_antennas)(dev, SOAPY_SDR_RX, 0, &mut len) };
+    let mut ptr = unsafe { (a.list_antennas)(dev, SOAPY_SDR_RX, 0, &mut len) };
     if ptr.is_null() || len == 0 {
         return Vec::new();
     }
@@ -512,7 +512,7 @@ pub fn list_antennas(dev: *const SoapySDRDevice) -> Vec<String> {
     for i in 0..len {
         out.push(cstr_lossy(unsafe { *ptr.add(i) }));
     }
-    unsafe { (a.strings_clear)(&mut (ptr as *mut *mut c_char), len) };
+    unsafe { (a.strings_clear)(&mut ptr, len) };
     out
 }
 

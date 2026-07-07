@@ -241,7 +241,7 @@ fn accumulate_metrics(acc: &mut CwStageMetrics, m: &CwStageMetrics) {
     acc.audio_samples = m.audio_samples;
 }
 
-fn demod_slice<'a>(samples: &'a [Complex32], rate: f32) -> &'a [Complex32] {
+fn demod_slice(samples: &[Complex32], rate: f32) -> &[Complex32] {
     let max = demod_tail_max(rate);
     let len = wideband_tail_len(samples.len(), rate, max);
     if len >= samples.len() {
@@ -292,12 +292,19 @@ fn run_demod_microbench(args: &[String]) {
         vec![12_000.0, 384_000.0]
     };
 
-    let mut settings = CwChannelSettings::default();
-    settings.listen_offset_hz = ChannelOffsetHz::new(700.0);
-    if economy {
-        settings.channel_filter = ChannelFilterKind::Iir2Pole;
+    let settings = CwChannelSettings {
+        listen_offset_hz: ChannelOffsetHz::new(700.0),
+        ..CwChannelSettings::default()
+    };
+    let settings = if economy {
         eprintln!("=== IIR 2-pole channel filter ===");
-    }
+        CwChannelSettings {
+            channel_filter: ChannelFilterKind::Iir2Pole,
+            ..settings
+        }
+    } else {
+        settings
+    };
 
     for &r in &rates {
         if r > 96_000.0 {

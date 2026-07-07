@@ -39,8 +39,10 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
             let sample_rate = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             let center_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
             let process_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(48_000);
-            let mut airspy = AirspySettings::default();
-            airspy.iq_process_hz = process_hz;
+            let airspy = AirspySettings {
+                iq_process_hz: process_hz,
+                ..AirspySettings::default()
+            };
             Some(ConnectRequest {
                 kind: SourceKind::Airspy,
                 host: String::new(),
@@ -60,8 +62,10 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
             let sample_rate = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             let center_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
             let process_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(48_000);
-            let mut rtlsdr = RtlSdrSettings::default();
-            rtlsdr.iq_process_hz = process_hz;
+            let rtlsdr = RtlSdrSettings {
+                iq_process_hz: process_hz,
+                ..RtlSdrSettings::default()
+            };
             Some(ConnectRequest {
                 kind: SourceKind::RtlSdr,
                 host: String::new(),
@@ -82,9 +86,11 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
             let sample_rate = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
             let center_hz = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
             let process_hz = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0);
-            let mut soapy = SoapySettings::default();
-            soapy.device_args = device_args;
-            soapy.iq_process_hz = process_hz;
+            let soapy = SoapySettings {
+                device_args,
+                iq_process_hz: process_hz,
+                ..SoapySettings::default()
+            };
             Some(ConnectRequest {
                 kind: SourceKind::Soapy,
                 host: String::new(),
@@ -103,9 +109,11 @@ pub(crate) fn parse_connect_request(args: &[String]) -> Option<ConnectRequest> {
             let center_hz = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(14_010_000.0);
             let process_hz = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
             let serial = args.get(4).cloned().unwrap_or_default();
-            let mut qmx = QmxSettings::default();
-            qmx.iq_process_hz = process_hz;
-            qmx.serial_port = serial;
+            let qmx = QmxSettings {
+                iq_process_hz: process_hz,
+                serial_port: serial,
+                ..QmxSettings::default()
+            };
             Some(ConnectRequest {
                 kind: SourceKind::Qmx,
                 host: String::new(),
