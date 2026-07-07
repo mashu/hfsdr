@@ -1,50 +1,26 @@
 //! Compact status-bar indicators.
 
-use eframe::egui::{self, Color32, FontId, Response, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, Color32, FontId, Response, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType};
 
+use crate::status_icons::{tool_icon_chip, StatusIcon};
 use crate::theme::{chip_hovered, ACCENT, MUTED, OK, WARN};
 
 /// Engine / pipeline chip — opens the interactive DSP flow diagram.
 pub fn engine_pipeline_chip(ui: &mut Ui, panel_open: bool, streaming: bool) -> Response {
-    let size = Vec2::new(72.0, 20.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = chip_hovered(ui, rect, &response);
-    let painter = ui.painter_at(rect);
-    let rounding = 4.0;
-    let accent = if panel_open || hovered {
+    let accent = if panel_open {
         ACCENT
     } else if streaming {
         OK
     } else {
         MUTED
     };
-    let border = Color32::from_rgba_unmultiplied(
-        accent.r(),
-        accent.g(),
-        accent.b(),
-        if hovered || panel_open { 200 } else { 110 },
-    );
-    let bg = if hovered || panel_open {
-        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28)
-    } else {
-        Color32::from_rgb(30, 36, 48)
-    };
-    painter.rect(rect, rounding, bg, Stroke::new(1.0, border), egui::StrokeKind::Inside);
-    painter.text(
-        rect.center() - Vec2::new(6.0, 0.0),
-        egui::Align2::CENTER_CENTER,
+    tool_icon_chip(
+        ui,
+        panel_open,
+        false,
+        accent,
+        StatusIcon::Engine,
         "Engine",
-        FontId::proportional(11.0),
-        accent,
-    );
-    painter.text(
-        egui::pos2(rect.right() - 6.0, rect.center().y),
-        egui::Align2::RIGHT_CENTER,
-        "▾",
-        FontId::proportional(10.0),
-        accent,
-    );
-    response.on_hover_text(
         "Receive pipeline — source, DSP stages, spectrum, skimmer, sinks\n\
          Click for draggable flow diagram with live stage status",
     )
@@ -52,45 +28,20 @@ pub fn engine_pipeline_chip(ui: &mut Ui, panel_open: bool, streaming: bool) -> R
 
 /// Sidetone envelope chip — opens before/after keying shape preview.
 pub fn envelope_diagnostic_chip(ui: &mut Ui, panel_open: bool, envelope_active: bool) -> Response {
-    let size = Vec2::new(72.0, 20.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = chip_hovered(ui, rect, &response);
-    let painter = ui.painter_at(rect);
-    let rounding = 4.0;
-    let accent = if panel_open || hovered {
+    let accent = if panel_open {
         ACCENT
     } else if envelope_active {
         Color32::from_rgb(251, 191, 36)
     } else {
         MUTED
     };
-    let border = Color32::from_rgba_unmultiplied(
-        accent.r(),
-        accent.g(),
-        accent.b(),
-        if hovered || panel_open { 200 } else { 110 },
-    );
-    let bg = if hovered || panel_open {
-        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28)
-    } else {
-        Color32::from_rgb(30, 36, 48)
-    };
-    painter.rect(rect, rounding, bg, Stroke::new(1.0, border), egui::StrokeKind::Inside);
-    painter.text(
-        rect.center() - Vec2::new(6.0, 0.0),
-        egui::Align2::CENTER_CENTER,
+    tool_icon_chip(
+        ui,
+        panel_open,
+        false,
+        accent,
+        StatusIcon::Envelope,
         "Envelope",
-        FontId::proportional(11.0),
-        accent,
-    );
-    painter.text(
-        egui::pos2(rect.right() - 6.0, rect.center().y),
-        egui::Align2::RIGHT_CENTER,
-        "▾",
-        FontId::proportional(10.0),
-        accent,
-    );
-    response.on_hover_text(
         "Sidetone envelope preview — hard BFO edges vs shaped keying\n\
          Compare rise, fall, and edge shape from CW demod settings",
     )
@@ -98,45 +49,20 @@ pub fn envelope_diagnostic_chip(ui: &mut Ui, panel_open: bool, envelope_active: 
 
 /// Filter diagnostic chip — opens magnitude response curves (notches + channel FIR).
 pub fn filter_diagnostic_chip(ui: &mut Ui, panel_open: bool, filters_active: bool) -> Response {
-    let size = Vec2::new(58.0, 20.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = chip_hovered(ui, rect, &response);
-    let painter = ui.painter_at(rect);
-    let rounding = 4.0;
-    let accent = if panel_open || hovered {
+    let accent = if panel_open {
         ACCENT
     } else if filters_active {
         Color32::from_rgb(125, 211, 252)
     } else {
         MUTED
     };
-    let border = Color32::from_rgba_unmultiplied(
-        accent.r(),
-        accent.g(),
-        accent.b(),
-        if hovered || panel_open { 200 } else { 110 },
-    );
-    let bg = if hovered || panel_open {
-        Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 28)
-    } else {
-        Color32::from_rgb(30, 36, 48)
-    };
-    painter.rect(rect, rounding, bg, Stroke::new(1.0, border), egui::StrokeKind::Inside);
-    painter.text(
-        rect.center() - Vec2::new(4.0, 0.0),
-        egui::Align2::CENTER_CENTER,
+    tool_icon_chip(
+        ui,
+        panel_open,
+        false,
+        accent,
+        StatusIcon::Filters,
         "Filters",
-        FontId::proportional(11.0),
-        accent,
-    );
-    painter.text(
-        egui::pos2(rect.right() - 6.0, rect.center().y),
-        egui::Align2::RIGHT_CENTER,
-        "▾",
-        FontId::proportional(10.0),
-        accent,
-    );
-    response.on_hover_text(
         "Filter magnitude response — true channel FIR + manual notch curves\n\
          Compare active path vs bypass; GUI plot overlays are control hints only",
     )
@@ -145,7 +71,7 @@ pub fn filter_diagnostic_chip(ui: &mut Ui, panel_open: bool, filters_active: boo
 /// IQ ring buffer — framed, labeled control; click opens record / playback panel.
 pub fn iq_buffer_control(ui: &mut Ui, fill: f32, buffer_secs: f32, panel_open: bool) -> Response {
     let fill = fill.clamp(0.0, 1.0);
-    let size = Vec2::new(92.0, 20.0);
+    let size = Vec2::new(52.0, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = chip_hovered(ui, rect, &response);
     let painter = ui.painter_at(rect);
@@ -166,19 +92,18 @@ pub fn iq_buffer_control(ui: &mut Ui, fill: f32, buffer_secs: f32, panel_open: b
         egui::StrokeKind::Inside,
     );
 
-    let inner = rect.shrink2(Vec2::new(6.0, 4.0));
-    let label_w = 14.0;
-    let chevron_w = 10.0;
+    let inner = rect.shrink2(Vec2::new(4.0, 4.0));
+    let label_w = 12.0;
     let bar_rect = egui::Rect::from_min_max(
-        egui::pos2(inner.left() + label_w, inner.center().y - 4.5),
-        egui::pos2(inner.right() - chevron_w, inner.center().y + 4.5),
+        egui::pos2(inner.left() + label_w, inner.center().y - 4.0),
+        egui::pos2(inner.right(), inner.center().y + 4.0),
     );
 
     painter.text(
         egui::pos2(inner.left(), inner.center().y),
         egui::Align2::LEFT_CENTER,
         "IQ",
-        FontId::proportional(11.0),
+        FontId::monospace(8.5),
         if hovered || panel_open { ACCENT } else { MUTED },
     );
 
@@ -189,14 +114,7 @@ pub fn iq_buffer_control(ui: &mut Ui, fill: f32, buffer_secs: f32, panel_open: b
         painter.rect_filled(fill_rect, 2.0, buffer_color(fill));
     }
 
-    painter.text(
-        egui::pos2(inner.right(), inner.center().y),
-        egui::Align2::RIGHT_CENTER,
-        "▾",
-        FontId::proportional(10.0),
-        accent,
-    );
-
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "IQ"));
     response.on_hover_text(format!(
         "IQ utilization {:.0}%\n\
          ~{:.2}s queued in ring · pump vs expected rate\n\
@@ -214,13 +132,8 @@ pub fn iq_record_toggle(
     can_record: bool,
     elapsed_secs: f32,
 ) -> Response {
-    let label = if recording {
-        format!("REC {elapsed_secs:.0}s")
-    } else {
-        "REC".to_string()
-    };
     let color = if recording { WARN } else { MUTED };
-    let size = Vec2::new(if recording { 72.0 } else { 36.0 }, 20.0);
+    let size = Vec2::new(24.0, 20.0);
     let enabled = recording || can_record;
     let (rect, response) = ui.allocate_exact_size(
         size,
@@ -247,37 +160,37 @@ pub fn iq_record_toggle(
     };
     painter.rect(rect, rounding, bg, Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
 
-    let text_color = if !enabled {
+    let dot_color = if !enabled {
         Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 120)
     } else {
         color
     };
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(11.0),
-        text_color,
-    );
-
+    let c = rect.center();
+    let rad = 5.0;
+    painter.circle_stroke(c, rad, Stroke::new(1.2, dot_color));
     if recording {
-        response.on_hover_text(
-            "Stop IQ recording\n\
-             Toggle off then on again to start a new timestamped .hiq.gz",
+        painter.circle_filled(c, rad * 0.55, dot_color);
+    }
+
+    let tip = if recording {
+        format!(
+            "REC {elapsed_secs:.1}s — stop IQ recording\n\
+             Toggle off then on again to start a new timestamped .hiq.gz"
         )
     } else if can_record {
-        response.on_hover_text(
-            "Start IQ recording\n\
-             Saves gzip .hiq.gz with timestamp · toggle off/on for next file",
-        )
+        "REC — start IQ recording\n\
+         Saves gzip .hiq.gz with timestamp · toggle off/on for next file"
+            .to_string()
     } else {
-        response.on_hover_text("Connect (or stream) to record IQ")
-    }
+        "REC — connect (or stream) to record IQ".to_string()
+    };
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "REC"));
+    response.on_hover_text(tip)
 }
 
 /// One-click replay of the IQ file selected in the I/O panel.
 pub fn iq_playback_chip(ui: &mut Ui, playing: bool, has_file: bool) -> Response {
-    let size = Vec2::new(28.0, 20.0);
+    let size = Vec2::new(24.0, 20.0);
     let enabled = has_file;
     let (rect, response) = ui.allocate_exact_size(
         size,
@@ -306,30 +219,37 @@ pub fn iq_playback_chip(ui: &mut Ui, playing: bool, has_file: bool) -> Response 
         Color32::from_rgb(30, 36, 48)
     };
     painter.rect(rect, rounding, bg, Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
-    painter.text(
-        rect.center() + Vec2::new(1.0, 0.0),
-        egui::Align2::CENTER_CENTER,
-        "▶",
-        FontId::proportional(10.0),
-        if !enabled {
-            Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 120)
-        } else {
-            accent
-        },
-    );
-    if !enabled {
-        response.on_hover_text("Choose an IQ file in the I/O panel first")
-    } else if playing {
-        response.on_hover_text("Replay selected IQ file from the start")
+    let c = rect.center();
+    let s = 5.0;
+    let tri_color = if !enabled {
+        Color32::from_rgba_unmultiplied(MUTED.r(), MUTED.g(), MUTED.b(), 120)
     } else {
-        response.on_hover_text("Play selected IQ file")
-    }
+        accent
+    };
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(c.x - s * 0.4, c.y - s),
+            egui::pos2(c.x + s * 0.7, c.y),
+            egui::pos2(c.x - s * 0.4, c.y + s),
+        ],
+        tri_color,
+        Stroke::NONE,
+    ));
+    let tip = if !enabled {
+        "Play — choose an IQ file in the I/O panel first"
+    } else if playing {
+        "Play — replay selected IQ file from the start"
+    } else {
+        "Play — play selected IQ file"
+    };
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Play"));
+    response.on_hover_text(tip)
 }
 
 /// Receiver alias beside the connection badge — click opens connection settings.
-pub fn connection_alias_chip(ui: &mut Ui, alias: &str) -> Response {
-    let text = truncate_middle(alias, 28);
-    let size = Vec2::new(128.0, 20.0);
+pub fn connection_alias_chip(ui: &mut Ui, alias: &str, compact: bool) -> Response {
+    let text = truncate_middle(alias, if compact { 18 } else { 28 });
+    let size = Vec2::new(if compact { 88.0 } else { 128.0 }, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = chip_hovered(ui, rect, &response);
     let painter = ui.painter_at(rect);
@@ -356,8 +276,8 @@ pub fn connection_alias_chip(ui: &mut Ui, alias: &str) -> Response {
 }
 
 /// Fixed-width cursor frequency readout — accent when hovering the plot, muted placeholder otherwise.
-pub fn cursor_freq_slot(ui: &mut Ui, label: &str, active: bool) -> Response {
-    let size = Vec2::new(156.0, 14.0);
+pub fn cursor_freq_slot(ui: &mut Ui, label: &str, active: bool, compact: bool) -> Response {
+    let size = Vec2::new(if compact { 108.0 } else { 156.0 }, 14.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let color = if active {
         ACCENT
@@ -517,8 +437,8 @@ mod tests {
                     let _ = iq_buffer_control(ui, 0.55, 1.2, false);
                     let _ = iq_record_toggle(ui, false, true, 0.0);
                     let _ = iq_playback_chip(ui, false, true);
-                    let _ = connection_alias_chip(ui, "rx.test:8073");
-                    let _ = cursor_freq_slot(ui, "14010.000 kHz", true);
+                    let _ = connection_alias_chip(ui, "rx.test:8073", false);
+                    let _ = cursor_freq_slot(ui, "14010.000 kHz", true, false);
                     let _ = quick_connect_chip(ui, true);
                     let _ = disconnect_chip(ui);
                 });
