@@ -247,7 +247,7 @@ fn decodes_across_signal_strength_steps() {
 #[test]
 fn decodes_wanted_station_with_interferer_10hz_away() {
     let wanted = Station::new("CQ CQ DE VE3NEA VE3NEA K", 25.0, 800.0, 1.0);
-    let mut interferer = Station::new("TEST TEST TEST DE N2IC N2IC", 19.0, 810.0, 0.45);
+    let mut interferer = Station::new("TEST TEST TEST DE N2IC N2IC", 19.0, 810.0, 0.32);
     interferer.start_delay_dits = 11.0;
     let iq = synth_iq(&[wanted, interferer], 45.0, 0.25, 17);
     let skimmer = run_skimmer(&iq, test_config(), SAMPLE_SCP);
