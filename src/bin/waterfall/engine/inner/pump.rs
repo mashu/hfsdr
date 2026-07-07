@@ -338,7 +338,9 @@ impl Engine {
             let audio_rate = hfsdr::audio_sample_rate(device_rate, params.cw.decimation);
             self.audio_scope
                 .push_block(&self.audio_scratch, audio_rate);
+            self.audio_waveform.push_block(&self.audio_scratch);
             self.level_audio_scope = self.audio_scope.ordered();
+            self.level_audio_waveform = self.audio_waveform.ordered();
         }
 
         let agc_gain = if params.cw.agc.enabled {
@@ -621,6 +623,7 @@ impl Engine {
             self.attach_pipeline_stats(&mut stats);
             guard.stats = stats;
             guard.audio_scope = self.level_audio_scope.clone();
+            guard.audio_waveform = self.level_audio_waveform.clone();
         }
     }
 

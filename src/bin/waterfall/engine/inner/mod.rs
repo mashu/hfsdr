@@ -25,7 +25,7 @@ use crate::audio::AudioOutput;
 use crate::skimmer::SkimmerHandle;
 use crate::source::{Connection, ConnectRequest};
 
-use super::audio::AudioScopeRing;
+use super::audio::{AudioScopeRing, AudioWaveformRing};
 use super::types::{EngineCommand, EngineParams, EngineShared};
 
 /// Owned entirely by the engine thread.
@@ -53,6 +53,7 @@ pub(crate) struct Engine {
     ingress_worker: Option<IngressWorker>,
     audio_scratch: Vec<f32>,
     audio_scope: AudioScopeRing,
+    audio_waveform: AudioWaveformRing,
     latest: Vec<f32>,
     /// Max-hold spectrum for skimmer peak picking (CW carriers are intermittent).
     skimmer_peak_hold: Vec<f32>,
@@ -96,6 +97,7 @@ pub(crate) struct Engine {
     level_estimated_wpm: f32,
     level_keying_confident: bool,
     level_audio_scope: Vec<f32>,
+    level_audio_waveform: Vec<f32>,
 
     pipeline_avg: PipelineMetrics,
     last_perf_log: Instant,

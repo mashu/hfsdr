@@ -11,7 +11,7 @@ use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, Pipeline
 
 use crate::skimmer::SkimmerHandle;
 
-use crate::engine::audio::AudioScopeRing;
+use crate::engine::audio::{AudioScopeRing, AudioWaveformRing};
 use super::Engine;
 use crate::engine::policy::{catchup_pumps_max, MAX_DRAIN_WIDEBAND};
 use crate::engine::types::{EngineCommand, EngineParams, EngineShared};
@@ -47,6 +47,7 @@ impl Engine {
             ingress_worker: Some(IngressWorker::spawn()),
             audio_scratch: Vec::new(),
             audio_scope: AudioScopeRing::new(),
+            audio_waveform: AudioWaveformRing::new(),
             latest: vec![-120.0; FFT_SIZE],
             skimmer_peak_hold: vec![-120.0; FFT_SIZE],
             last_skimmer_center_hz: f64::NAN,
@@ -87,6 +88,7 @@ impl Engine {
             level_estimated_wpm: 20.0,
             level_keying_confident: false,
             level_audio_scope: Vec::new(),
+            level_audio_waveform: Vec::new(),
             pipeline_avg: PipelineMetrics::default(),
             last_perf_log: Instant::now(),
             last_pipeline: PipelineMetrics::default(),

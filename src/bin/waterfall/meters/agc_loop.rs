@@ -29,9 +29,7 @@ pub(crate) fn af_peak_fill(peak: f32) -> f32 {
 pub struct DualAgcParams {
     pub rf_dbm: f32,
     pub hw_rssi_dbm: Option<f32>,
-    pub agc_gain: f32,
     pub agc_enabled: bool,
-    pub audio_peak: f32,
     pub streaming: bool,
 }
 
@@ -142,7 +140,7 @@ pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams, smoothed: MeterSmoothe
                 let live = p.streaming;
                 let (if_value, if_fill, if_accent) = if live && p.agc_enabled {
                     (
-                        format!("{:.1}×", p.agc_gain),
+                        format!("{:.1}×", smoothed.if_gain_display),
                         smoothed.if_fill,
                         ACCENT,
                     )
@@ -169,7 +167,7 @@ pub fn show_dual_agc_loop(ui: &mut Ui, p: &DualAgcParams, smoothed: MeterSmoothe
                 );
                 ui.add_space(LOOP_METER_ROW_GAP);
                 let (af_value, af_fill) = if live {
-                    (format!("{:.2}", p.audio_peak), smoothed.af_fill)
+                    (format!("{:.2}", smoothed.af_peak_display), smoothed.af_fill)
                 } else {
                     ("—".to_string(), 0.0)
                 };

@@ -63,13 +63,25 @@ impl WaterfallApp {
                 },
                 if_fill,
                 af_fill: af_peak_fill(af_peak),
+                if_gain: stats.agc_gain,
+                af_peak,
                 af_scope_peak: af_peak,
                 live,
             },
         );
         self.meter_display
             .af_scope
-            .tick(dt, &self.audio.audio_scope, live);
+            .tick(
+                dt,
+                &self.audio.audio_scope,
+                live,
+                self.meter_display.af_scope_view.accuracy,
+            );
+        self.meter_display.af_scope_view.tick_waveform(
+            &self.audio.audio_waveform,
+            dt,
+            live,
+        );
     }
 
     pub(crate) fn apply_radio_settings(&mut self) {

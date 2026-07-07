@@ -113,6 +113,7 @@ fn evaluate_reconnecting_badge() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     harness.run_steps(4);
     harness.get_by_label("RECONNECT #1 (2s)");
@@ -155,6 +156,7 @@ fn capture_ui_screenshot_states() {
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
         audio_scope: Vec::new(),
+        audio_waveform: Vec::new(),
     });
     harness.run_steps(4);
     save_render(&mut harness, "05_reconnecting").expect("write reconnecting screenshot");

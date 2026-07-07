@@ -105,6 +105,7 @@ impl EngineHandle {
             latest: guard.latest.clone(),
             last_error: guard.last_error.clone(),
             audio_scope: guard.audio_scope.clone(),
+            audio_waveform: guard.audio_waveform.clone(),
         })
     }
 
@@ -139,6 +140,7 @@ mod tests {
             latest: vec![-90.0; FFT_SIZE],
             last_error: None,
             audio_scope: Vec::new(),
+            audio_waveform: Vec::new(),
         }
     }
 

@@ -1,14 +1,12 @@
 //! Smoothed AF scope envelope columns (UI thread).
 
-/// Display columns across the scope strip.
-pub const AF_SCOPE_COLS: usize = 64;
-/// Temporal blend (~140 ms) — softens keying edges without hiding dits.
-const SMOOTH_TAU_S: f32 = 0.14;
+use super::af_scope_state::AfScopeAccuracy;
 
 /// UI-side envelope history with momentum.
 #[derive(Clone, Debug, Default)]
 pub struct AfScopeDisplayState {
     smoothed: Vec<f32>,
+    cols: usize,
 }
 
 /// Map ring-buffer samples into fixed display columns (peak envelope per bin).
@@ -33,22 +31,31 @@ pub fn envelope_columns(samples: &[f32], cols: usize) -> Vec<f32> {
     out
 }
 
-fn spatial_smooth3(buf: &[f32]) -> Vec<f32> {
+fn spatial_smooth3(buf: &[f32], center_w: f32) -> Vec<f32> {
     let n = buf.len();
     if n < 3 {
         return buf.to_vec();
     }
+    let side = (1.0 - center_w) * 0.5;
     let mut out = buf.to_vec();
     for i in 1..n - 1 {
-        out[i] = buf[i - 1] * 0.22 + buf[i] * 0.56 + buf[i + 1] * 0.22;
+        out[i] = buf[i - 1] * side + buf[i] * center_w + buf[i + 1] * side;
     }
     out
 }
 
 impl AfScopeDisplayState {
-    pub fn tick(&mut self, dt: f32, samples: &[f32], live: bool) -> &[f32] {
-        if self.smoothed.len() != AF_SCOPE_COLS {
-            self.smoothed.resize(AF_SCOPE_COLS, 0.0);
+    pub fn tick(
+        &mut self,
+        dt: f32,
+        samples: &[f32],
+        live: bool,
+        accuracy: AfScopeAccuracy,
+    ) -> &[f32] {
+        let cols = accuracy.display_cols();
+        if self.smoothed.len() != cols || self.cols != cols {
+            self.smoothed.resize(cols, 0.0);
+            self.cols = cols;
         }
         let dt = dt.clamp(0.0, 0.1);
         if !live {
@@ -59,22 +66,19 @@ impl AfScopeDisplayState {
             return &self.smoothed;
         }
 
-        let targets = envelope_columns(samples, AF_SCOPE_COLS);
+        let targets = envelope_columns(samples, cols);
+        let tau = accuracy.smooth_tau_s();
         let alpha = if dt > 0.0 {
-            1.0 - (-dt / SMOOTH_TAU_S).exp()
+            1.0 - (-dt / tau).exp()
         } else {
             0.0
         };
         for (s, &t) in self.smoothed.iter_mut().zip(targets.iter()) {
             *s += (t - *s) * alpha;
         }
-        let blended = spatial_smooth3(&self.smoothed);
+        let blended = spatial_smooth3(&self.smoothed, accuracy.spatial_center_weight());
         self.smoothed.copy_from_slice(&blended);
         &self.smoothed
-    }
-
-    pub fn reset(&mut self) {
-        self.smoothed.clear();
     }
 
     pub fn envelope(&self) -> &[f32] {
@@ -99,9 +103,16 @@ mod tests {
         let mut state = AfScopeDisplayState::default();
         let samples = vec![0.5; 32];
         for _ in 0..30 {
-            state.tick(1.0 / 60.0, &samples, true);
+            state.tick(1.0 / 60.0, &samples, true, AfScopeAccuracy::Coarse);
         }
         assert!(state.smoothed[0] > 0.35);
         assert!(state.smoothed[0] < 0.55);
+    }
+
+    #[test]
+    fn fine_accuracy_uses_more_columns() {
+        let mut state = AfScopeDisplayState::default();
+        state.tick(1.0 / 60.0, &[0.5; 64], true, AfScopeAccuracy::Fine);
+        assert_eq!(state.envelope().len(), 128);
     }
 }

@@ -69,6 +69,7 @@ fn poll_with_spots() -> EnginePoll {
         latest,
         last_error: None,
         audio_scope: vec![0.0; 128],
+        audio_waveform: Vec::new(),
     }
 }
 
@@ -407,5 +408,6 @@ fn poll_with_stats(stats: EngineStats) -> EnginePoll {
         latest,
         last_error: None,
         audio_scope: vec![0.0; 128],
+        audio_waveform: Vec::new(),
     }
 }

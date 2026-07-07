@@ -1,13 +1,16 @@
 //! AF tuning oscilloscope and level badge.
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Frame, Pos2, Rect, Sense, Shape, Stroke,
-    StrokeKind, Ui, Vec2,
+    self, Align2, Button, Color32, CornerRadius, FontId, Frame, Pos2, Rect, RichText, Sense,
+    Shape, Stroke, StrokeKind, Ui, Vec2,
 };
 
 use crate::theme::{attach_rich_tooltip, ACCENT, MUTED, OK, SURFACE, TRACE, WARN};
 
 use super::level::{dbm_to_s_reading, rf_level_dbm, AudioLevelHint, HALF_SCALE};
+use super::af_scope_state::{
+    downsample_waveform, waveform_envelope_overlay, AfScopeMode, AfScopeViewState,
+};
 
 fn hint_short(h: AudioLevelHint) -> &'static str {
     match h {
@@ -54,6 +57,7 @@ fn hint_accent(h: AudioLevelHint) -> Color32 {
 
 pub struct AfScopeParams<'a> {
     pub envelope: &'a [f32],
+    pub waveform: &'a [f32],
     pub peak: f32,
     pub peak_display: f32,
     pub rms: f32,
@@ -68,69 +72,33 @@ pub struct AfScopeParams<'a> {
     pub hint: AudioLevelHint,
 }
 
-pub fn show_af_tuning_panel(ui: &mut Ui, p: &AfScopeParams<'_>) {
+pub fn show_af_tuning_panel(ui: &mut Ui, view: &mut AfScopeViewState, p: &AfScopeParams<'_>) {
+    let panel_w = ui.available_width();
     Frame::new()
         .fill(Color32::from_rgb(18, 22, 30))
         .stroke(Stroke::new(1.0, Color32::from_rgb(42, 52, 70)))
         .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(10, 8))
+        .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let title = ui.label(egui::RichText::new("AF scope").strong().color(ACCENT));
-                attach_rich_tooltip(
-                    &title,
-                    Some("AF scope"),
-                    &[
-                        ("RF gain aid", ACCENT),
-                        (
-                            "Post-demod audio envelope — tune RF gain so peaks sit near \
-                             ±half scale without clipping.",
-                            MUTED,
-                        ),
-                        ("Shortcut", OK),
-                        ("G toggles this panel (Scope in the status bar).", MUTED),
-                    ],
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    status_badge(ui, p.hint);
-                });
-            });
+            ui.set_max_width(panel_w);
+            scope_control_strip(ui, view, p.waveform, p.hint);
             ui.add_space(4.0);
-            show_af_scope(ui, p);
+            show_af_scope(ui, view, p);
             ui.add_space(6.0);
             metric_row(ui, p);
         });
 }
 
-fn status_badge(ui: &mut Ui, hint: AudioLevelHint) {
-    let accent = hint_accent(hint);
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(52.0, 20.0), Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect(
-        rect,
-        4.0,
-        Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 24),
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 160)),
-        StrokeKind::Inside,
-    );
-    painter.circle_filled(
-        Pos2::new(rect.left() + 8.0, rect.center().y),
-        3.0,
-        accent,
-    );
-    painter.text(
-        Pos2::new(rect.center().x + 4.0, rect.center().y),
-        Align2::CENTER_CENTER,
-        hint_short(hint),
-        FontId::monospace(10.0),
-        accent,
-    );
-    attach_rich_tooltip(&resp, Some("AF level"), hint_tip_lines(hint));
-}
+/// Single-line mode / accuracy / status controls — fixed height, no plot overlap.
+const CONTROL_STRIP_H: f32 = 18.0;
+/// Fixed width so LOW / OK / HOT never reflow sibling chips.
+const STATUS_CHIP_W: f32 = 30.0;
 
-/// Fixed chip size so live metric updates and connect/disconnect do not reflow CW demod below.
 const METRIC_CHIP_W: f32 = 48.0;
 const METRIC_CHIP_H: f32 = 32.0;
+const METRIC_ROW_H: f32 = 34.0;
+const SCOPE_CHIP_W: f32 = 24.0;
+const SCOPE_CHIP_H: f32 = 14.0;
 
 fn metric_chip_with_tip(
     ui: &mut Ui,
@@ -143,7 +111,8 @@ fn metric_chip_with_tip(
         Vec2::new(METRIC_CHIP_W, METRIC_CHIP_H),
         egui::Layout::top_down(egui::Align::LEFT),
         |ui| {
-            ui.set_max_width(METRIC_CHIP_W);
+            ui.set_min_size(Vec2::new(METRIC_CHIP_W, METRIC_CHIP_H));
+            ui.set_max_size(Vec2::new(METRIC_CHIP_W, METRIC_CHIP_H));
             ui.label(egui::RichText::new(label).small().color(MUTED));
             ui.label(egui::RichText::new(value).monospace().color(accent));
         },
@@ -157,158 +126,250 @@ fn metric_row(ui: &mut Ui, p: &AfScopeParams<'_>) {
     } else {
         "—".to_string()
     };
+    let row_w = ui.available_width().max(1.0);
     ui.allocate_ui_with_layout(
-        Vec2::new(ui.available_width(), METRIC_CHIP_H),
+        Vec2::new(row_w, METRIC_ROW_H),
         egui::Layout::top_down(egui::Align::LEFT),
         |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 16.0;
-                metric_chip_with_tip(
-                    ui,
-                    "Peak",
-                    &format!("{:.3}", p.peak),
-                    TRACE,
-                    &[
-                        ("Post-AGC audio", TRACE),
-                        (
-                            "Instantaneous |audio| peak — aim near half scale (~0.45) when tuning RF gain.",
+            egui::ScrollArea::horizontal()
+                .id_salt("af_scope_metrics")
+                .max_width(row_w)
+                .show(ui, |ui| {
+                    ui.set_min_height(METRIC_ROW_H);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        metric_chip_with_tip(
+                            ui,
+                            "Peak",
+                            &format!("{:.3}", p.peak),
+                            TRACE,
+                            &[
+                                ("Post-AGC audio", TRACE),
+                                (
+                                    "Instantaneous |audio| peak — aim near half scale (~0.45) when tuning RF gain.",
+                                    MUTED,
+                                ),
+                            ],
+                        );
+                        metric_chip_with_tip(
+                            ui,
+                            "RMS",
+                            &format!("{:.3}", p.rms),
                             MUTED,
-                        ),
-                    ],
-                );
-                metric_chip_with_tip(
-                    ui,
-                    "RMS",
-                    &format!("{:.3}", p.rms),
-                    MUTED,
-                    &[
-                        ("Average level", ACCENT),
-                        (
-                            "Short-term RMS of demod audio — steadier than peak between keying edges.",
-                            MUTED,
-                        ),
-                    ],
-                );
-                if p.agc_enabled {
-                    metric_chip_with_tip(
-                        ui,
-                        "IQ AGC",
-                        &format!("{:.1}×", p.agc_gain),
-                        ACCENT,
-                        &[
-                            ("Software IF loop", ACCENT),
-                            (
-                                "Compensates RF level before demod — high × boosts weak signals, \
-                                 low × pulls back hot RF. Independent of the S-meter.",
+                            &[
+                                ("Average level", ACCENT),
+                                (
+                                    "Short-term RMS of demod audio — steadier than peak between keying edges.",
+                                    MUTED,
+                                ),
+                            ],
+                        );
+                        if p.agc_enabled {
+                            metric_chip_with_tip(
+                                ui,
+                                "IQ AGC",
+                                &format!("{:.1}×", p.agc_gain),
+                                ACCENT,
+                                &[
+                                    ("Software IF loop", ACCENT),
+                                    (
+                                        "Compensates RF level before demod — high × boosts weak signals, \
+                                         low × pulls back hot RF. Independent of the S-meter.",
+                                        MUTED,
+                                    ),
+                                ],
+                            );
+                            metric_chip_with_tip(
+                                ui,
+                                "Env",
+                                &format!("{:.3}", p.agc_envelope),
                                 MUTED,
-                            ),
-                        ],
-                    );
-                    metric_chip_with_tip(
-                        ui,
-                        "Env",
-                        &format!("{:.3}", p.agc_envelope),
-                        MUTED,
-                        &[
-                            ("IQ envelope", ACCENT),
-                            (
-                                "Level the AGC loop is tracking on filtered IQ — rises when RF is strong, \
-                                 falls between characters.",
+                                &[
+                                    ("IQ envelope", ACCENT),
+                                    (
+                                        "Level the AGC loop is tracking on filtered IQ — rises when RF is strong, \
+                                         falls between characters.",
+                                        MUTED,
+                                    ),
+                                ],
+                            );
+                            metric_chip_with_tip(
+                                ui,
+                                "Tgt",
+                                &format!("{:.2}", p.agc_target),
                                 MUTED,
-                            ),
-                        ],
-                    );
-                    metric_chip_with_tip(
-                        ui,
-                        "Tgt",
-                        &format!("{:.2}", p.agc_target),
-                        MUTED,
-                        &[
-                            ("AGC target", ACCENT),
-                            ("Desired IQ envelope level — set in CW demod → Level (AGC).", MUTED),
-                        ],
-                    );
-                }
-                metric_chip_with_tip(
-                    ui,
-                    "RF",
-                    &rf_value,
-                    if p.streaming { OK } else { MUTED },
-                    &[
-                        ("Pre-AGC IQ", OK),
-                        (
-                            "S-unit from IQ level before software AGC — same scale as the S-meter. \
-                             Raise RF gain until RF/peak look healthy without HOT.",
+                                &[
+                                    ("AGC target", ACCENT),
+                                    ("Desired IQ envelope level — set in CW demod → Level (AGC).", MUTED),
+                                ],
+                            );
+                        }
+                        metric_chip_with_tip(
+                            ui,
+                            "RF",
+                            &rf_value,
+                            if p.streaming { OK } else { MUTED },
+                            &[
+                                ("Pre-AGC IQ", OK),
+                                (
+                                    "S-unit from IQ level before software AGC — same scale as the S-meter. \
+                                     Raise RF gain until RF/peak look healthy without HOT.",
+                                    MUTED,
+                                ),
+                            ],
+                        );
+                        metric_chip_with_tip(
+                            ui,
+                            "IQ buf",
+                            &format!("{:>3.0}%", p.iq_headroom * 100.0),
                             MUTED,
-                        ),
-                    ],
-                );
-                metric_chip_with_tip(
-                    ui,
-                    "IQ buf",
-                    &format!("{:>3.0}%", p.iq_headroom * 100.0),
-                    MUTED,
-                    &[
-                        ("Engine buffer", ACCENT),
-                        (
-                            "IQ ring-buffer fill — sustained high % means the pump is falling behind \
-                             the sample stream.",
-                            MUTED,
-                        ),
-                    ],
-                );
-            });
+                            &[
+                                ("Engine buffer", ACCENT),
+                                (
+                                    "IQ ring-buffer fill — sustained high % means the pump is falling behind \
+                                     the sample stream.",
+                                    MUTED,
+                                ),
+                            ],
+                        );
+                    });
+                });
         },
     );
 }
 
-pub fn show_af_scope(ui: &mut Ui, p: &AfScopeParams<'_>) {
+pub fn show_af_scope(ui: &mut Ui, view: &mut AfScopeViewState, p: &AfScopeParams<'_>) {
     let h = 96.0;
-    let (outer, resp) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width().max(220.0), h), Sense::hover());
+    let w = ui.available_width().max(1.0);
+    let (outer, resp) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     attach_rich_tooltip(
         &resp,
         Some("AF trace"),
-        &[
-            ("Waveform", TRACE),
-            (
-                "Recent demod audio envelope, left → right. Symmetric bars show |level| \
-                 above and below zero.",
-                MUTED,
-            ),
-            ("Scale", ACCENT),
-            (
-                "+1 / 0 / −1 = full / zero / inverted full swing. Dashed ± lines and the \
-                 −6 label mark the half-scale target (~−6 dB).",
-                MUTED,
-            ),
-            ("Red bands", WARN),
-            ("Top and bottom clipping zones — trace touching them risks distortion.", MUTED),
-            ("Peak bar", OK),
-            (
-                "Right-edge meter: smoothed peak fill vs accent target tick. \
-                 Match the trace to the dashed guides when tuning RF gain.",
-                MUTED,
-            ),
-        ],
+        match view.mode {
+            AfScopeMode::Level => &[
+                ("Level mode", TRACE),
+                (
+                    "Envelope history left → right. Tune RF gain so peaks sit near ±half scale.",
+                    MUTED,
+                ),
+                ("Accuracy", ACCENT),
+                ("Coarse / Medium / Fine changes time resolution and smoothing.", MUTED),
+            ][..],
+            AfScopeMode::Waveform => &[
+                ("Waveform mode", TRACE),
+                (
+                    "Raw demod audio cycles with envelope overlay — same half-scale guides for RF tuning.",
+                    MUTED,
+                ),
+                ("Hold", OK),
+                ("Freeze the current trace (oscilloscope hold).", MUTED),
+                ("Phosphor", ACCENT),
+                (
+                    "Stack triggered sweeps; brighter regions show where the signal repeats.",
+                    MUTED,
+                ),
+            ][..],
+        },
     );
     let painter = ui.painter_at(outer);
 
-    let plot = outer.shrink2(Vec2::new(28.0, 6.0));
-    let meter_w = 14.0;
-    let meter_rect = Rect::from_min_max(
-        Pos2::new(outer.right() - meter_w - 4.0, plot.top()),
-        Pos2::new(outer.right() - 4.0, plot.bottom()),
+    const LABEL_W: f32 = 20.0;
+    const METER_W: f32 = 12.0;
+    const INSET: f32 = 2.0;
+    let plot = Rect::from_min_max(
+        Pos2::new(outer.left() + LABEL_W, outer.top() + INSET),
+        Pos2::new(outer.right() - METER_W - INSET * 2.0, outer.bottom() - INSET),
     );
-    let plot = plot.with_max_x(meter_rect.left() - 6.0);
+    if plot.width() < 8.0 || plot.height() < 8.0 {
+        return;
+    }
+    let meter_rect = Rect::from_min_max(
+        Pos2::new(outer.right() - METER_W - INSET, plot.top()),
+        Pos2::new(outer.right() - INSET, plot.bottom()),
+    );
 
     paint_plot_background(&painter, plot);
     paint_grid(&painter, plot);
     paint_clip_zones(&painter, plot);
     paint_half_scale_guides(&painter, plot);
-    paint_trace(&painter, plot, p);
+    match view.mode {
+        AfScopeMode::Level => paint_level_trace(&painter, plot, p),
+        AfScopeMode::Waveform => paint_waveform_scope(&painter, plot, view, p),
+    }
     paint_peak_meter(&painter, meter_rect, p.peak_display, p.hint);
     paint_y_labels(&painter, outer, plot);
+}
+
+fn scope_control_strip(
+    ui: &mut Ui,
+    view: &mut AfScopeViewState,
+    waveform: &[f32],
+    hint: AudioLevelHint,
+) {
+    let strip_w = ui.available_width().max(1.0);
+    ui.allocate_ui_with_layout(
+        Vec2::new(strip_w, CONTROL_STRIP_H),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            status_chip(ui, hint);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(3.0, 0.0);
+                if scope_chip(
+                    ui,
+                    view.mode.chip(),
+                    true,
+                    TRACE,
+                    Some("Mode — click to toggle ENV / WAV"),
+                )
+                .clicked()
+                {
+                    view.mode = view.mode.toggle();
+                }
+                if scope_chip(
+                    ui,
+                    view.accuracy.chip(),
+                    true,
+                    ACCENT,
+                    Some("Accuracy — click to cycle C / M / F"),
+                )
+                .clicked()
+                {
+                    view.accuracy = view.accuracy.next();
+                }
+                if view.mode == AfScopeMode::Waveform {
+                    if scope_chip(ui, "H", view.hold, OK, Some("Hold / freeze trace")).clicked() {
+                        view.set_hold(!view.hold, waveform);
+                    }
+                    if scope_chip(ui, "P", view.phosphor, ACCENT, Some("Phosphor overlay")).clicked()
+                    {
+                        view.phosphor = !view.phosphor;
+                    }
+                    if scope_chip(ui, "×", false, MUTED, Some("Clear phosphor")).clicked() {
+                        view.clear_phosphor();
+                    }
+                }
+            });
+        },
+    );
+}
+
+fn status_chip(ui: &mut Ui, hint: AudioLevelHint) {
+    let accent = hint_accent(hint);
+    let text = RichText::new(hint_short(hint))
+        .monospace()
+        .size(9.0)
+        .color(accent);
+    let resp = ui.add(
+        Button::new(text)
+            .fill(Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 28))
+            .stroke(Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 160),
+            ))
+            .corner_radius(3.0)
+            .min_size(Vec2::new(STATUS_CHIP_W, SCOPE_CHIP_H)),
+    );
+    attach_rich_tooltip(&resp, Some("AF level"), hint_tip_lines(hint));
 }
 
 fn paint_plot_background(painter: &eframe::egui::Painter, rect: Rect) {
@@ -387,13 +448,48 @@ fn paint_half_scale_guides(painter: &eframe::egui::Painter, rect: Rect) {
     }
 }
 
-fn paint_trace(painter: &eframe::egui::Painter, rect: Rect, p: &AfScopeParams<'_>) {
+fn scope_chip(
+    ui: &mut Ui,
+    label: &str,
+    active: bool,
+    accent: Color32,
+    tip: Option<&str>,
+) -> egui::Response {
+    let text = RichText::new(label)
+        .monospace()
+        .size(9.0)
+        .color(if active { accent } else { MUTED });
+    let fill = if active {
+        Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 32)
+    } else {
+        Color32::from_rgba_unmultiplied(8, 10, 14, 140)
+    };
+    let stroke = if active {
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 180))
+    } else {
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(60, 72, 92, 120))
+    };
+    let resp = ui.add(
+        Button::new(text)
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(3.0)
+            .min_size(Vec2::new(SCOPE_CHIP_W, SCOPE_CHIP_H)),
+    );
+    if let Some(tip) = tip {
+        resp.on_hover_text(tip)
+    } else {
+        resp
+    }
+}
+
+fn paint_level_trace(painter: &eframe::egui::Painter, rect: Rect, p: &AfScopeParams<'_>) {
     if p.envelope.len() < 2 {
         painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
+            Pos2::new(rect.center().x, rect.bottom() - 10.0),
+            Align2::CENTER_BOTTOM,
             "No audio",
-            FontId::monospace(11.0),
+            FontId::monospace(10.0),
             MUTED,
         );
         return;
@@ -420,6 +516,107 @@ fn paint_trace(painter: &eframe::egui::Painter, rect: Rect, p: &AfScopeParams<'_
             Stroke::new(1.35, TRACE),
         );
     }
+
+    if clipped {
+        painter.rect_stroke(
+            rect,
+            6.0,
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(251, 146, 120, 90)),
+            StrokeKind::Inside,
+        );
+    }
+}
+
+fn paint_waveform_scope(
+    painter: &eframe::egui::Painter,
+    rect: Rect,
+    view: &AfScopeViewState,
+    p: &AfScopeParams<'_>,
+) {
+    let live = view.waveform_for_display(p.waveform);
+    if live.len() < 4 {
+        painter.text(
+            Pos2::new(rect.center().x, rect.bottom() - 10.0),
+            Align2::CENTER_BOTTOM,
+            "No audio",
+            FontId::monospace(10.0),
+            MUTED,
+        );
+        return;
+    }
+
+    let window = view.accuracy.waveform_samples(live.len());
+    let start = live.len().saturating_sub(window);
+    let slice = &live[start..];
+    let plot_cols = (rect.width() as usize).clamp(64, 512);
+    let mid_y = rect.center().y;
+    let half_h = rect.height() * 0.44;
+    let clip_top = rect.top() + rect.height() * 0.08;
+    let clip_bot = rect.bottom() - rect.height() * 0.08;
+
+    if view.phosphor {
+        let (grid, gcols, grows) = view.phosphor_grid();
+        let cell_w = rect.width() / gcols as f32;
+        let cell_h = rect.height() / grows as f32;
+        for row in 0..grows {
+            for col in 0..gcols {
+                let idx = row * gcols + col;
+                let Some(&intensity) = grid.get(idx) else {
+                    continue;
+                };
+                if intensity < 0.08 {
+                    continue;
+                }
+                let t = (intensity / 10.0).clamp(0.0, 1.0);
+                let color = Color32::from_rgba_unmultiplied(
+                    (30.0 + t * 120.0) as u8,
+                    (70.0 + t * 150.0) as u8,
+                    (160.0 + t * 95.0) as u8,
+                    (40.0 + t * 200.0) as u8,
+                );
+                let cell = Rect::from_min_max(
+                    Pos2::new(rect.left() + col as f32 * cell_w, rect.top() + row as f32 * cell_h),
+                    Pos2::new(
+                        rect.left() + (col + 1) as f32 * cell_w,
+                        rect.top() + (row + 1) as f32 * cell_h,
+                    ),
+                );
+                painter.rect_filled(cell, 0.0, color);
+            }
+        }
+    }
+
+    let env = waveform_envelope_overlay(slice, plot_cols);
+    let env_stroke = Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 140);
+    let col_w = rect.width() / plot_cols as f32;
+    for (col, &e) in env.iter().enumerate() {
+        let x = rect.left() + col as f32 * col_w + col_w * 0.5;
+        let y_top = mid_y - e.clamp(0.0, 1.15) * half_h;
+        let y_bot = mid_y + e.clamp(0.0, 1.15) * half_h;
+        painter.line_segment(
+            [Pos2::new(x, y_top), Pos2::new(x, y_bot)],
+            Stroke::new(1.0, env_stroke),
+        );
+    }
+
+    let trace = downsample_waveform(slice, plot_cols);
+    if trace.len() < 2 {
+        return;
+    }
+    let mut points = Vec::with_capacity(trace.len());
+    let mut clipped = false;
+    for (i, &sample) in trace.iter().enumerate() {
+        let x = rect.left() + 2.0 + i as f32 * (rect.width() - 4.0) / (trace.len() - 1).max(1) as f32;
+        let y = mid_y - sample.clamp(-1.15, 1.15) * half_h;
+        if y <= clip_top || y >= clip_bot {
+            clipped = true;
+        }
+        points.push(Pos2::new(x, y));
+    }
+    painter.add(Shape::line(
+        points,
+        Stroke::new(1.2, Color32::from_rgba_unmultiplied(TRACE.r(), TRACE.g(), TRACE.b(), 220)),
+    ));
 
     if clipped {
         painter.rect_stroke(
