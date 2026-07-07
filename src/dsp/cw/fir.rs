@@ -291,7 +291,9 @@ fn block_fft_real(
     for i in 0..fft_n {
         scratch[i] *= scale;
     }
-    let base = hist.len().saturating_sub(1);
+    // input[0] sits at ext index hist.len(), so the streaming-equivalent output
+    // for input[i] is the linear convolution at hist.len() + i.
+    let base = hist.len();
     for (i, slot) in output.iter_mut().enumerate() {
         *slot = scratch[base + i].re;
     }
@@ -607,7 +609,7 @@ mod tests {
             .zip(block_out.iter())
             .map(|(a, b)| (a.re - b.re).abs() + (a.im - b.im).abs())
             .sum();
-        assert!(err < 2.0, "block/scalar FIR mismatch err={err}");
+        assert!(err < 0.05, "block/scalar FIR mismatch err={err}");
     }
 
     #[test]

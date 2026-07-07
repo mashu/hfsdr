@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn gui_edge_wider_than_fir_cutoff() {
-        use super::filter_plan::DEFAULT_PASSBAND_CUTOFF_FRAC;
+        use super::super::filter_plan::DEFAULT_PASSBAND_CUTOFF_FRAC;
         let pb = 200.0;
         assert!(gui_passband_edge_hz(pb) > fir_cutoff_hz(pb, DEFAULT_PASSBAND_CUTOFF_FRAC));
     }
