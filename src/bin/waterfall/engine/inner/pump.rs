@@ -331,6 +331,8 @@ impl Engine {
         self.level_agc_gain = agc_gain;
         self.level_agc_envelope = self.demod.agc_envelope();
         self.level_iq_rf = self.demod.iq_rf_level();
+        self.level_estimated_wpm = self.demod.estimated_wpm();
+        self.level_keying_confident = self.demod.keying_speed_confident();
         self.level_audio_peak = self.audio_scope.peak;
         self.level_audio_rms = self.audio_scope.rms;
 
@@ -584,6 +586,8 @@ impl Engine {
                 agc_gain: self.level_agc_gain,
                 agc_envelope: self.level_agc_envelope,
                 iq_rf_level: self.level_iq_rf,
+                estimated_wpm: self.level_estimated_wpm,
+                keying_confident: self.level_keying_confident,
                 kiwi_has_rf_attn,
                 kiwi_rf_attn_db,
                 hw_rf_gain,
@@ -658,6 +662,8 @@ impl Engine {
                 agc_gain: self.level_agc_gain,
                 agc_envelope: self.level_agc_envelope,
                 iq_rf_level: self.level_iq_rf,
+                estimated_wpm: self.level_estimated_wpm,
+                keying_confident: self.level_keying_confident,
                 kiwi_has_rf_attn,
                 kiwi_rf_attn_db,
                 hw_rf_gain,

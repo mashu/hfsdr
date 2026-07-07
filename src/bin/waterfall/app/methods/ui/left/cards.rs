@@ -29,14 +29,15 @@ impl WaterfallApp {
                     ("Post-AGC audio level; aim near half scale when tuning RF gain.", MUTED),
                 ],
             );
+            let display_dbm = if live {
+                crate::meters::needle_t_to_dbm(self.meter_display.display.needle_t)
+            } else {
+                -127.0
+            };
             show_dual_agc_loop(
                 ui,
                 &DualAgcParams {
-                    rf_dbm: if live {
-                        self.rf_meter_dbm()
-                    } else {
-                        -127.0
-                    },
+                    rf_dbm: display_dbm,
                     hw_rssi_dbm: if live {
                         self.engine_ui.stats.rssi_dbm
                     } else {
@@ -164,7 +165,9 @@ impl WaterfallApp {
                 ("②–④", OK),
                 ("Channel filter + AGC + BFO in CW demod panel (right).", MUTED),
                 ("⑤ Audio", ACCENT),
-                ("APF, auto-notch, NR — optional post-demod stages.", MUTED),
+                ("APF, auto-notch, NR, squelch — optional post-demod stages.", MUTED),
+                ("IQ weak-signal", OK),
+                ("IQ peak filter + Wiener NR run after channel filter (Receive chain).", MUTED),
             ]),
             true,
             |ui| {
@@ -202,6 +205,52 @@ impl WaterfallApp {
                     Some("Drag purple markers on the spectrum · keys 1–4"),
                     |ui| {
                         self.manual_notches_body(ui);
+                    },
+                );
+
+                popup_section(
+                    ui,
+                    "IQ weak-signal",
+                    Some("Pre-demod coherent boost and noise suppression"),
+                    |ui| {
+                        stage_toggle(
+                            ui,
+                            &mut self.radio.cw.iq_apf.enabled,
+                            "IQ peak filter",
+                            Some("Resonant boost at channel center (complex)"),
+                            None,
+                            None,
+                        );
+                        if self.radio.cw.iq_apf.enabled {
+                            scroll_slider_f32(
+                                ui,
+                                &mut self.radio.cw.iq_apf.width_hz,
+                                20.0..=200.0,
+                                "IQ peak width",
+                            );
+                            scroll_slider_f32(
+                                ui,
+                                &mut self.radio.cw.iq_apf.gain,
+                                0.2..=4.0,
+                                "IQ peak gain",
+                            );
+                        }
+                        stage_toggle(
+                            ui,
+                            &mut self.radio.cw.iq_wiener.enabled,
+                            "IQ Wiener NR",
+                            Some("Pre-demod noise suppression — envelope-hung gain for CW"),
+                            None,
+                            None,
+                        );
+                        if self.radio.cw.iq_wiener.enabled {
+                            scroll_slider_f32(
+                                ui,
+                                &mut self.radio.cw.iq_wiener.level,
+                                0.0..=1.0,
+                                "Wiener level",
+                            );
+                        }
                     },
                 );
 
@@ -258,6 +307,35 @@ impl WaterfallApp {
                     );
                     if self.radio.cw.noise_reduction.enabled {
                         scroll_slider_f32(ui, &mut self.radio.cw.noise_reduction.level, 0.0..=0.5, "NR level");
+                    }
+
+                    stage_toggle(
+                        ui,
+                        &mut self.radio.cw.squelch.enabled,
+                        "Squelch (hang)",
+                        Some("Mute audio between transmissions"),
+                        None,
+                        None,
+                    );
+                    if self.radio.cw.squelch.enabled {
+                        scroll_slider_f32(
+                            ui,
+                            &mut self.radio.cw.squelch.open_threshold,
+                            0.005..=0.15,
+                            "Open thr",
+                        );
+                        scroll_slider_f32(
+                            ui,
+                            &mut self.radio.cw.squelch.close_threshold,
+                            0.002..=0.1,
+                            "Close thr",
+                        );
+                        scroll_slider_f32(
+                            ui,
+                            &mut self.radio.cw.squelch.hang_ms,
+                            20.0..=500.0,
+                            "Hang ms",
+                        );
                     }
                 });
             },

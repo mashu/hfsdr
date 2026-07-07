@@ -143,7 +143,7 @@ pub fn paint_magnitude_curve(
     );
 
     let passband_hz = settings.channel_bandwidth_hz();
-    let _ = fir_cutoff_hz(passband_hz);
+    let _ = fir_cutoff_hz(passband_hz, settings.passband_cutoff_frac);
     painter.text(
         Pos2::new(inner.left(), rect.bottom() - 2.0),
         eframe::egui::Align2::LEFT_BOTTOM,

@@ -15,18 +15,23 @@ mod anti_alias;
 mod apf;
 mod autonotch;
 mod channel;
+mod cw_detector;
 mod decimator;
 mod detector;
 mod filter_response;
 mod filter_plan;
 mod fir;
 mod iir_channel;
+mod iq_apf;
+mod keyer_speed;
 mod lms;
 mod nco;
 mod noiseblanker;
 mod noisereduction;
 mod notch;
 mod sidetone_envelope;
+mod squelch;
+mod wiener_nr;
 mod settings;
 
 pub use anti_alias::AntiAliasFilter;
@@ -34,6 +39,7 @@ pub use agc::CwAgc;
 pub use apf::AudioPeakFilter;
 pub use autonotch::AutoNotch;
 pub use channel::{CwChannel, CwStageMetrics};
+pub use cw_detector::CwDetector;
 pub use decimator::{audio_sample_rate, decimation_factor, effective_decimation, Decimator};
 pub use detector::ProductDetector;
 pub use filter_response::{
@@ -44,15 +50,22 @@ pub use filter_response::{
     FilterOverlay, OVERLAY_ATTEN_DB,
 };
 pub use filter_plan::{
-    channel_group_delay_ms, clamp_passband_hz, plan_num_taps, CHANNEL_PASSBAND_MAX_HZ,
+    channel_group_delay_ms, clamp_passband_hz, dit_duration_s, dit_samples, passband_hz_for_wpm,
+    plan_num_taps, CHANNEL_PASSBAND_MAX_HZ,
     CHANNEL_PASSBAND_MIN_HZ, CHANNEL_PASSBAND_NARROW_MAX_HZ, DEFAULT_CHANNEL_PASSBAND_HZ,
-    DEFAULT_KAISER_BETA, MAX_KAISER_BETA, MIN_KAISER_BETA, PASSBAND_STEP_HZ,
+    DEFAULT_DOLPH_SIDELOBE_DB, DEFAULT_KAISER_BETA, DEFAULT_PASSBAND_CUTOFF_FRAC,
+    DEEP_SELECTIVITY_MAX_GROUP_DELAY_MS, MAX_DOLPH_SIDELOBE_DB, MAX_KAISER_BETA,
+    MAX_PASSBAND_CUTOFF_FRAC, MIN_DOLPH_SIDELOBE_DB, MIN_KAISER_BETA, MIN_PASSBAND_CUTOFF_FRAC,
+    PASSBAND_STEP_HZ,
 };
 pub use fir::{
     design_gaussian_lowpass, design_lowpass, design_lowpass_with, FirFilter, LowpassDesign,
     WindowKind,
 };
-pub use lms::{LmsPredictor, LmsStep};
+pub use iq_apf::IqPeakFilter;
+pub use keyer_speed::{KeyerSpeedEstimator, wpm_from_dot_seconds};
+pub use wiener_nr::IqWienerNr;
+pub use squelch::CwSquelch;
 pub use nco::ComplexNco;
 pub use noiseblanker::NoiseBlanker;
 pub use noisereduction::NoiseReduction;
@@ -60,8 +73,10 @@ pub use notch::IqNotch;
 pub use iir_channel::{iir_2pole_lowpass_q, DEFAULT_IIR_CHEBYSHEV_RIPPLE_DB};
 pub use settings::{
     AgcMode, AgcSettings, ApfSettings, AutoNotchSettings, ChannelFilterKind, CwChannelSettings,
-    CwSideband, DecimFilterKind, DiagnosticBypassSettings, IirFilterKind, NoiseBlankerSettings,
-    NoiseReductionSettings, NotchSpec, SidetoneEnvelopeSettings, SidetoneEnvelopeShape,
-    DEFAULT_CHANNEL_WINDOW, MAX_NOTCHES,
+    CwDetectorMode, CwSideband, DecimFilterKind, DiagnosticBypassSettings, IirFilterKind,
+    IqApfSettings, IqWienerSettings, NoiseBlankerSettings, NoiseReductionSettings, NotchSpec,
+    SidetoneEnvelopeSettings, SidetoneEnvelopeShape, SquelchSettings, DEFAULT_CHANNEL_WINDOW,
+    MAX_NOTCHES,
 };
+pub use lms::{LmsPredictor, LmsStep};
 pub use sidetone_envelope::SidetoneEnvelope;

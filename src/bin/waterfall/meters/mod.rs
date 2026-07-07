@@ -14,4 +14,4 @@ pub use motion::{MeterDisplayState, MeterSmoothed, MeterTargets};
 pub use s_meter::show_status_rf_meter;
 
 pub(crate) use agc_loop::{af_peak_fill, if_agc_fill};
-pub(crate) use level::dbm_to_needle_t;
+pub(crate) use level::{dbm_to_needle_t, needle_t_to_dbm};

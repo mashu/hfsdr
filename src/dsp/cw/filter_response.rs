@@ -7,9 +7,10 @@ use std::f32::consts::TAU;
 
 use super::super::biquad::Biquad;
 use super::filter_plan::{
-    clamp_passband_hz, passband_cutoff_hz, DEFAULT_CHANNEL_PASSBAND_HZ, CHANNEL_PASSBAND_MAX_HZ,
+    clamp_passband_hz, passband_cutoff_hz, DEFAULT_CHANNEL_PASSBAND_HZ, DEFAULT_PASSBAND_CUTOFF_FRAC,
+    CHANNEL_PASSBAND_MAX_HZ,
 };
-use super::fir::{design_lowpass_with, LowpassDesign};
+use super::fir::design_lowpass_with;
 use super::iir_channel::iir_2pole_lowpass_q;
 use super::settings::{ChannelFilterKind, CwChannelSettings, MAX_NOTCHES};
 
@@ -74,6 +75,9 @@ pub fn filter_overlay_cache_key(settings: &CwChannelSettings, audio_rate: f32) -
     key ^= (settings.window as u8 as u64) << 8;
     key ^= settings.kaiser_beta.to_bits() as u64;
     key ^= (settings.passband_flatten as u64) << 1;
+    key ^= (settings.deep_selectivity as u64) << 3;
+    key ^= settings.passband_cutoff_frac.to_bits() as u64;
+    key ^= settings.dolph_sidelobe_db.to_bits() as u64;
     key ^= (settings.channel_filter as u8 as u64) << 2;
     key ^= (settings.iir_filter as u8 as u64) << 5;
     key ^= (settings.diagnostic.channel_fir as u64) << 4;
@@ -173,11 +177,7 @@ pub fn channel_magnitude_db_at(
         bq.set_lowpass(rate, (bandwidth * 0.5).max(10.0), q);
         bq.magnitude_linear(rate, offset_hz.abs())
     } else {
-        let design = LowpassDesign {
-            window: settings.window,
-            kaiser_beta: settings.kaiser_beta,
-            passband_flatten: settings.passband_flatten,
-        };
+        let design = settings.lowpass_design();
         let taps = design_lowpass_with(rate, bandwidth, design)
             .taps()
             .to_vec();
@@ -199,11 +199,7 @@ pub fn channel_half_width_hz(
         bq.set_lowpass(audio_rate, (bandwidth * 0.5).max(10.0), q);
         half_width_where(|f| bq.magnitude_linear(audio_rate, f), max_search, threshold_lin)
     } else {
-        let design = LowpassDesign {
-            window: settings.window,
-            kaiser_beta: settings.kaiser_beta,
-            passband_flatten: settings.passband_flatten,
-        };
+        let design = settings.lowpass_design();
         let taps = design_lowpass_with(audio_rate, bandwidth, design)
             .taps()
             .to_vec();
@@ -274,11 +270,7 @@ pub fn build_listen_filter_curves(req: &FilterCurveRequest) -> FilterCurve {
     let settings = &req.settings;
     let bandwidth = settings.channel_bandwidth_hz();
 
-    let design = LowpassDesign {
-        window: settings.window,
-        kaiser_beta: settings.kaiser_beta,
-        passband_flatten: settings.passband_flatten,
-    };
+    let design = settings.lowpass_design();
     let taps = design_lowpass_with(rate, bandwidth, design)
         .taps()
         .to_vec();
@@ -340,8 +332,8 @@ pub fn gui_passband_edge_hz(passband_hz: f32) -> f32 {
     passband_hz * 0.5
 }
 
-pub fn fir_cutoff_hz(passband_hz: f32) -> f32 {
-    passband_cutoff_hz(passband_hz)
+pub fn fir_cutoff_hz(passband_hz: f32, cutoff_frac: f32) -> f32 {
+    passband_cutoff_hz(passband_hz, cutoff_frac)
 }
 
 fn linear_to_db(lin: f32) -> f32 {
@@ -396,6 +388,7 @@ fn dc_block_magnitude_linear(alpha: f32, freq_hz: f32, sample_rate: f32) -> f32 
 
 #[cfg(test)]
 mod tests {
+    use super::super::fir::LowpassDesign;
     use super::*;
     use super::super::filter_plan::CHANNEL_PASSBAND_MIN_HZ;
     use super::super::super::freq_offset::ChannelOffsetHz;
@@ -472,7 +465,7 @@ mod tests {
         let settings = CwChannelSettings::default();
         let overlay = build_filter_overlay(&settings, 12_000.0);
         assert!(overlay.channel_half_hz < gui_passband_edge_hz(settings.passband_hz));
-        assert!(overlay.channel_half_hz > fir_cutoff_hz(settings.passband_hz) * 0.5);
+        assert!(overlay.channel_half_hz > fir_cutoff_hz(settings.passband_hz, settings.passband_cutoff_frac) * 0.5);
     }
 
     #[test]
@@ -529,6 +522,6 @@ mod tests {
     #[test]
     fn gui_edge_wider_than_fir_cutoff() {
         let pb = 200.0;
-        assert!(gui_passband_edge_hz(pb) > fir_cutoff_hz(pb));
+        assert!(gui_passband_edge_hz(pb) > fir_cutoff_hz(pb, DEFAULT_PASSBAND_CUTOFF_FRAC));
     }
 }
