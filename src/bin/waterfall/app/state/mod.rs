@@ -12,7 +12,7 @@ mod radio;
 mod skimmer;
 
 pub use audio::AudioUiState;
-pub use chrome::ChromeState;
+pub use chrome::{BottomPanelView, ChromeState};
 pub use connection::{ConnectionFormState, ConnectionState, KiwiDirectoryState};
 pub use display::DisplayState;
 pub use engine_ui::EngineUiState;

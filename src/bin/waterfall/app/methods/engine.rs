@@ -77,7 +77,17 @@ impl WaterfallApp {
 
 
     pub(crate) fn skimmer_runtime_enabled(&self) -> bool {
-        self.skimmer_ui.skimmer_enabled && self.skimmer_spectrum_ok()
+        if !self.skimmer_ui.skimmer_enabled {
+            return false;
+        }
+        let live = matches!(self.engine_ui.conn_state, ConnState::Streaming);
+        if self.engine_ui.stats.iq_playback {
+            return true;
+        }
+        if !live {
+            return false;
+        }
+        self.skimmer_spectrum_ok()
     }
 
 
@@ -100,6 +110,21 @@ impl WaterfallApp {
         let mut cfg = self.skimmer_ui.skimmer.clone().clamped();
         if matches!(self.engine_ui.conn_state, ConnState::Streaming) {
             cfg.source_label = self.connection_alias();
+        }
+        if self.radio.is_kiwi {
+            // Kiwi band noise creates many false peaks — require stronger SNR and keying.
+            cfg.min_snr_db = cfg.min_snr_db.max(12.0);
+            cfg.min_decode_snr_db = cfg.min_decode_snr_db.max(cfg.min_snr_db + 2.0);
+            cfg.decode_gate_ms = cfg.decode_gate_ms.max(60.0);
+            cfg.decoder_params.envelope.thr_low =
+                cfg.decoder_params.envelope.thr_low.max(0.35);
+            cfg.decoder_params.envelope.thr_high =
+                cfg.decoder_params.envelope.thr_high.max(0.50);
+            cfg.decoder_params.envelope.min_span_fraction = cfg
+                .decoder_params
+                .envelope
+                .min_span_fraction
+                .max(0.10);
         }
         if self.is_wideband() {
             cfg.max_channels = cfg.max_channels.min(8);
@@ -139,8 +164,15 @@ impl WaterfallApp {
         if poll.stats.slow && !self.engine_ui.stats.slow {
             log::warn("link slow or unstable");
         }
+        let disconnected = matches!(&poll.state, ConnState::Disconnected);
         self.engine_ui.conn_state = poll.state;
         self.engine_ui.stats = poll.stats;
+        if disconnected {
+            self.skimmer_ui.skimmer_spots.clear();
+            self.skimmer_ui.skimmer_decode_channels.clear();
+            self.skimmer_ui.skimmer_channels = 0;
+            self.skimmer_ui.frame_visible_spots.clear();
+        }
         if self.skimmer_ui.scp_reload_pending {
             if self.engine_ui.stats.scp.loaded {
                 let n = self.engine_ui.stats.scp.calls;
@@ -163,6 +195,7 @@ impl WaterfallApp {
         }
         self.engine_ui.last_error = poll.last_error;
         self.skimmer_ui.skimmer_spots = poll.spots;
+        self.skimmer_ui.skimmer_decode_channels = poll.decode_channels;
         self.audio.audio_scope = poll.audio_scope;
         self.audio.audio_waveform = poll.audio_waveform;
         let latest = poll.latest;

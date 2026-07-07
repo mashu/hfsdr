@@ -24,4 +24,5 @@ pub struct SkimmerUiState {
     pub scp_reload_deadline: Option<Instant>,
     pub last_scp_loaded: bool,
     pub frame_visible_spots: Vec<Spot>,
+    pub skimmer_decode_channels: Vec<hfsdr::DecodeChannel>,
 }

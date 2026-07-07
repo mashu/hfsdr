@@ -9,7 +9,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use hfsdr::{Complex32, Skimmer, SkimmerConfig, Spot, SpotSort};
+use hfsdr::{Complex32, DecodeChannel, Skimmer, SkimmerConfig, Spot, SpotSort};
 
 /// Reused `Vec` buffers for skimmer IQ / spectrum handoff (avoids per-frame alloc).
 struct SkimmerBufferPool {
@@ -99,6 +99,7 @@ pub struct SkimmerHandle {
     tx: SyncSender<SkimmerMsg>,
     spots: Arc<Mutex<Vec<Spot>>>,
     channels: Arc<Mutex<usize>>,
+    live_channels: Arc<Mutex<Vec<DecodeChannel>>>,
     scp_status: Arc<Mutex<ScpStatus>>,
     config: Arc<Mutex<SkimmerConfig>>,
     pool: Arc<SkimmerBufferPool>,
@@ -123,6 +124,7 @@ fn process_frame(
     config_thread: &Arc<Mutex<SkimmerConfig>>,
     spots_thread: &Arc<Mutex<Vec<Spot>>>,
     channels_thread: &Arc<Mutex<usize>>,
+    live_channels_thread: &Arc<Mutex<Vec<DecodeChannel>>>,
     scp_thread: &Arc<Mutex<ScpStatus>>,
 ) {
     if let Ok(cfg) = config_thread.lock() {
@@ -144,6 +146,9 @@ fn process_frame(
     }
     if let Ok(mut guard) = channels_thread.lock() {
         *guard = skimmer.active_channels();
+    }
+    if let Ok(mut guard) = live_channels_thread.lock() {
+        *guard = skimmer.live_channels();
     }
     publish_scp(skimmer, scp_thread);
     pool.return_iq(iq);
@@ -174,6 +179,7 @@ fn dispatch_msg(
     config_thread: &Arc<Mutex<SkimmerConfig>>,
     spots_thread: &Arc<Mutex<Vec<Spot>>>,
     channels_thread: &Arc<Mutex<usize>>,
+    live_channels_thread: &Arc<Mutex<Vec<DecodeChannel>>>,
     scp_thread: &Arc<Mutex<ScpStatus>>,
 ) {
     match msg {
@@ -184,6 +190,9 @@ fn dispatch_msg(
             }
             if let Ok(mut guard) = channels_thread.lock() {
                 *guard = 0;
+            }
+            if let Ok(mut guard) = live_channels_thread.lock() {
+                guard.clear();
             }
         }
         SkimmerMsg::ReloadScp => {
@@ -202,6 +211,7 @@ fn dispatch_msg(
                 config_thread,
                 spots_thread,
                 channels_thread,
+                live_channels_thread,
                 scp_thread,
             );
             for pending in deferred {
@@ -212,6 +222,7 @@ fn dispatch_msg(
                     config_thread,
                     spots_thread,
                     channels_thread,
+                    live_channels_thread,
                     scp_thread,
                 );
             }
@@ -224,6 +235,7 @@ impl SkimmerHandle {
         let (tx, rx) = sync_channel::<SkimmerMsg>(32);
         let spots = Arc::new(Mutex::new(Vec::new()));
         let channels = Arc::new(Mutex::new(0usize));
+        let live_channels = Arc::new(Mutex::new(Vec::new()));
         let scp_status = Arc::new(Mutex::new(ScpStatus::default()));
         let config = Arc::new(Mutex::new(SkimmerConfig {
             source_label: label,
@@ -231,6 +243,7 @@ impl SkimmerHandle {
         }));
         let spots_thread = Arc::clone(&spots);
         let channels_thread = Arc::clone(&channels);
+        let live_channels_thread = Arc::clone(&live_channels);
         let scp_thread = Arc::clone(&scp_status);
         let config_thread = Arc::clone(&config);
         let pool = Arc::new(SkimmerBufferPool::new(4));
@@ -249,6 +262,7 @@ impl SkimmerHandle {
                         &config_thread,
                         &spots_thread,
                         &channels_thread,
+                        &live_channels_thread,
                         &scp_thread,
                     );
                 }
@@ -259,6 +273,7 @@ impl SkimmerHandle {
             tx,
             spots,
             channels,
+            live_channels,
             scp_status,
             config,
             pool,
@@ -284,6 +299,9 @@ impl SkimmerHandle {
         }
         if let Ok(mut guard) = self.channels.lock() {
             *guard = 0;
+        }
+        if let Ok(mut guard) = self.live_channels.lock() {
+            guard.clear();
         }
     }
 
@@ -332,6 +350,13 @@ impl SkimmerHandle {
 
     pub fn active_channels(&self) -> usize {
         self.channels.lock().map(|g| *g).unwrap_or(0)
+    }
+
+    pub fn live_channels(&self) -> Vec<DecodeChannel> {
+        self.live_channels
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     pub fn scp_status(&self) -> ScpStatus {

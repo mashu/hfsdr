@@ -400,6 +400,46 @@ fn maybe_retry_reconnect_when_due() {
 }
 
 #[test]
+#[ignore]
+fn playback_skimmer_emits_callsign_spots() {
+    let path = std::env::var("CAPTURE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("hfsdr")
+                .join("captures")
+                .join("capture-1783428092.hiq.gz")
+        });
+    if !path.exists() {
+        eprintln!("skip: no capture at {}", path.display());
+        return;
+    }
+    let (mut engine, shared, params) = test_engine();
+    {
+        let mut p = params.lock().expect("lock");
+        p.skimmer_enabled = true;
+    }
+    engine.handle_command(EngineCommand::PlayIqFile(path));
+    wait_playback_prefill(&engine, 500);
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut saw_spot = false;
+    while Instant::now() < deadline {
+        if engine.pump_stream() == 0 && engine.playback.is_none() {
+            break;
+        }
+        let guard = shared.lock().expect("lock");
+        if guard.spots.iter().any(|s| s.callsign.is_some()) {
+            saw_spot = true;
+            break;
+        }
+        drop(guard);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(saw_spot, "expected callsign spot from IQ playback + skimmer");
+}
+
+#[test]
 fn engine_run_loop_playback_and_shutdown() {
     use std::sync::mpsc::channel;
     use std::thread;

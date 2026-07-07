@@ -270,6 +270,8 @@ pub struct AppSettings {
     pub show_console: bool,
     pub filter_wide: bool,
     pub show_history: bool,
+    #[serde(default)]
+    pub bottom_panel_view: u8,
     pub show_left: bool,
     pub show_right: bool,
     /// AF tuning scope visible in the CW demod panel.
@@ -405,19 +407,20 @@ impl Default for AppSettings {
             skimmer_channel_timeout_secs: 30.0,
             skimmer_store_max_age_secs: 300.0,
             skimmer_max_decode_chars: 64,
-            min_spot_snr: 12.0,
+            min_spot_snr: 8.0,
             spot_cq_only: false,
-            spot_hide_heard_labels: true,
+            spot_hide_heard_labels: false,
             spot_max_age_secs: 180.0,
             spot_callsign_filter: String::new(),
             spot_label_limit: 40,
-            scp_require: true,
+            scp_require: false,
             spot_sort: 0,
             continent_filter: false,
             show_continents: [true; 7],
             show_console: false,
             filter_wide: false,
             show_history: false,
+            bottom_panel_view: 0,
             show_left: true,
             show_right: true,
             show_af_scope: true,
@@ -437,7 +440,7 @@ impl Default for AppSettings {
             soapy: SoapySettings::default(),
             #[cfg(feature = "soapy")]
             soapy_sample_rate: 2_048_000,
-            settings_format: 1,
+            settings_format: 3,
             iq_capture_dir: String::new(),
             iq_playback_path: String::new(),
         }
@@ -480,6 +483,36 @@ impl AppSettings {
             // Legacy file from before preamp defaulted on.
             s.airspy.hf_lna = true;
             s.settings_format = 1;
+        }
+        if s.settings_format < 2 {
+            if s.scp_require {
+                s.scp_require = false;
+            }
+            if s.skimmer_thr_low > 0.38 {
+                s.skimmer_thr_low = 0.30;
+            }
+            if s.skimmer_thr_high > 0.50 {
+                s.skimmer_thr_high = 0.46;
+            }
+            if s.min_spot_snr > 10.0 {
+                s.min_spot_snr = 8.0;
+            }
+            s.settings_format = 2;
+        }
+        if s.settings_format < 3 {
+            if s.skimmer_min_snr_db < 12.0 {
+                s.skimmer_min_snr_db = 12.0;
+            }
+            if s.skimmer_min_decode_snr_db < s.skimmer_min_snr_db + 2.0 {
+                s.skimmer_min_decode_snr_db = s.skimmer_min_snr_db + 2.0;
+            }
+            if s.skimmer_thr_low < 0.35 {
+                s.skimmer_thr_low = 0.35;
+            }
+            if s.skimmer_thr_high < 0.50 {
+                s.skimmer_thr_high = 0.50;
+            }
+            s.settings_format = 3;
         }
         s
     }

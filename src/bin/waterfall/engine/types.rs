@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use hfsdr::{CwChannelSettings, FftWindowKind, PipelineMetrics, Spot, DEFAULT_KAISER_BETA, DEFAULT_FFT_WINDOW};
+use hfsdr::{CwChannelSettings, DecodeChannel, FftWindowKind, PipelineMetrics, Spot, DEFAULT_KAISER_BETA, DEFAULT_FFT_WINDOW};
 use hfsdr::SkimmerConfig;
 
 use crate::skimmer::ScpStatus;
@@ -170,6 +170,7 @@ pub struct EngineShared {
     pub state: ConnState,
     pub stats: EngineStats,
     pub spots: Vec<Spot>,
+    pub skimmer_decode_channels: Vec<DecodeChannel>,
     pub last_error: Option<String>,
     pub rows_seq: u64,
     /// Recent demod audio envelope slots for the AF scope (oldest first).
@@ -186,6 +187,7 @@ impl Default for EngineShared {
             state: ConnState::Disconnected,
             stats: EngineStats::default(),
             spots: Vec::new(),
+            skimmer_decode_channels: Vec::new(),
             last_error: None,
             rows_seq: 0,
             audio_scope: Vec::new(),
@@ -248,6 +250,7 @@ pub struct EnginePoll {
     pub state: ConnState,
     pub stats: EngineStats,
     pub spots: Vec<hfsdr::Spot>,
+    pub decode_channels: Vec<DecodeChannel>,
     pub rows: Vec<Vec<f32>>,
     pub latest: Vec<f32>,
     pub last_error: Option<String>,
@@ -346,6 +349,7 @@ mod tests {
             state: ConnState::Streaming,
             stats: EngineStats::default(),
             spots: Vec::new(),
+            decode_channels: Vec::new(),
             rows: Vec::new(),
             latest: Vec::new(),
             last_error: None,
@@ -367,6 +371,7 @@ mod tests {
             state: ConnState::Streaming,
             stats: EngineStats::default(),
             spots: Vec::new(),
+            decode_channels: Vec::new(),
             rows: vec![latest.clone()],
             latest,
             last_error: None,
@@ -384,6 +389,7 @@ mod tests {
             state: ConnState::Streaming,
             stats: EngineStats::default(),
             spots: Vec::new(),
+            decode_channels: Vec::new(),
             rows: vec![vec![]],
             latest: vec![-90.0; 8],
             last_error: None,

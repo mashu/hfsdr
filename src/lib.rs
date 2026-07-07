@@ -87,7 +87,7 @@ pub use kiwi::KiwiSource;
 pub use skimmer::{
     detect_peaks, detect_peaks_with_floor, strongest_offset_hz, strongest_offset_hz_with_floor,
     encode_char, noise_floor_db, noise_floor_db_into, AdaptiveCwDecoder, BigramCwDecoder,
-    CwDecoder, DecoderParams, EnvelopeSettings, MasterScp, Peak, Skimmer, SkimmerConfig,
+    CwDecoder, DecodeChannel, DecoderParams, EnvelopeSettings, MasterScp, Peak, Skimmer, SkimmerConfig,
     SkimmerDecoderKind, Spot, SpotKind, SpotSort, SpotStore, MASTER_SCP_URL,
 };
 pub use source::ingress::{

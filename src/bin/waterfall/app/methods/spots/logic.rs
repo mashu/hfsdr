@@ -42,6 +42,21 @@ impl WaterfallApp {
         )
     }
 
+    /// Rolling callsign log (last 10 min), newest first — unfiltered by table SNR.
+    pub(crate) fn callsign_log_entries(&self) -> Vec<Spot> {
+        const MAX_AGE_SECS: f32 = 600.0;
+        let mut out: Vec<Spot> = self
+            .skimmer_ui
+            .skimmer_spots
+            .iter()
+            .filter(|s| s.callsign.is_some())
+            .filter(|s| MAX_AGE_SECS <= 0.0 || s.age().as_secs_f32() <= MAX_AGE_SECS)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.last_heard.cmp(&a.last_heard));
+        out
+    }
+
     pub(crate) fn spot_labels(&self, center_hz: f64) -> Vec<SpotLabel> {
         build_spot_labels(
             &self.skimmer_ui.frame_visible_spots,
@@ -58,6 +73,7 @@ impl WaterfallApp {
         self.engine.send(EngineCommand::ClearSkimmerSpots);
         self.skimmer_ui.skimmer_spots.clear();
         self.skimmer_ui.frame_visible_spots.clear();
+        self.skimmer_ui.skimmer_decode_channels.clear();
         self.annotated.clear();
         log::info("spots cleared");
     }

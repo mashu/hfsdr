@@ -121,6 +121,11 @@ impl WaterfallApp {
         self.skimmer_ui.show_continents = s.show_continents;
         self.chrome.show_console = s.show_console;
         self.chrome.show_history = s.show_history;
+        self.chrome.bottom_panel_view = if s.bottom_panel_view == 1 {
+            BottomPanelView::Decoder
+        } else {
+            BottomPanelView::CallsignLog
+        };
         self.chrome.show_left = s.show_left;
         self.chrome.show_right = s.show_right;
         self.chrome.show_af_scope = s.show_af_scope;
@@ -283,6 +288,10 @@ impl WaterfallApp {
             show_console: self.chrome.show_console,
             filter_wide: self.radio.passband_wide,
             show_history: self.chrome.show_history,
+            bottom_panel_view: match self.chrome.bottom_panel_view {
+                BottomPanelView::CallsignLog => 0,
+                BottomPanelView::Decoder => 1,
+            },
             show_left: self.chrome.show_left,
             show_right: self.chrome.show_right,
             show_af_scope: self.chrome.show_af_scope,
@@ -304,7 +313,7 @@ impl WaterfallApp {
             soapy: self.connection.form.soapy.clone(),
             #[cfg(feature = "soapy")]
             soapy_sample_rate: self.connection.form.sample_rate,
-            settings_format: 1,
+            settings_format: 3,
             iq_capture_dir: self.chrome.iq.capture_dir.display().to_string(),
             iq_playback_path: self.chrome.iq.playback_path.clone(),
         }

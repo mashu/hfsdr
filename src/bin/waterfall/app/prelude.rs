@@ -23,6 +23,7 @@ pub(crate) use crate::meters::{
     self, AfScopeParams, DualAgcParams, MeterSmoothed, classify_level, dbm_to_needle_t,
     rf_level_dbm, show_dual_agc_loop, show_status_rf_meter,
 };
+pub(crate) use crate::app::state::BottomPanelView;
 pub(crate) use crate::audio::AudioOutput;
 pub(crate) use crate::colormap::db_to_colour;
 pub(crate) use crate::controls::{

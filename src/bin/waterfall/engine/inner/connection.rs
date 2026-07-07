@@ -86,6 +86,7 @@ pub(super) fn start_connect(&mut self, req: &ConnectRequest) {
         self.last_pump_at = Instant::now();
         self.reset_skimmer_peak_hold(self.fft_size);
         self.last_skimmer_center_hz = f64::NAN;
+        self.skimmer.clear();
         self.stop_recorder();
     }
 

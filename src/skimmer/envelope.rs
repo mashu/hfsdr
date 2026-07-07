@@ -29,8 +29,8 @@ const MARK_ATTACK_S: f32 = 0.040;
 const MARK_DECAY_S: f32 = 0.8;
 /// Faster adaptation right after construction so estimates converge.
 const WARMUP_S: f32 = 0.25;
-/// Minimum mark/noise ratio (~2.6 dB) before keying is trusted.
-const MIN_MARK_NOISE_RATIO: f32 = 1.35;
+/// Minimum mark/noise ratio (~4 dB) before keying is trusted.
+const MIN_MARK_NOISE_RATIO: f32 = 1.6;
 
 /// Smoothed magnitude envelope with adaptive Schmitt (hysteresis) thresholds.
 #[derive(Clone, Debug)]

@@ -18,30 +18,17 @@ fn seeded_app() -> WaterfallApp {
     app.skimmer_ui.skimmer_enabled = true;
     app.skimmer_ui.skimmer_channels = 3;
     let now = Instant::now();
-    app.skimmer_ui.frame_visible_spots = vec![
-        Spot {
-            frequency_hz: 14_010_500.0,
-            callsign: Some("G0ABC".into()),
-            kind: SpotKind::CallingCq,
-            snr_db: 20.0,
-            wpm: 22.0,
-            first_heard: now,
-            last_heard: now,
-            sources: Vec::new(),
-            callsign_rank: 0,
-        },
-        Spot {
-            frequency_hz: 14_011_000.0,
-            callsign: None,
-            kind: SpotKind::Heard,
-            snr_db: 12.0,
-            wpm: 18.0,
-            first_heard: now,
-            last_heard: now,
-            sources: Vec::new(),
-            callsign_rank: 0,
-        },
-    ];
+    app.skimmer_ui.frame_visible_spots = vec![Spot {
+        frequency_hz: 14_010_500.0,
+        callsign: Some("G0ABC".into()),
+        kind: SpotKind::CallingCq,
+        snr_db: 20.0,
+        wpm: 22.0,
+        first_heard: now,
+        last_heard: now,
+        sources: Vec::new(),
+        callsign_rank: 0,
+    }];
     app.skimmer_ui.skimmer_spots = app.skimmer_ui.frame_visible_spots.clone();
     app.engine_ui.stats = EngineStats {
         sample_rate: 96_000.0,
