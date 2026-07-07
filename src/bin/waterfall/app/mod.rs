@@ -16,9 +16,9 @@ mod state;
 mod prelude;
 pub(crate) use prelude::*;
 pub(crate) use state::{
-    AudioUiState, ChromeState, ConnectionFormState, ConnectionState, DisplayState, EngineUiState,
-    KiwiDirectoryState, MeterDisplayState, FilterOverlayCache, PlotState, RadioState, SkimmerUiState,
-    WaterfallTextureCache,
+    AudioUiState, BottomPanelView, ChromeState, ConnectionFormState, ConnectionState, DisplayState,
+    EngineUiState, KiwiDirectoryState, MeterDisplayState, FilterOverlayCache, PlotState,
+    RadioState, SkimmerUiState, WaterfallTextureCache,
 };
 
 pub(crate) use constants::*;
@@ -200,9 +200,9 @@ impl WaterfallApp {
                 spot_sort: SpotSort::SnrDesc,
                 continent_filter: false,
                 show_continents: [true; 7],
-                min_spot_snr: 12.0,
+                min_spot_snr: 8.0,
                 spot_cq_only: false,
-                spot_hide_heard_labels: true,
+                spot_hide_heard_labels: false,
                 spot_max_age_secs: 180.0,
                 spot_callsign_filter: String::new(),
                 spot_label_limit: 40,
@@ -212,6 +212,7 @@ impl WaterfallApp {
                 scp_reload_deadline: None,
                 last_scp_loaded: false,
                 frame_visible_spots: Vec::new(),
+                skimmer_decode_channels: Vec::new(),
             },
             chrome: ChromeState {
                 show_console: false,
@@ -220,6 +221,7 @@ impl WaterfallApp {
                 show_smeter: true,
                 cw_simple_ui: false,
                 show_history: false,
+                bottom_panel_view: BottomPanelView::default(),
                 show_left: true,
                 show_right: true,
                 show_iq_drawer: false,

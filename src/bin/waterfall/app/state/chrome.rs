@@ -3,6 +3,13 @@ use hfsdr::MAX_NOTCHES;
 use crate::iq_panel::IqPanel;
 use crate::pipeline_flow::PipelineFlow;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BottomPanelView {
+    #[default]
+    CallsignLog,
+    Decoder,
+}
+
 pub struct ChromeState {
     pub show_console: bool,
     pub show_shortcuts: bool,
@@ -12,6 +19,7 @@ pub struct ChromeState {
     /// Off by default (full UI).
     pub cw_simple_ui: bool,
     pub show_history: bool,
+    pub bottom_panel_view: BottomPanelView,
     pub show_left: bool,
     pub show_right: bool,
     pub show_iq_drawer: bool,

@@ -545,10 +545,17 @@ impl Engine {
         };
         self.iq_buffer_secs = self.iq_buffer_secs * 0.5 + queued_secs * 0.5;
     }
+    pub(super) fn skimmer_snapshot(&self) -> (Vec<hfsdr::Spot>, Vec<hfsdr::DecodeChannel>, usize, crate::skimmer::ScpStatus) {
+        (
+            self.skimmer.spots(),
+            self.skimmer.live_channels(),
+            self.skimmer.active_channels(),
+            self.skimmer.scp_status(),
+        )
+    }
+
     pub(super) fn publish_rows(&mut self, rows: Vec<Vec<f32>>, snr: f32, got: usize) {
-        let spots = self.skimmer.spots();
-        let scp = self.skimmer.scp_status();
-        let channels = self.skimmer.active_channels();
+        let (spots, decode_channels, channels, scp) = self.skimmer_snapshot();
         let dropped = self.conn.as_ref().map(|c| c.device.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.device.rssi_dbm());
         let (sample_rate, _, is_kiwi) = self.link_meta();
@@ -578,6 +585,7 @@ impl Engine {
                 guard.rows_seq = guard.rows_seq.wrapping_add(1);
             }
             guard.spots = spots;
+            guard.skimmer_decode_channels = decode_channels;
             let mut stats = EngineStats {
                 sample_rate: self
                     .conn
@@ -639,7 +647,7 @@ impl Engine {
     }
 
     pub(super) fn publish_stats(&mut self, got: usize) {
-        let scp = self.skimmer.scp_status();
+        let (spots, decode_channels, channels, scp) = self.skimmer_snapshot();
         let dropped = self.conn.as_ref().map(|c| c.device.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.device.rssi_dbm());
         let (sample_rate, _, is_kiwi) = self.link_meta();
@@ -655,6 +663,8 @@ impl Engine {
         let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
         let hw_rf_gain = self.hw_rf_gain();
         if let Ok(mut guard) = self.shared.lock() {
+            guard.spots = spots;
+            guard.skimmer_decode_channels = decode_channels;
             let mut stats = EngineStats {
                 sample_rate: self
                     .conn
@@ -671,7 +681,7 @@ impl Engine {
                 audio_rate,
                 slow,
                 is_kiwi,
-                skimmer_channels: self.skimmer.active_channels(),
+                skimmer_channels: channels,
                 spectrum_rate: self.spectrum_rate,
                 spectrum_fft: self.fft_size,
                 spectrum_decim: self.spectrum_decim,

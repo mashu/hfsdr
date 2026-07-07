@@ -63,6 +63,7 @@ pub fn filter_spots(spots: &[Spot], cfg: &SpotFilterConfig, resolver: &Continent
         .iter()
         .filter(|s| spot_display_snr(s) >= cfg.min_snr_db)
         .filter(|s| continent_allowed(s, cfg.continent_filter, &cfg.show_continents, resolver))
+        .filter(|s| s.callsign.is_some())
         .filter(|s| !cfg.cq_only || s.kind == SpotKind::CallingCq)
         .filter(|s| max_age <= 0.0 || s.age().as_secs_f32() <= max_age)
         .filter(|s| {
@@ -168,6 +169,24 @@ mod tests {
         let out = filter_spots(&spots, &cfg, &ContinentResolver::new());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].callsign.as_deref(), Some("G0ABC"));
+    }
+
+    #[test]
+    fn drops_spots_without_callsign() {
+        let cfg = SpotFilterConfig {
+            min_snr_db: 0.0,
+            cq_only: false,
+            max_age_secs: 0.0,
+            callsign_prefix: String::new(),
+            continent_filter: false,
+            show_continents: [true; 7],
+            sort: SpotSort::SnrDesc,
+        };
+        let mut cq_only = spot("G0ABC", 10.0, SpotKind::CallingCq);
+        cq_only.callsign = None;
+        let out = filter_spots(&[cq_only, spot("DL1ABC", 12.0, SpotKind::Answering)], &cfg, &ContinentResolver::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].callsign.as_deref(), Some("DL1ABC"));
     }
 
     #[test]

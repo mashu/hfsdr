@@ -34,9 +34,39 @@ impl WaterfallApp {
             "Visible",
             format!("{n} shown · {} decoded", self.skimmer_ui.skimmer_spots.len()),
         );
+        if self.skimmer_ui.skimmer_enabled && self.skimmer_runtime_enabled() {
+            let peaks = self.skimmer_ui.skimmer_channels;
+            let keyed = self
+                .skimmer_ui
+                .skimmer_decode_channels
+                .iter()
+                .filter(|c| c.keyed)
+                .count();
+            if !self.connection_session_live() {
+                ui.colored_label(MUTED, "Skimmer idle — connect and wait for STREAMING.");
+            } else if keyed > 0 && n == 0 {
+                ui.colored_label(
+                    MUTED,
+                    format!("{keyed} keyed channel{} copying CW — callsign log fills after CQ/DE", if keyed == 1 { "" } else { "s" }),
+                );
+            } else if peaks > 0 && n == 0 {
+                ui.colored_label(
+                    MUTED,
+                    format!(
+                        "{peaks} peak{} tracked — waiting for keyed CW",
+                        if peaks == 1 { "" } else { "s" }
+                    ),
+                );
+            } else if peaks == 0 {
+                ui.colored_label(
+                    MUTED,
+                    "No CW peaks above skimmer SNR — lower Peak min SNR or zoom in",
+                );
+            }
+        }
         if !self.skimmer_ui.skimmer_enabled {
             ui.colored_label(MUTED, "Enable skimmer to decode callsigns on the band.");
-        } else if !self.skimmer_spectrum_ok() {
+        } else if !self.skimmer_spectrum_ok() && !self.engine_ui.stats.iq_playback {
             ui.colored_label(
                 WARN,
                 "Skimmer needs Process IQ ≤96 kHz on Airspy (Connection → Process IQ), then reconnect.",
@@ -153,12 +183,9 @@ impl WaterfallApp {
                             ui.label(egui::RichText::new(glyph).monospace().color(color));
                         });
                         row.col(|ui| {
-                            let call = match (spot.callsign.as_deref(), spot.kind) {
-                                (Some(c), _) => c,
-                                (None, SpotKind::CallingCq) => "CQ",
-                                (None, _) => "…",
-                            };
-                            ui.label(egui::RichText::new(call).monospace().color(color));
+                            if let Some(call) = spot.callsign.as_deref() {
+                                ui.label(egui::RichText::new(call).monospace().color(color));
+                            }
                         });
                         row.col(|ui| {
                             ui.label(format!("{:.1}", spot.frequency_hz / 1000.0));

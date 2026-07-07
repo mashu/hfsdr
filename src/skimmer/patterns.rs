@@ -93,14 +93,19 @@ fn callsign_confirmed(
     if token_hits.max(substring_hits) >= 2 {
         return true;
     }
+    if calling_cq && scp_exact_call_in_text(call, text, scp) {
+        return true;
+    }
     if calling_cq {
-        if let Some(pos) = tokens.iter().position(|&t| t == "CQ" || t == "QRZ") {
-            if tokens
-                .iter()
-                .skip(pos + 1)
-                .any(|t| token_refers_to_call(t, call, scp))
-            {
-                return true;
+        for (i, &t) in tokens.iter().enumerate() {
+            if t == "CQ" || t == "QRZ" {
+                if tokens
+                    .iter()
+                    .skip(i + 1)
+                    .any(|t| token_refers_to_call(t, call, scp))
+                {
+                    return true;
+                }
             }
         }
     }
@@ -109,7 +114,33 @@ fn callsign_confirmed(
             && tokens
                 .get(i + 1)
                 .is_some_and(|next| token_refers_to_call(next, call, scp))
+    }) || de_glued_refers_to_call(tokens, call, scp)
+}
+
+fn de_glued_refers_to_call(tokens: &[&str], call: &str, scp: Option<&MasterScp>) -> bool {
+    tokens.iter().enumerate().any(|(i, &t)| {
+        if t != "DE" {
+            return false;
+        }
+        glued_callsign_tokens(tokens, i + 1)
+            .iter()
+            .any(|glued| token_refers_to_call(glued, call, scp))
     })
+}
+
+fn scp_exact_call_in_text(call: &str, text: &str, scp: Option<&MasterScp>) -> bool {
+    let Some(db) = scp else {
+        return false;
+    };
+    if !db.is_loaded() {
+        return false;
+    }
+    let call = call.trim().to_ascii_uppercase();
+    if db.resolve(&call).as_deref() != Some(call.as_str()) {
+        return false;
+    }
+    db.find_in_text(text, false)
+        .is_some_and(|found| found == call)
 }
 
 fn validate_token(token: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option<String> {
@@ -127,6 +158,53 @@ fn validate_token(token: &str, scp: Option<&MasterScp>, require_scp: bool) -> Op
         return None;
     }
     validate_token_heuristic(token)
+}
+
+/// Like [`validate_token`], but allows heuristic shape checks after CQ/DE even when
+/// strict SCP mode is on — many contest calls are not in MASTER.SCP yet.
+fn validate_token_in_exchange(token: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option<String> {
+    validate_token(token, scp, require_scp).or_else(|| {
+        if require_scp {
+            validate_token_heuristic(token)
+        } else {
+            None
+        }
+    })
+}
+
+/// Merge single-character decode fragments (`F 6 F J K`) into callsign-shaped strings.
+fn glued_callsign_tokens(tokens: &[&str], start: usize) -> Vec<String> {
+    const MAX_GLUE: usize = 12;
+    let mut longest = String::new();
+    let mut buf = String::new();
+    for &t in tokens.iter().skip(start).take(MAX_GLUE) {
+        if STOPWORDS.contains(&t) {
+            if buf.len() > longest.len() {
+                longest.clone_from(&buf);
+            }
+            buf.clear();
+            continue;
+        }
+        let alnum: String = t.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        if alnum.is_empty() {
+            continue;
+        }
+        if !buf.is_empty() && buf.len() + alnum.len() > 10 {
+            if buf.len() > longest.len() {
+                longest.clone_from(&buf);
+            }
+            buf.clear();
+        }
+        buf.push_str(&alnum);
+    }
+    if buf.len() > longest.len() {
+        longest = buf;
+    }
+    if longest.len() >= 4 {
+        vec![longest]
+    } else {
+        Vec::new()
+    }
 }
 
 fn is_calling_cq(upper: &str, tokens: &[&str]) -> bool {
@@ -168,9 +246,44 @@ pub fn analyze(text: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option
         &mut candidates,
     );
     if calling_cq {
-        if let Some(pos) = tokens.iter().position(|&t| t == "CQ" || t == "QRZ") {
-            for t in tokens.iter().skip(pos + 1).filter(|t| !STOPWORDS.contains(t)) {
-                push_candidate(validate_token(t, scp, require_scp), &mut candidates);
+        for (i, &t) in tokens.iter().enumerate() {
+            if t == "CQ" || t == "QRZ" {
+                for token in tokens.iter().skip(i + 1).filter(|t| !STOPWORDS.contains(t)) {
+                    push_candidate(
+                        validate_token_in_exchange(token, scp, require_scp),
+                        &mut candidates,
+                    );
+                }
+                for glued in glued_callsign_tokens(&tokens, i + 1) {
+                    push_candidate(
+                        validate_token_in_exchange(&glued, scp, require_scp),
+                        &mut candidates,
+                    );
+                }
+            }
+            if t == "DE" {
+                if let Some(next) = tokens.get(i + 1) {
+                    push_candidate(
+                        validate_token_in_exchange(next, scp, require_scp),
+                        &mut candidates,
+                    );
+                }
+                for glued in glued_callsign_tokens(&tokens, i + 1) {
+                    push_candidate(
+                        validate_token_in_exchange(&glued, scp, require_scp),
+                        &mut candidates,
+                    );
+                }
+            }
+        }
+    }
+    for (i, &t) in tokens.iter().enumerate() {
+        if t == "DE" {
+            for glued in glued_callsign_tokens(&tokens, i + 1) {
+                push_candidate(
+                    validate_token_in_exchange(&glued, scp, require_scp),
+                    &mut candidates,
+                );
             }
         }
     }
@@ -181,6 +294,8 @@ pub fn analyze(text: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option
     // Whatever the validation source, demand corroboration: a repeat of the
     // call, or CQ/QRZ/DE context. A lone callsign-shaped token in garbled
     // text is the main source of false spots.
+    // Prefer longer glued calls over shorter prefixes (F6FJK over F6FJ).
+    candidates.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
     let callsign = candidates.into_iter().find(|call| {
         callsign_confirmed(&upper, &tokens, call, scp, calling_cq)
             || (calling_cq && call_exact_occurrences(&upper, call) >= 1)
@@ -194,7 +309,7 @@ pub fn analyze(text: &str, scp: Option<&MasterScp>, require_scp: bool) -> Option
         SpotKind::Heard
     };
 
-    if callsign.is_none() && !calling_cq {
+    if callsign.is_none() {
         return None;
     }
     Some(PatternMatch { callsign, kind })
@@ -208,9 +323,14 @@ mod tests {
     const SAMPLE_SCP: &str = "VER20260202\nW1AW\nOH2BH\nK3LR\nSM5DAJ\n";
 
     #[test]
-    fn detects_garbled_cqcq() {
-        let m = analyze("?CQCQDES?D? SD5DE", None, false).expect("cq");
-        assert_eq!(m.kind, SpotKind::CallingCq);
+    fn detects_garbled_cqcq_without_call() {
+        assert!(analyze("?CQCQDES?D?", None, false).is_none());
+    }
+
+    #[test]
+    fn cq_only_returns_none() {
+        assert!(analyze("CQ CQ", None, false).is_none());
+        assert!(analyze("CQ", None, false).is_none());
     }
 
     #[test]
@@ -261,6 +381,40 @@ mod tests {
         let m = analyze("CQ DE W1AW", Some(&scp), true).expect("match");
         assert_eq!(m.kind, SpotKind::CallingCq);
         assert_eq!(m.callsign.as_deref(), Some("W1AW"));
+    }
+
+    #[test]
+    fn cq_cq_then_call_confirms_after_second_cq() {
+        let scp = MasterScp::from_text(SAMPLE_SCP);
+        let m = analyze("CQ CQ W1AW", Some(&scp), true).expect("match");
+        assert_eq!(m.callsign.as_deref(), Some("W1AW"));
+        assert_eq!(m.kind, SpotKind::CallingCq);
+    }
+
+    #[test]
+    fn scp_embedded_in_cq_garble_counts_once() {
+        let scp = MasterScp::from_text(SAMPLE_SCP);
+        let m = analyze("CQCQDEW1AW", Some(&scp), true).expect("match");
+        assert_eq!(m.callsign.as_deref(), Some("W1AW"));
+    }
+    #[test]
+    fn glued_fragments_after_de() {
+        let m = analyze("XX DE F 6 F J K TEST", None, false).expect("match");
+        assert!(
+            m.callsign
+                .as_deref()
+                .is_some_and(|c| c == "F6FJK" || c == "F6FJ"),
+            "got {:?}",
+            m.callsign
+        );
+    }
+
+    #[test]
+    fn strict_scp_allows_heuristic_after_de() {
+        let scp = MasterScp::from_text(SAMPLE_SCP);
+        let m = analyze("CQ DE ZZ9ZZZ", Some(&scp), true).expect("match");
+        assert_eq!(m.callsign.as_deref(), Some("ZZ9ZZZ"));
+        assert_eq!(m.kind, SpotKind::CallingCq);
     }
 
     #[test]

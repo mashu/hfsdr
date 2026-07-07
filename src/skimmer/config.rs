@@ -24,8 +24,8 @@ pub struct EnvelopeSettings {
 impl Default for EnvelopeSettings {
     fn default() -> Self {
         Self {
-            thr_low: 0.38,
-            thr_high: 0.55,
+            thr_low: 0.30,
+            thr_high: 0.46,
             min_span_fraction: 0.10,
         }
     }
@@ -99,17 +99,17 @@ impl Default for SkimmerConfig {
     fn default() -> Self {
         Self {
             bucket_hz: 80.0,
-            min_snr_db: 10.0,
-            min_decode_snr_db: 8.0,
+            min_snr_db: 12.0,
+            min_decode_snr_db: 10.0,
             min_separation_bins: 5,
             max_channels: 16,
             channel_timeout_secs: 30.0,
             spot_store_max_age_secs: 300.0,
             source_label: "rx".to_string(),
-            require_scp: true,
+            require_scp: false,
             decoder: SkimmerDecoderKind::Bigram,
             lpf_cutoff_hz: 50.0,
-            decode_gate_ms: 80.0,
+            decode_gate_ms: 50.0,
             decoder_params: DecoderParams::default(),
         }
     }
@@ -160,7 +160,7 @@ mod tests {
     fn defaults_are_valid() {
         let c = SkimmerConfig::default().clamped();
         assert_eq!(c.decoder, SkimmerDecoderKind::Bigram);
-        assert!(c.decode_gate_ms >= 60.0);
+        assert!(c.decode_gate_ms >= 20.0);
         assert!(c.decoder_params.envelope.thr_high > c.decoder_params.envelope.thr_low);
     }
 

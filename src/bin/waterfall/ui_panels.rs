@@ -65,6 +65,7 @@ fn poll_with_spots() -> EnginePoll {
         state: ConnState::Streaming,
         stats: streaming_stats(),
         spots: vec![sample_spot("TEST1", SpotKind::CallingCq)],
+            decode_channels: Vec::new(),
         rows: vec![latest.clone()],
         latest,
         last_error: None,
@@ -104,11 +105,7 @@ fn seed_spot_table(harness: &mut Harness<'_, WaterfallApp>) {
     harness.state_mut().skimmer_ui.frame_visible_spots = vec![
         sample_spot("G0ABC", SpotKind::CallingCq),
         sample_spot("DL1TEST", SpotKind::Answering),
-        Spot {
-            callsign: None,
-            kind: SpotKind::Heard,
-            ..sample_spot("", SpotKind::Heard)
-        },
+        sample_spot("F4XYZ", SpotKind::Heard),
     ];
 }
 
@@ -404,6 +401,7 @@ fn poll_with_stats(stats: EngineStats) -> EnginePoll {
         state: ConnState::Streaming,
         stats,
         spots: Vec::new(),
+            decode_channels: Vec::new(),
         rows: vec![latest.clone()],
         latest,
         last_error: None,

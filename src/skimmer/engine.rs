@@ -14,12 +14,13 @@ use super::config::{DecoderParams, SkimmerConfig, SkimmerDecoderKind};
 use super::decoder::CwDecoder;
 use super::envelope::{DecodeGate, KeyingEnvelope};
 use super::patterns::analyze;
+use super::quality::decode_is_garbage;
 use super::peaks::{
     detect_peaks_with_floor, noise_floor_db_into, offset_hz_to_bin, strongest_offset_hz_with_floor,
     Peak,
 };
 use super::scp::MasterScp;
-use super::spots::{SpotKind, SpotStore};
+use super::spots::SpotStore;
 
 /// Intermediate complex rate after anti-aliased decimation.
 const MID_RATE_TARGET_HZ: f32 = 2_000.0;
@@ -119,18 +120,12 @@ impl DecoderChannel {
         }
     }
 
-    /// Skip the expensive IQ mix when the channel is idle but poll occasionally to catch key-down.
-    fn should_run_dsp(&self, poll: u64) -> bool {
+    /// Run envelope tracking when the peak is plausible; decode only when keyed.
+    fn should_run_dsp(&self, _poll: u64) -> bool {
         if self.gate.is_armed() {
             return true;
         }
-        if self.snr_db < self.min_decode_snr_db {
-            return false;
-        }
-        if self.snr_db >= self.min_decode_snr_db + 8.0 {
-            return true;
-        }
-        poll.is_multiple_of(4)
+        self.snr_db >= self.min_decode_snr_db + 2.0
     }
 
     fn sync_filter(&mut self, lpf_cutoff_hz: f32) {
@@ -186,17 +181,21 @@ impl DecoderChannel {
             return String::new();
         }
         self.last_seen = Instant::now();
-        let mut armed = false;
         for &mag in &self.env_buf {
             let step = self.gate_env.update(mag);
-            if self.gate.feed(&step) {
-                armed = true;
-            }
+            self.gate.feed(&step);
         }
-        if !armed {
+        if !self.gate.is_armed() {
+            if decode_is_garbage(&self.text) {
+                self.text.clear();
+            }
             return String::new();
         }
         self.decoder.push_audio(&self.env_buf, self.env_rate)
+    }
+
+    fn is_keyed(&self) -> bool {
+        self.gate.is_armed()
     }
 }
 
@@ -239,15 +238,46 @@ impl Skimmer {
         self.channels.len()
     }
 
+    pub fn keyed_channels(&self) -> usize {
+        self.channels.values().filter(|ch| ch.is_keyed()).count()
+    }
+
     /// Hidden debug helper for integration tests and capture replay.
     #[doc(hidden)]
     pub fn debug_channels(&self) -> Vec<(f32, String, f32)> {
+        self.live_channels()
+            .into_iter()
+            .map(|ch| (ch.offset_hz, ch.text, ch.snr_db))
+            .collect()
+    }
+
+    /// Snapshot of in-flight decoder channels for the UI.
+    pub fn live_channels(&self) -> Vec<super::DecodeChannel> {
+        let center = self.center_hz;
         let mut out: Vec<_> = self
             .channels
             .values()
-            .map(|ch| (ch.offset_hz, ch.text.clone(), ch.snr_db))
+            .filter_map(|ch| {
+                let keyed = ch.is_keyed();
+                let text = if decode_is_garbage(&ch.text) && !keyed {
+                    String::new()
+                } else {
+                    ch.text.clone()
+                };
+                if !keyed && text.is_empty() {
+                    return None;
+                }
+                Some(super::DecodeChannel {
+                    offset_hz: ch.offset_hz,
+                    frequency_hz: center + ch.offset_hz as f64,
+                    text,
+                    snr_db: ch.snr_db,
+                    wpm: ch.decoder.wpm(),
+                    keyed,
+                })
+            })
             .collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.sort_by(|a, b| a.offset_hz.total_cmp(&b.offset_hz));
         out
     }
 
@@ -434,9 +464,6 @@ impl Skimmer {
                     self.store
                         .observe(freq, m.callsign.clone(), rank, m.kind, ch.snr_db, wpm, &label);
                     trim_decoded_prefix(&mut ch.text, call);
-                } else if matches!(m.kind, SpotKind::CallingCq) {
-                    self.store
-                        .observe(freq, None, rank, m.kind, ch.snr_db, wpm, &label);
                 }
             }
             self.channels.insert(key, ch);
@@ -517,7 +544,7 @@ mod tests {
     fn decodes_signal_into_spot() {
         let rate = 12_000.0;
         let offset = 1_000.0;
-        let iq = keyed_iq("CQ", 25.0, rate, offset);
+        let iq = keyed_iq("CQ DE W1AW", 25.0, rate, offset);
         let spectrum = spectrum_with_peak(offset, rate, 2048);
         let scp = MasterScp::from_text(SAMPLE_SCP);
         let mut sk = Skimmer::new(SkimmerConfig {
@@ -532,7 +559,13 @@ mod tests {
         for chunk in iq.chunks(1024) {
             sk.process(chunk, rate, &spectrum, rate, 0.0, 7_030_000.0);
         }
-        assert!(!sk.store().is_empty(), "no spot produced");
+        assert!(
+            sk.store()
+                .sorted(SpotSort::SnrDesc)
+                .iter()
+                .any(|s| s.callsign.is_some()),
+            "no callsign spot produced"
+        );
     }
 
     #[test]
@@ -573,8 +606,9 @@ mod tests {
     fn adaptive_decoder_produces_spot() {
         let rate = 12_000.0;
         let offset = 1_000.0;
-        let iq = keyed_iq("CQ", 25.0, rate, offset);
+        let iq = keyed_iq("CQ DE W1AW", 25.0, rate, offset);
         let spectrum = spectrum_with_peak(offset, rate, 2048);
+        let scp = MasterScp::from_text(SAMPLE_SCP);
         let mut sk = Skimmer::new(SkimmerConfig {
             decoder: SkimmerDecoderKind::Adaptive,
             require_scp: false,
@@ -591,10 +625,17 @@ mod tests {
             },
             ..SkimmerConfig::default()
         });
+        sk.replace_scp(scp);
         for chunk in iq.chunks(1024) {
             sk.process(chunk, rate, &spectrum, rate, 0.0, 7_030_000.0);
         }
-        assert!(!sk.store().is_empty(), "adaptive decoder produced no spot");
+        assert!(
+            sk.store()
+                .sorted(SpotSort::SnrDesc)
+                .iter()
+                .any(|s| s.callsign.is_some()),
+            "adaptive decoder produced no callsign spot"
+        );
     }
 
     #[test]
