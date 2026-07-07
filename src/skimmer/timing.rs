@@ -50,7 +50,7 @@ impl Keyer {
 
     /// Update the glitch window from the current dit estimate.
     pub fn set_dot_seconds(&mut self, dot_s: f32) {
-        let glitch_s = (0.25 * dot_s).clamp(0.004, 0.015);
+        let glitch_s = (0.28 * dot_s).clamp(0.004, 0.018);
         self.glitch_samples = ((glitch_s * self.sample_rate) as u32).max(1);
     }
 
@@ -146,18 +146,42 @@ const MAX_DOT_S: f32 = 0.15;
 const MIN_DOT_S: f32 = 0.02;
 /// Marks kept for the two-cluster fit.
 const HISTORY: usize = 24;
-/// max/min ratio above which the window clearly holds both dits and dahs.
+/// All recent marks (including rejected fragments) for fast-sender reseed.
+const RECENT_ALL: usize = 12;
+/// Spaces kept for the char/word gap fit (in dit units).
+const SPACE_HISTORY: usize = 16;
+/// p85/p15 ratio above which the mark window clearly holds dits and dahs.
 const TWO_CLUSTER_RATIO: f32 = 1.9;
-/// Space boundaries in dits: geometric means of (1,3) and (3,7).
-pub const CHAR_SPACE_DITS: f32 = 1.9;
-pub const WORD_SPACE_DITS: f32 = 4.6;
+/// Marks below this fraction of a dit are flutter fragments — classified as
+/// noise, kept out of the cluster fit so they cannot drag the clock down.
+const FRAGMENT_FRAC: f32 = 0.4;
 
-/// Adaptive dit/dah duration tracker.
+fn percentile(sorted: &[f32], q: f32) -> f32 {
+    sorted[((sorted.len() - 1) as f32 * q) as usize]
+}
+
+fn median_of(values: &[f32]) -> f32 {
+    let mut v = values.to_vec();
+    v.sort_by(f32::total_cmp);
+    v[v.len() / 2]
+}
+
+/// Adaptive dit/dah duration tracker with robust two-cluster fitting for both
+/// mark lengths (dit vs dah) and gap lengths (char vs word).
 #[derive(Clone, Debug)]
 pub struct ElementClock {
     dot_s: f32,
     dash_s: f32,
     marks: VecDeque<f32>,
+    recent_all: VecDeque<f32>,
+    /// All gaps in dit units — the element/char/word cluster window.
+    gaps_dits: VecDeque<f32>,
+    elem_gap_dits: f32,
+    char_gap_dits: f32,
+    word_gap_dits: f32,
+    /// How well recent marks cluster around dit/dah (0–1). Random noise
+    /// keying does not cluster; emission is suppressed while low.
+    confidence: f32,
 }
 
 impl ElementClock {
@@ -167,7 +191,18 @@ impl ElementClock {
             dot_s: dot,
             dash_s: 3.0 * dot,
             marks: VecDeque::with_capacity(HISTORY),
+            recent_all: VecDeque::with_capacity(RECENT_ALL),
+            gaps_dits: VecDeque::with_capacity(SPACE_HISTORY),
+            elem_gap_dits: 1.0,
+            char_gap_dits: 3.0,
+            word_gap_dits: 7.0,
+            confidence: 0.5,
         }
+    }
+
+    /// True while recent mark timing is coherent enough to trust the output.
+    pub fn is_confident(&self) -> bool {
+        self.confidence > 0.55 && self.marks.len() >= 4
     }
 
     pub fn dot_seconds(&self) -> f32 {
@@ -183,79 +218,214 @@ impl ElementClock {
         (self.dot_s * self.dash_s).sqrt()
     }
 
-    /// Record a mark duration and classify it.
-    pub fn classify_mark(&mut self, secs: f32) -> Element {
+    /// Inter-element / inter-character boundary in dits.
+    fn char_boundary_dits(&self) -> f32 {
+        (self.elem_gap_dits * self.char_gap_dits).sqrt().clamp(1.3, 3.2)
+    }
+
+    /// Inter-character / inter-word boundary in dits.
+    fn word_boundary_dits(&self) -> f32 {
+        (self.char_gap_dits * self.word_gap_dits).sqrt().clamp(3.6, 10.0)
+    }
+
+    /// Record a mark duration and classify it. `None` marks a flutter
+    /// fragment that should not become an element.
+    pub fn classify_mark(&mut self, secs: f32) -> Option<Element> {
+        if self.recent_all.len() == RECENT_ALL {
+            self.recent_all.pop_front();
+        }
+        self.recent_all.push_back(secs);
+
+        if secs < FRAGMENT_FRAC * self.dot_s {
+            // Distinguish flutter from a genuinely faster sender: real dits
+            // are self-consistent in length, flutter fragments are spread
+            // out. A tight cluster of short marks reseeds the clock from the
+            // full recent window (dits and dahs together).
+            let thr = FRAGMENT_FRAC * self.dot_s;
+            let (mut n, mut mn, mut mx) = (0usize, f32::MAX, 0.0f32);
+            for &m in self.recent_all.iter().filter(|&&m| m < thr) {
+                n += 1;
+                mn = mn.min(m);
+                mx = mx.max(m);
+            }
+            if n >= 5 && mx / mn.max(1e-4) < 1.6 {
+                self.marks.clear();
+                self.marks.extend(self.recent_all.iter().copied());
+                self.refit();
+            }
+            return None;
+        }
+
         if self.marks.len() == HISTORY {
             self.marks.pop_front();
         }
         self.marks.push_back(secs);
         self.refit();
-        if secs < self.mark_boundary_s() {
+        Some(if secs < self.mark_boundary_s() {
             Element::Dot
         } else {
             Element::Dash
-        }
+        })
     }
 
-    /// Classify a space duration against the current dit clock.
+    /// Record a completed space so element/char/word gap statistics adapt to
+    /// the sender's rhythm. Real fists vary enormously: some leave 2-dit
+    /// element gaps, some leave 5-dit character gaps.
+    pub fn record_space(&mut self, secs: f32) {
+        let dits = secs / self.dot_s.max(1e-4);
+        if !(0.4..=25.0).contains(&dits) {
+            return;
+        }
+        if self.gaps_dits.len() == SPACE_HISTORY {
+            self.gaps_dits.pop_front();
+        }
+        self.gaps_dits.push_back(dits);
+        if self.gaps_dits.len() < 6 {
+            return;
+        }
+        let mut sorted: Vec<f32> = self.gaps_dits.iter().copied().collect();
+        sorted.sort_by(f32::total_cmp);
+        let lo = percentile(&sorted, 0.15).max(0.1);
+        let hi = percentile(&sorted, 0.85);
+        if hi / lo >= 1.8 {
+            // First split: element gaps vs everything longer.
+            let split = (lo * hi).sqrt();
+            let idx = sorted.partition_point(|&s| s < split);
+            if idx > 0 && idx < sorted.len() {
+                self.elem_gap_dits = median_of(&sorted[..idx]);
+                let upper = &sorted[idx..];
+                // Second split inside the longer gaps: char vs word. Word
+                // gaps are sparse, so use wide percentiles to catch them.
+                let u_lo = percentile(upper, 0.10).max(0.1);
+                let u_hi = percentile(upper, 0.90);
+                let mut char_done = false;
+                if u_hi / u_lo >= 1.8 {
+                    let u_split = (u_lo * u_hi).sqrt();
+                    let u_idx = upper.partition_point(|&s| s < u_split);
+                    if u_idx > 0 && u_idx < upper.len() {
+                        self.char_gap_dits = median_of(&upper[..u_idx]);
+                        self.word_gap_dits = median_of(&upper[u_idx..]);
+                        char_done = true;
+                    }
+                }
+                if !char_done {
+                    // Long gaps are one cluster — char or word by log distance.
+                    let m = median_of(upper);
+                    let to_char = (m / self.char_gap_dits).ln().abs();
+                    let to_word = (m / self.word_gap_dits).ln().abs();
+                    if to_char <= to_word {
+                        self.char_gap_dits += 0.3 * (m - self.char_gap_dits);
+                    } else {
+                        self.word_gap_dits += 0.3 * (m - self.word_gap_dits);
+                    }
+                }
+            }
+        } else {
+            // Window holds a single gap size — almost always element gaps.
+            let m = percentile(&sorted, 0.5);
+            if (m / self.elem_gap_dits).ln().abs() < (m / self.char_gap_dits).ln().abs() {
+                self.elem_gap_dits += 0.3 * (m - self.elem_gap_dits);
+            }
+        }
+        self.elem_gap_dits = self.elem_gap_dits.clamp(0.6, 2.2);
+        self.char_gap_dits = self
+            .char_gap_dits
+            .clamp((1.5 * self.elem_gap_dits).max(2.0), 7.0);
+        self.word_gap_dits = self.word_gap_dits.clamp(1.6 * self.char_gap_dits, 20.0);
+    }
+
+    /// Classify a space duration against the adaptive gap statistics.
     pub fn space_kind(&self, secs: f32) -> SpaceKind {
-        if secs < CHAR_SPACE_DITS * self.dot_s {
+        let dits = secs / self.dot_s.max(1e-4);
+        if dits < self.char_boundary_dits() {
             SpaceKind::Element
-        } else if secs < WORD_SPACE_DITS * self.dot_s {
+        } else if dits < self.word_boundary_dits() {
             SpaceKind::Char
         } else {
             SpaceKind::Word
         }
     }
 
-    /// Two-cluster fit over the recent-mark window.
+    /// Robust two-cluster fit over the recent-mark window.
     ///
-    /// When the window spans both dits and dahs (max/min ratio ≥ ~1.9) the
-    /// clusters are split at the geometric mean of the extremes and each
-    /// estimate becomes its cluster's mean. With a single cluster present, the
-    /// mean nudges whichever estimate it is closer to in log distance, so the
+    /// Splits at the geometric mean of the 15th/85th percentiles (immune to a
+    /// few flutter fragments or stuck-key outliers, unlike min/max) and takes
+    /// each cluster's median. With a single cluster present, the median
+    /// nudges whichever estimate it is closer to in log distance, so the
     /// clock still tracks speed drift from an all-dit or all-dah stretch.
     fn refit(&mut self) {
-        let (mut mn, mut mx) = (f32::MAX, 0.0f32);
-        for &m in &self.marks {
-            mn = mn.min(m);
-            mx = mx.max(m);
-        }
-        if mn <= 0.0 || mx <= 0.0 {
+        if self.marks.is_empty() {
             return;
         }
-        if mx / mn >= TWO_CLUSTER_RATIO {
-            let split = (mn * mx).sqrt();
-            let (mut lo_sum, mut lo_n, mut hi_sum, mut hi_n) = (0.0f32, 0u32, 0.0f32, 0u32);
-            for &m in &self.marks {
-                if m < split {
-                    lo_sum += m;
-                    lo_n += 1;
-                } else {
-                    hi_sum += m;
-                    hi_n += 1;
+        let mut sorted: Vec<f32> = self.marks.iter().copied().collect();
+        sorted.sort_by(f32::total_cmp);
+        let lo = percentile(&sorted, 0.15).max(1e-4);
+        let hi = percentile(&sorted, 0.85).max(1e-4);
+
+        let (mut cand_dot, mut cand_dash) = (self.dot_s, self.dash_s);
+        let mut split_done = false;
+        if hi / lo >= TWO_CLUSTER_RATIO {
+            let split = (lo * hi).sqrt();
+            let idx = sorted.partition_point(|&m| m < split);
+            if idx > 0 && idx < sorted.len() {
+                let dot = median_of(&sorted[..idx]);
+                let dash = median_of(&sorted[idx..]);
+                if dash / dot >= 1.8 {
+                    cand_dot = dot;
+                    cand_dash = dash;
+                    split_done = true;
                 }
             }
-            if lo_n > 0 {
-                self.dot_s = lo_sum / lo_n as f32;
-            }
-            if hi_n > 0 {
-                self.dash_s = hi_sum / hi_n as f32;
-            }
-        } else {
-            let mean = self.marks.iter().sum::<f32>() / self.marks.len() as f32;
-            let to_dot = (mean / self.dot_s).ln().abs();
-            let to_dash = (mean / self.dash_s).ln().abs();
+        }
+        if !split_done {
+            let m = percentile(&sorted, 0.5);
+            let to_dot = (m / self.dot_s).ln().abs();
+            let to_dash = (m / self.dash_s).ln().abs();
             if to_dot <= to_dash {
-                self.dot_s += 0.3 * (mean - self.dot_s);
+                cand_dot += 0.3 * (m - cand_dot);
             } else {
-                self.dash_s += 0.3 * (mean - self.dash_s);
+                cand_dash += 0.3 * (m - cand_dash);
             }
         }
-        self.dot_s = self.dot_s.clamp(MIN_DOT_S, MAX_DOT_S);
-        self.dash_s = self
-            .dash_s
-            .clamp(2.0 * self.dot_s, (4.5 * self.dot_s).min(6.0 * MAX_DOT_S));
+        cand_dot = cand_dot.clamp(MIN_DOT_S, MAX_DOT_S);
+        cand_dash = cand_dash.clamp(2.0 * cand_dot, (4.5 * cand_dot).min(6.0 * MAX_DOT_S));
+
+        // Only commit a fit the window actually supports: genuine keying
+        // clusters tightly around dit/dah with an empty zone between them,
+        // random noise marks fill the whole range. A poor fit freezes the
+        // clock and drops confidence, which suppresses emission until
+        // coherent keying returns.
+        let q = self.timing_quality(cand_dot, cand_dash);
+        if q >= 0.5 {
+            self.dot_s = cand_dot;
+            self.dash_s = cand_dash;
+            self.confidence += 0.3 * (q.min(1.0) - self.confidence);
+        } else {
+            let old_q = self.timing_quality(self.dot_s, self.dash_s);
+            self.confidence += 0.3 * (old_q.max(q).clamp(0.0, 1.0) - self.confidence);
+        }
+        self.confidence = self.confidence.clamp(0.0, 1.0);
+    }
+
+    /// Cluster fit quality: fraction of window marks near dit or dah, minus a
+    /// penalty for marks in the forbidden zone around the dit/dah boundary
+    /// where real keying never lands.
+    fn timing_quality(&self, dot: f32, dash: f32) -> f32 {
+        const LOG_TOL: f32 = 0.28;
+        const BOUNDARY_TOL: f32 = 0.20;
+        let boundary = (dot * dash).sqrt().max(1e-4);
+        let (mut near, mut forbidden) = (0usize, 0usize);
+        for &m in &self.marks {
+            let d = (m / dot).ln().abs().min((m / dash).ln().abs());
+            if d < LOG_TOL {
+                near += 1;
+            }
+            if (m / boundary).ln().abs() < BOUNDARY_TOL {
+                forbidden += 1;
+            }
+        }
+        let n = self.marks.len().max(1) as f32;
+        near as f32 / n - 1.5 * forbidden as f32 / n
     }
 
     pub fn reset(&mut self, initial_wpm: f32) {
@@ -343,7 +513,7 @@ mod tests {
         for (i, &m) in pattern.iter().cycle().take(30).enumerate() {
             let el = c.classify_mark(m);
             let want = if m < 0.06 { Element::Dot } else { Element::Dash };
-            if i >= 4 && el != want {
+            if i >= 4 && el != Some(want) {
                 wrong += 1;
             }
         }
@@ -359,8 +529,8 @@ mod tests {
             c.classify_mark(0.10);
             c.classify_mark(0.30);
         }
-        assert!(matches!(c.classify_mark(0.10), Element::Dot));
-        assert!(matches!(c.classify_mark(0.30), Element::Dash));
+        assert_eq!(c.classify_mark(0.10), Some(Element::Dot));
+        assert_eq!(c.classify_mark(0.30), Some(Element::Dash));
         assert!((c.dot_seconds() - 0.10).abs() < 0.02);
     }
 
@@ -370,5 +540,99 @@ mod tests {
         assert_eq!(c.space_kind(0.05), SpaceKind::Element);
         assert_eq!(c.space_kind(0.15), SpaceKind::Char);
         assert_eq!(c.space_kind(0.40), SpaceKind::Word);
+    }
+
+    #[test]
+    fn flutter_fragments_do_not_poison_the_clock() {
+        // Real keying at 22 WPM (55/165 ms) with ~25% flutter fragments,
+        // as seen on HF: the clock must stay near 55 ms and fragments must
+        // be rejected instead of dragging the fit to its floor.
+        let mut c = ElementClock::new(22.0);
+        let pattern = [0.055, 0.165, 0.012, 0.055, 0.165, 0.022, 0.055, 0.165];
+        let mut rejected = 0;
+        for &m in pattern.iter().cycle().take(64) {
+            if c.classify_mark(m).is_none() {
+                rejected += 1;
+            }
+        }
+        assert!(
+            (c.dot_seconds() - 0.055).abs() < 0.012,
+            "clock dragged by fragments: dot={}",
+            c.dot_seconds()
+        );
+        assert!(rejected >= 8, "fragments not rejected: {rejected}");
+        assert_eq!(c.classify_mark(0.055), Some(Element::Dot));
+        assert_eq!(c.classify_mark(0.165), Some(Element::Dash));
+    }
+
+    #[test]
+    fn genuinely_fast_sender_still_reseeds() {
+        // Lock to 12 WPM first, then a 45 WPM sender (dit 26.7 ms) appears.
+        let mut c = ElementClock::new(12.0);
+        for _ in 0..8 {
+            c.classify_mark(0.10);
+            c.classify_mark(0.30);
+        }
+        let mut locked = false;
+        for _ in 0..24 {
+            c.classify_mark(0.027);
+            c.classify_mark(0.080);
+            if (c.dot_seconds() - 0.027).abs() < 0.01 {
+                locked = true;
+                break;
+            }
+        }
+        assert!(locked, "never reseeded to fast sender: dot={}", c.dot_seconds());
+    }
+
+    #[test]
+    fn wide_character_gaps_adapt_word_boundary() {
+        // Operator keys with ~5.5-dit character gaps and ~12-dit word gaps
+        // (the RODEZ capture). After a few gaps the 5.5-dit spaces must
+        // classify as Char, not Word.
+        let mut c = ElementClock::new(22.0); // dit ≈ 54.5 ms
+        let dit = c.dot_seconds();
+        for _ in 0..6 {
+            c.record_space(1.0 * dit);
+            c.record_space(1.0 * dit);
+            c.record_space(5.5 * dit);
+            c.record_space(5.5 * dit);
+            c.record_space(12.0 * dit);
+        }
+        assert_eq!(c.space_kind(5.5 * dit), SpaceKind::Char, "5.5-dit gap");
+        assert_eq!(c.space_kind(12.0 * dit), SpaceKind::Word, "12-dit gap");
+        // Element gaps still classify as Element.
+        assert_eq!(c.space_kind(1.0 * dit), SpaceKind::Element);
+    }
+
+    #[test]
+    fn standard_gaps_keep_standard_boundaries() {
+        let mut c = ElementClock::new(25.0);
+        let dit = c.dot_seconds();
+        for _ in 0..8 {
+            c.record_space(1.0 * dit);
+            c.record_space(1.0 * dit);
+            c.record_space(3.0 * dit);
+            c.record_space(7.0 * dit);
+        }
+        assert_eq!(c.space_kind(1.0 * dit), SpaceKind::Element);
+        assert_eq!(c.space_kind(3.0 * dit), SpaceKind::Char);
+        assert_eq!(c.space_kind(7.0 * dit), SpaceKind::Word);
+    }
+
+    #[test]
+    fn sloppy_element_gaps_adapt_char_boundary() {
+        // Straight-key sender with ~1.9-dit element gaps and ~3.8-dit char
+        // gaps: a fixed 1.73-dit boundary splits his characters apart.
+        let mut c = ElementClock::new(14.0);
+        let dit = c.dot_seconds();
+        for _ in 0..8 {
+            c.record_space(1.8 * dit);
+            c.record_space(2.0 * dit);
+            c.record_space(1.9 * dit);
+            c.record_space(3.8 * dit);
+        }
+        assert_eq!(c.space_kind(1.9 * dit), SpaceKind::Element, "element gap split");
+        assert_eq!(c.space_kind(3.8 * dit), SpaceKind::Char, "char gap");
     }
 }

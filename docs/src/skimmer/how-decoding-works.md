@@ -36,17 +36,29 @@ QSB fades) and places hysteresis thresholds between them. A debouncing keyer
 then bridges brief dropouts inside a dash and drops noise blips inside a gap
 before any timing is measured.
 
-The decoder estimates **dot length** with a two-cluster fit over recent mark
-durations — it locks onto a sender's speed within a few characters, from
-about 8 to 60 WPM — and classifies gaps:
+The decoder estimates **dot length** with a robust two-cluster fit over
+recent mark durations (percentile split + cluster medians, so flutter
+fragments cannot drag it) — it locks onto a sender's speed within a few
+characters, from about 8 to 60 WPM — and classifies gaps against adaptive
+statistics, because real operators stretch letter gaps well past the
+textbook 3 dits:
 
-| Gap length (approx.) | Meaning |
-|----------------------|---------|
+| Gap cluster | Meaning |
+|-------------|---------|
 | ~1 dot | within same character |
-| ~3 dots | between letters |
-| ~7 dots | between words |
+| shorter gap cluster | between letters |
+| longer gap cluster | between words |
 
-Speed adapts continuously — operators change keying; the cluster fit follows.
+Speed adapts continuously, and a **timing-confidence gate** watches how well
+recent marks cluster around dit/dah: random noise or an unintelligible
+pileup does not cluster, so the decoder freezes its clock and emits nothing
+instead of spraying `E T E E` garbage.
+
+Decoding is focused around the tuned frequency (default ±1.5 kHz, the
+*Decode span* setting; 0 decodes the whole band) so CPU stays bounded no
+matter how wide the input is. The audible receive chain is completely
+separate from the skimmer's decode chain — decoder settings never change
+what you hear.
 
 ---
 

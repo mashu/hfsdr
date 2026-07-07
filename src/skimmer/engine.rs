@@ -381,6 +381,16 @@ impl Skimmer {
                 }
             }
         }
+        // Focus: only decode near the tuned frequency (bounded CPU); the
+        // whole band is still displayed, just not all of it decoded.
+        if self.config.focus_span_hz > 0.0 {
+            let half = self.config.focus_span_hz * 0.5;
+            let center = self.config.focus_center_hz;
+            peaks.retain(|p| (p.offset_hz + spectrum_pan_hz - center).abs() <= half);
+            let margin = half + self.config.bucket_hz;
+            self.channels
+                .retain(|_, ch| (ch.offset_hz - center).abs() <= margin);
+        }
         peaks.sort_by(|a, b| b.snr_db.total_cmp(&a.snr_db));
         for p in &peaks {
             let offset_hz = p.offset_hz + spectrum_pan_hz;
@@ -400,8 +410,12 @@ impl Skimmer {
                 .min_by(|(_, a), (_, b)| a.snr_db.total_cmp(&b.snr_db))
                 .map(|(k, _)| *k)
             {
-                let weakest_snr = self.channels[&weakest_key].snr_db;
-                if p.snr_db > weakest_snr + 1.0 {
+                let weakest = &self.channels[&weakest_key];
+                // A channel that is actively decoding keeps its slot unless the
+                // newcomer is clearly stronger — transient peaks must not
+                // thrash decoders mid-transmission.
+                let guard = if weakest.gate.is_armed() { 6.0 } else { 1.0 };
+                if p.snr_db > weakest.snr_db + guard {
                     self.channels.remove(&weakest_key);
                     self.channels.insert(
                         key,
@@ -496,6 +510,116 @@ fn trim_decoded_prefix(text: &mut String, call: &str) {
 mod tests {
     use super::*;
     use crate::skimmer::config::{DecoderParams, EnvelopeSettings, SkimmerConfig, SkimmerDecoderKind};
+
+    /// Offline diagnostic: dump the channel envelope chain for a capture.
+    /// CAPTURE=path OFFSET=hz OUT=csv cargo test --lib diagnose_capture -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn diagnose_capture() {
+        use std::io::Read as _;
+        let path = std::env::var("CAPTURE").expect("CAPTURE env");
+        let offset: f32 = std::env::var("OFFSET").map(|s| s.parse().unwrap()).unwrap_or(-11.7);
+        let out_path = std::env::var("OUT").unwrap_or_else(|_| "/tmp/env.csv".into());
+        let meta = crate::read_meta(std::path::Path::new(&path)).expect("meta");
+        let mut file = std::fs::File::open(&path).expect("open");
+        use std::io::Seek as _;
+        file.seek(std::io::SeekFrom::Start(32)).unwrap();
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(file).read_to_end(&mut raw).unwrap();
+        let samples: Vec<Complex32> = raw
+            .chunks_exact(8)
+            .map(|c| Complex32 {
+                re: f32::from_le_bytes(c[0..4].try_into().unwrap()),
+                im: f32::from_le_bytes(c[4..8].try_into().unwrap()),
+            })
+            .collect();
+        let rate = meta.sample_rate as f32;
+        let dc: (f32, f32) = samples.iter().fold((0.0, 0.0), |a, s| (a.0 + s.re, a.1 + s.im));
+        eprintln!(
+            "capture {} samples @ {rate} Hz; DC = ({:.5}, {:.5})",
+            samples.len(),
+            dc.0 / samples.len() as f32,
+            dc.1 / samples.len() as f32
+        );
+
+        let config = SkimmerConfig { min_decode_snr_db: 0.0, min_snr_db: 0.0, ..SkimmerConfig::default() };
+        let mut ch = DecoderChannel::new(offset, rate, 99.0, &config);
+        let mut env_all: Vec<f32> = Vec::new();
+        let mut afc_track: Vec<f32> = Vec::new();
+        for chunk in samples.chunks(2048) {
+            let _ = ch.process(chunk, rate, config.lpf_cutoff_hz);
+            env_all.extend_from_slice(&ch.env_buf);
+            afc_track.push(ch.afc_hz);
+        }
+        eprintln!("env samples: {} @ {} Hz, afc first/last: {:.2} / {:.2} Hz", env_all.len(), ch.env_rate, afc_track.first().unwrap_or(&0.0), afc_track.last().unwrap_or(&0.0));
+        let mut sorted = env_all.clone();
+        sorted.sort_by(f32::total_cmp);
+        let pct = |p: f32| sorted[((sorted.len() - 1) as f32 * p) as usize];
+        eprintln!(
+            "env percentiles: p05 {:.4} p25 {:.4} p50 {:.4} p75 {:.4} p90 {:.4} p99 {:.4}",
+            pct(0.05), pct(0.25), pct(0.50), pct(0.75), pct(0.90), pct(0.99)
+        );
+
+        // Replay tracker + keyer over the envelope and log everything.
+        let mut env = KeyingEnvelope::new(config.decoder_params.envelope, ch.env_rate);
+        let mut keyer = crate::skimmer::timing::Keyer::new(ch.env_rate);
+        let mut clock = crate::skimmer::timing::ElementClock::new(config.decoder_params.initial_wpm);
+        keyer.set_dot_seconds(clock.dot_seconds());
+        let mut key = false;
+        let verbose = std::env::var("VERBOSE").is_ok();
+        let mut csv = String::from("i,env,noise_thr_low,thr_high,key,signal\n");
+        let mut marks: Vec<f32> = Vec::new();
+        let mut spaces: Vec<f32> = Vec::new();
+        for (i, &x) in env_all.iter().enumerate() {
+            let step = env.update(x);
+            key = if !step.signal_present { false } else if key { step.env >= step.thr_low } else { step.env > step.thr_high };
+            if let Some(ev) = keyer.step(key) {
+                match ev {
+                    crate::skimmer::timing::KeyEvent::Mark(s) => {
+                        clock.classify_mark(s);
+                        keyer.set_dot_seconds(clock.dot_seconds());
+                        marks.push(s);
+                        if verbose {
+                            eprintln!(
+                                "t={:6.2}s mark {:4.0} ms   dot {:4.0} dash {:4.0}",
+                                i as f32 / ch.env_rate, s * 1e3,
+                                clock.dot_seconds() * 1e3, clock.dash_seconds() * 1e3
+                            );
+                        }
+                    }
+                    crate::skimmer::timing::KeyEvent::Space(s) => {
+                        clock.record_space(s);
+                        if verbose && s / clock.dot_seconds() > 1.6 {
+                            eprintln!(
+                                "t={:6.2}s space {:5.1} dits  kind {:?}",
+                                i as f32 / ch.env_rate, s / clock.dot_seconds(),
+                                clock.space_kind(s)
+                            );
+                        }
+                        spaces.push(s);
+                    }
+                }
+            }
+            csv.push_str(&format!(
+                "{i},{:.5},{:.5},{:.5},{},{}\n",
+                step.env, step.thr_low, step.thr_high, key as u8, step.signal_present as u8
+            ));
+        }
+        std::fs::write(&out_path, csv).unwrap();
+        let fmt = |v: &Vec<f32>| {
+            let mut s: Vec<f32> = v.clone();
+            s.sort_by(f32::total_cmp);
+            if s.is_empty() { return "none".into(); }
+            format!(
+                "n={} min {:.0}ms p25 {:.0} p50 {:.0} p75 {:.0} max {:.0}",
+                s.len(), s[0] * 1e3, s[s.len() / 4] * 1e3, s[s.len() / 2] * 1e3, s[3 * s.len() / 4] * 1e3, s[s.len() - 1] * 1e3
+            )
+        };
+        eprintln!("marks:  {}", fmt(&marks));
+        eprintln!("spaces: {}", fmt(&spaces));
+        eprintln!("clock dot {:.0} ms dash {:.0} ms → {:.0} wpm", clock.dot_seconds() * 1e3, clock.dash_seconds() * 1e3, 1.2 / clock.dot_seconds());
+        eprintln!("csv written to {out_path}");
+    }
     use crate::skimmer::morse::encode_char;
     use crate::skimmer::spots::SpotSort;
     use std::f32::consts::TAU;

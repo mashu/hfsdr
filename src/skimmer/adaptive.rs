@@ -76,15 +76,20 @@ impl AdaptiveCwDecoder {
             step.env > step.thr_high
         };
 
-        if let Some(KeyEvent::Mark(secs)) = self.keyer.step(self.key_down) {
-            let el = self.clock.classify_mark(secs);
-            self.keyer.set_dot_seconds(self.clock.dot_seconds());
-            if self.symbol.len() >= MAX_ELEMENTS {
-                self.poisoned = true;
-            } else {
-                self.symbol.push(el.as_char());
+        match self.keyer.step(self.key_down) {
+            Some(KeyEvent::Mark(secs)) => {
+                if let Some(el) = self.clock.classify_mark(secs) {
+                    self.keyer.set_dot_seconds(self.clock.dot_seconds());
+                    if self.symbol.len() >= MAX_ELEMENTS {
+                        self.poisoned = true;
+                    } else {
+                        self.symbol.push(el.as_char());
+                    }
+                    self.space_flushed = 0;
+                }
             }
-            self.space_flushed = 0;
+            Some(KeyEvent::Space(secs)) => self.clock.record_space(secs),
+            None => {}
         }
 
         if self.keyer.in_space() && self.space_flushed < 2 {
@@ -104,6 +109,13 @@ impl AdaptiveCwDecoder {
     }
 
     fn flush_symbol(&mut self, out: &mut String) {
+        // Incoherent mark timing means noise or an unintelligible pileup —
+        // emitting characters from it is how false text is born.
+        if !self.clock.is_confident() {
+            self.poisoned = false;
+            self.symbol.clear();
+            return;
+        }
         let ch = if self.poisoned {
             self.poisoned = false;
             self.symbol.clear();
