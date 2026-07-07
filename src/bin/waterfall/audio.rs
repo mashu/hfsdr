@@ -34,6 +34,13 @@ pub struct AudioOutput {
     output_rate: u32,
     device_name: String,
     skip_samples: Arc<AtomicUsize>,
+    /// Fractional source read position carried across [`Self::push`] calls
+    /// (sits in [-1, 0) between blocks, pointing back at `resample_last`).
+    resample_pos: f64,
+    /// Last source sample of the previous block — interpolation anchor.
+    resample_last: f32,
+    /// Smoothed ring occupancy for the clock-drift servo.
+    fill_avg: f32,
     _stream: Stream,
 }
 
@@ -109,6 +116,9 @@ impl AudioOutput {
             output_rate,
             device_name,
             skip_samples,
+            resample_pos: 0.0,
+            resample_last: 0.0,
+            fill_avg: 0.5,
             _stream: stream,
         })
     }
@@ -133,6 +143,11 @@ impl AudioOutput {
     }
 
     /// Push mono samples at `source_rate`; resamples linearly when rates differ.
+    ///
+    /// The interpolation phase carries across calls, so block boundaries stay
+    /// continuous, and a slow servo (±0.3 %) on the resample ratio keeps the ring
+    /// near half full so source/sink clock mismatch never accumulates into an
+    /// overflow drop or an underrun gap.
     pub fn push(&mut self, mono: &[f32], source_rate: u32, volume: f32) {
         if mono.is_empty() || volume <= 0.0 {
             return;
@@ -146,20 +161,58 @@ impl AudioOutput {
             }
             return;
         }
-        let ratio = self.output_rate as f64 / source_rate as f64;
-        let out_len = (mono.len() as f64 * ratio).ceil() as usize;
-        for o in 0..out_len {
-            if self.producer.is_full() {
-                break;
-            }
-            let src_idx = o as f64 / ratio;
-            let i = src_idx.floor() as usize;
-            let frac = (src_idx - i as f64) as f32;
-            let a = mono.get(i).copied().unwrap_or(0.0);
-            let b = mono.get(i + 1).copied().unwrap_or(a);
-            let _ = self.producer.push((a + (b - a) * frac) * volume);
-        }
+
+        let fill = 1.0 - self.producer.slots() as f32 / RING_CAPACITY as f32;
+        self.fill_avg += 0.02 * (fill - self.fill_avg);
+        let trim = ((self.fill_avg - 0.5) * 0.01).clamp(-0.003, 0.003);
+        let step = source_rate as f64 / self.output_rate as f64 * (1.0 + trim as f64);
+
+        let (pos, last) = resample_push(
+            &mut self.producer,
+            mono,
+            step,
+            self.resample_pos,
+            self.resample_last,
+            volume,
+        );
+        self.resample_pos = pos;
+        self.resample_last = last;
     }
+}
+
+/// Linear-interpolation resampler with phase carried across blocks.
+///
+/// `pos` is the fractional read position into `mono` (may sit in [-1, 0)
+/// pointing at `last`, the final sample of the previous block). Returns the
+/// carried `(pos, last)` for the next call.
+fn resample_push(
+    producer: &mut Producer<f32>,
+    mono: &[f32],
+    step: f64,
+    mut pos: f64,
+    last: f32,
+    volume: f32,
+) -> (f64, f32) {
+    let n = mono.len();
+    let limit = n as f64 - 1.0;
+    while pos < limit {
+        if producer.is_full() {
+            break;
+        }
+        let i = pos.floor();
+        let frac = (pos - i) as f32;
+        let (a, b) = if i < 0.0 {
+            (last, mono[0])
+        } else {
+            let idx = i as usize;
+            (mono[idx], mono[idx + 1])
+        };
+        let _ = producer.push((a + (b - a) * frac) * volume);
+        pos += step;
+    }
+    // Lands in [-1, 0) when the block was fully consumed; clamp after an
+    // overflow break (the dropped tail is a discontinuity either way).
+    ((pos - n as f64).max(-1.0), mono[n - 1])
 }
 
 fn fill_output(
@@ -183,9 +236,14 @@ fn fill_output(
 }
 
 fn next_output_sample(consumer: &mut Consumer<f32>, skip: &AtomicUsize) -> f32 {
-    if skip.load(Ordering::Relaxed) > 0 {
-        let _ = consumer.pop();
-        skip.fetch_sub(1, Ordering::Relaxed);
+    // Drain the whole skip budget at once: dropping stale samples in one go
+    // resumes fresh audio immediately instead of muting for the skip duration.
+    let mut remaining = skip.swap(0, Ordering::Relaxed);
+    while remaining > 0 && consumer.pop().is_ok() {
+        remaining -= 1;
+    }
+    if remaining > 0 {
+        skip.fetch_add(remaining, Ordering::Relaxed);
         return 0.0;
     }
     consumer.pop().unwrap_or(0.0)
@@ -260,18 +318,60 @@ mod tests {
     }
 
     #[test]
-    fn skip_outputs_silence_and_drains_ring() {
+    fn skip_drains_stale_samples_and_resumes_immediately() {
         let (mut prod, mut cons) = RingBuffer::<f32>::new(4);
         let skip = AtomicUsize::new(1);
         prod.push(0.25).unwrap();
         prod.push(0.75).unwrap();
         let mut data = [1.0_f32; 1];
         fill_output(&mut data, 1, &mut cons, &skip);
-        assert_eq!(data[0], 0.0);
+        // The stale 0.25 is dropped in one go; fresh audio plays right away.
+        assert!((data[0] - 0.75).abs() < 1e-6);
         assert_eq!(skip.load(Ordering::Relaxed), 0);
-        let mut tail = [0.0_f32; 1];
-        fill_output(&mut tail, 1, &mut cons, &skip);
-        assert!((tail[0] - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn skip_larger_than_queue_keeps_remainder() {
+        let (mut prod, mut cons) = RingBuffer::<f32>::new(4);
+        let skip = AtomicUsize::new(3);
+        prod.push(0.25).unwrap();
+        let mut data = [1.0_f32; 1];
+        fill_output(&mut data, 1, &mut cons, &skip);
+        assert_eq!(data[0], 0.0);
+        assert_eq!(skip.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn resampler_is_continuous_across_block_boundaries() {
+        // 12 kHz -> 48 kHz sine split into uneven blocks must match a single
+        // one-shot pass exactly (phase carried, no per-block reset).
+        let n = 480;
+        let src: Vec<f32> = (0..n)
+            .map(|i| (std::f32::consts::TAU * 600.0 * i as f32 / 12_000.0).sin())
+            .collect();
+        let step = 12_000.0f64 / 48_000.0;
+
+        let (mut prod_a, mut cons_a) = RingBuffer::<f32>::new(8192);
+        let mut pos = 0.0;
+        let mut last = 0.0;
+        for chunk in [&src[..37], &src[37..300], &src[300..]] {
+            let (p, l) = resample_push(&mut prod_a, chunk, step, pos, last, 1.0);
+            pos = p;
+            last = l;
+        }
+
+        let (mut prod_b, mut cons_b) = RingBuffer::<f32>::new(8192);
+        let _ = resample_push(&mut prod_b, &src, step, 0.0, 0.0, 1.0);
+
+        let mut max_err = 0.0f32;
+        loop {
+            match (cons_a.pop(), cons_b.pop()) {
+                (Ok(a), Ok(b)) => max_err = max_err.max((a - b).abs()),
+                (Err(_), Err(_)) => break,
+                _ => panic!("chunked and one-shot resample lengths differ"),
+            }
+        }
+        assert!(max_err < 1e-6, "block-boundary discontinuity: {max_err}");
     }
 
     #[test]

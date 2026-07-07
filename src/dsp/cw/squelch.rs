@@ -6,6 +6,7 @@ pub struct CwSquelch {
     envelope: f32,
     open: bool,
     hang_left: u32,
+    gain: f32,
 }
 
 impl Default for CwSquelch {
@@ -20,6 +21,7 @@ impl CwSquelch {
             envelope: 0.0,
             open: false,
             hang_left: 0,
+            gain: 0.0,
         }
     }
 
@@ -27,6 +29,7 @@ impl CwSquelch {
         self.envelope = 0.0;
         self.open = false;
         self.hang_left = 0;
+        self.gain = 0.0;
     }
 
     pub fn is_open(&self) -> bool {
@@ -68,9 +71,15 @@ impl CwSquelch {
             }
         }
 
+        // ~3 ms linear ramp toward the gate target — a hard 0/1 step clicks.
         let target = if self.open { 1.0 } else { 0.0 };
-        let gate = if target > 0.5 { 1.0 } else { 0.0 };
-        sample * gate
+        let step = 1.0 / (sample_rate * 0.003).max(1.0);
+        self.gain = if target > self.gain {
+            (self.gain + step).min(target)
+        } else {
+            (self.gain - step).max(target)
+        };
+        sample * self.gain
     }
 }
 
@@ -101,5 +110,23 @@ mod tests {
             let _ = sq.process(0.0, 0.005, rate, 0.02, 0.01, 80.0);
         }
         assert!(sq.is_open(), "hang should keep squelch open");
+    }
+
+    #[test]
+    fn gate_ramps_instead_of_stepping() {
+        let mut sq = CwSquelch::new();
+        let rate = 12_000.0;
+        let mut prev = 0.0f32;
+        let mut max_step = 0.0f32;
+        for _ in 0..600 {
+            let out = sq.process(1.0, 0.3, rate, 0.02, 0.01, 50.0);
+            max_step = max_step.max((out - prev).abs());
+            prev = out;
+        }
+        assert!(prev > 0.99, "gate should fully open, got {prev}");
+        assert!(
+            max_step < 0.1,
+            "squelch open must ramp, not step: max_step={max_step}"
+        );
     }
 }

@@ -16,7 +16,13 @@ pub struct IqRotator {
     last_rate_hz: f32,
     mix_up: bool,
     rot_scratch: Vec<Complex32>,
+    renorm_ctr: u32,
 }
+
+/// Renormalize the phasor at least this often on the per-sample path; the f32
+/// recurrence otherwise drifts in magnitude (|step| ≠ 1 exactly) and the mixed
+/// signal slowly fades or grows over minutes.
+const RENORM_INTERVAL: u32 = 512;
 
 impl Default for IqRotator {
     fn default() -> Self {
@@ -33,11 +39,24 @@ impl IqRotator {
             last_rate_hz: 0.0,
             mix_up,
             rot_scratch: Vec::new(),
+            renorm_ctr: 0,
         }
     }
 
     pub fn reset(&mut self) {
         self.rot = Complex32 { re: 1.0, im: 0.0 };
+        self.renorm_ctr = 0;
+    }
+
+    /// Pin |rot| back to 1. First-order inverse sqrt is exact enough because the
+    /// magnitude never strays more than ~1e-4 between renormalizations.
+    #[inline]
+    fn renormalize(&mut self) {
+        let mag2 = self.rot.re * self.rot.re + self.rot.im * self.rot.im;
+        let k = 0.5 * (3.0 - mag2);
+        self.rot.re *= k;
+        self.rot.im *= k;
+        self.renorm_ctr = 0;
     }
 
     pub fn sync_step(&mut self, freq_hz: f32, sample_rate_hz: f32) {
@@ -71,6 +90,10 @@ impl IqRotator {
     pub fn mix_sample(&mut self, sample: Complex32) -> Complex32 {
         let out = complex_mul(sample, self.rot);
         self.rot = complex_mul(self.rot, self.step);
+        self.renorm_ctr += 1;
+        if self.renorm_ctr >= RENORM_INTERVAL {
+            self.renormalize();
+        }
         out
     }
 
@@ -98,6 +121,7 @@ impl IqRotator {
                 r = complex_mul(r, step);
             }
             self.rot = r;
+            self.renormalize();
             output.resize(input.len(), Complex32 { re: 0.0, im: 0.0 });
             complex_mul_block(input, &self.rot_scratch, &mut output[..]);
             return;
@@ -109,6 +133,7 @@ impl IqRotator {
             r = complex_mul(r, step);
         }
         self.rot = r;
+        self.renormalize();
     }
 
     /// Fused block mix-down + decimation — one pass, no intermediate IQ buffer.
@@ -135,6 +160,7 @@ impl IqRotator {
             }
         }
         self.rot = r;
+        self.renormalize();
     }
 }
 
@@ -177,6 +203,35 @@ mod tests {
         let mut out = Vec::new();
         rot.mix_block(&block, &mut out, 200.0, 48_000.0);
         assert_eq!(out.len(), 128);
+    }
+
+    #[test]
+    fn rotator_magnitude_stays_unity_over_long_runs() {
+        // 12 345 Hz @ 768 kHz is a worst case: without renormalization the f32
+        // recurrence decays |rot| by ~1.3 % per 2 M samples (silence in ~1 h).
+        let rate = 768_000.0;
+        let freq = 12_345.0;
+        let mut rot = IqRotator::default();
+        let block = tone_block(4096, rate, freq);
+        let mut out = Vec::new();
+        for _ in 0..500 {
+            rot.mix_block(&block, &mut out, freq, rate);
+        }
+        let mag = rot.rot.norm();
+        assert!(
+            (mag - 1.0).abs() < 1e-3,
+            "block-path rotator magnitude drifted: {mag}"
+        );
+
+        let mut scalar = IqRotator::default();
+        for _ in 0..600_000 {
+            let _ = scalar.mix_one(Complex32::new(1.0, 0.0), freq, rate);
+        }
+        let mag = scalar.rot.norm();
+        assert!(
+            (mag - 1.0).abs() < 1e-3,
+            "sample-path rotator magnitude drifted: {mag}"
+        );
     }
 
     #[test]

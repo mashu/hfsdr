@@ -299,6 +299,7 @@ impl CwChannel {
                     self.decimator
                         .decimate_block(&front, &mut self.work_decim, diag.decim_fir);
                 }
+                self.work_iq = front;
             } else if let Some(m) = metrics.as_mut() {
                 let t = std::time::Instant::now();
                 self.decimator
@@ -328,6 +329,7 @@ impl CwChannel {
                 self.decimator
                     .decimate_block(&mixed, &mut self.work_decim, diag.decim_fir);
                 m.decim_ns = t_decim.elapsed().as_nanos() as u64;
+                self.work_mix = mixed;
             } else {
                 self.shift_nco.mix_down_block(
                     nco_in,
@@ -338,6 +340,7 @@ impl CwChannel {
                 let mixed = std::mem::take(&mut self.work_mix);
                 self.decimator
                     .decimate_block(&mixed, &mut self.work_decim, diag.decim_fir);
+                self.work_mix = mixed;
             }
         }
 
@@ -371,6 +374,7 @@ impl CwChannel {
                 None,
             );
         }
+        self.work_decim = decimated;
     }
 
     fn process_audio_chain(
@@ -409,21 +413,22 @@ impl CwChannel {
         } else {
             let notched = std::mem::take(&mut self.work_mix);
             self.apply_channel_filter(&notched, audio_rate, settings, channel_filter);
+            self.work_mix = notched;
         }
+        let mut sum_sq = 0.0f32;
+        let mut peak = 0.0f32;
         for i in 0..self.work_iq.len() {
             let level = self.work_iq[i].norm().max(1e-7);
             self.keyer_speed.feed(level, audio_rate);
             self.track_snr(level);
+            sum_sq += level * level;
+            if level > peak {
+                peak = level;
+            }
         }
         if !self.work_iq.is_empty() {
             let n = self.work_iq.len() as f32;
-            let sum_sq: f32 = self.work_iq.iter().map(|z| z.norm().powi(2)).sum();
             let rms = (sum_sq / n).sqrt();
-            let peak = self
-                .work_iq
-                .iter()
-                .map(|z| z.norm())
-                .fold(0.0f32, f32::max);
             // Blend RMS + peak: stable on noise, still tracks CW carrier strength.
             let block_level = (0.65 * rms + 0.35 * peak).max(1e-7);
             self.track_rf_meter(block_level, audio_rate, self.work_iq.len());
