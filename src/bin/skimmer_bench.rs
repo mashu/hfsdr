@@ -159,12 +159,15 @@ fn main() {
     config.decoder = SkimmerDecoderKind::Adaptive;
     let mut sk_adaptive = Skimmer::new(config.clone());
     config.decoder = SkimmerDecoderKind::Bigram;
-    let mut sk_bigram = Skimmer::new(config);
+    let mut sk_bigram = Skimmer::new(config.clone());
+    config.decoder = SkimmerDecoderKind::Bayes;
+    let mut sk_bayes = Skimmer::new(config);
 
     let warmup = 4usize;
     for _ in 0..warmup {
         sk_adaptive.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
         sk_bigram.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
+        sk_bayes.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
     }
     let n = 200u32;
     let t0 = Instant::now();
@@ -177,6 +180,11 @@ fn main() {
         sk_bigram.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
     }
     let bigram_us = t1.elapsed().as_nanos() as f64 / n as f64 / 1000.0;
+    let t2 = Instant::now();
+    for _ in 0..n {
+        sk_bayes.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
+    }
+    let bayes_us = t2.elapsed().as_nanos() as f64 / n as f64 / 1000.0;
 
     let sps = t.frames as f64 * chunk_len as f64 / elapsed;
     eprintln!("\n=== skimmer bench ({elapsed:.2}s, {} frames) ===", t.frames);
@@ -202,4 +210,5 @@ fn main() {
     eprintln!("\nfixed chunk decoder ({} ch, {} samples):", offsets.len(), chunk_len);
     eprintln!("  adaptive         {adaptive_us:.1} µs/frame");
     eprintln!("  bigram           {bigram_us:.1} µs/frame");
+    eprintln!("  bayes            {bayes_us:.1} µs/frame");
 }

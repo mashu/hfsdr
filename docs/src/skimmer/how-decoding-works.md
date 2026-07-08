@@ -30,18 +30,24 @@ After the channel filter, the signal is **amplitude vs time**:
       dot   dash   gap
 ```
 
-Key-down decisions come from an adaptive Schmitt trigger: the tracker follows
-the noise floor and key-down level separately (fast enough to ride through
-QSB fades) and places hysteresis thresholds between them. A debouncing keyer
-then bridges brief dropouts inside a dash and drops noise blips inside a gap
-before any timing is measured.
+The default **Bayesian decoder** treats this stream as a hidden Markov model
+with two states — key-down and key-up. Instead of a threshold crossing, every
+sample contributes *evidence*: how likely is this level under the current
+mark-level estimate vs the noise-level estimate? Both levels are re-estimated
+continuously from the state posterior (online EM), so there is nothing to
+tune per band — the model follows the signal through QSB, drifting noise
+floors and level changes on its own. A short **fixed-lag smoother** lets each
+key decision see ~24 ms of future evidence, so a brief noise dip inside a
+dash is outvoted by its surroundings instead of splitting the element.
 
-The decoder estimates **dot length** with a robust two-cluster fit over
-recent mark durations (percentile split + cluster medians, so flutter
-fragments cannot drag it) — it locks onto a sender's speed within a few
-characters, from about 8 to 60 WPM — and classifies gaps against adaptive
-statistics, because real operators stretch letter gaps well past the
-textbook 3 dits:
+Timing is a mixture model: mark durations belong to *dit*, *dah* or *outlier*
+components; gaps to *element*, *character*, *word* or *outlier*. Classifying
+an element is reading off the component posterior, and every event also
+adapts the dit period and gap centres by responsibility-weighted updates —
+flutter fragments land in the outlier class instead of dragging the clock.
+Speed jumps (a new sender, QRQ mid-QSO) are caught by periodic
+likelihood-based **model selection** over candidate dit periods from about
+8 to 60 WPM:
 
 | Gap cluster | Meaning |
 |-------------|---------|
@@ -49,10 +55,9 @@ textbook 3 dits:
 | shorter gap cluster | between letters |
 | longer gap cluster | between words |
 
-Speed adapts continuously, and a **timing-confidence gate** watches how well
-recent marks cluster around dit/dah: random noise or an unintelligible
-pileup does not cluster, so the decoder freezes its clock and emits nothing
-instead of spraying `E T E E` garbage.
+An **evidence gate** accumulates how well recent marks *and* gaps fit the
+Morse mixture: random noise or an unintelligible pileup fits poorly, so the
+decoder emits nothing instead of spraying `E T E E` garbage.
 
 Decoding is focused around the tuned frequency (default ±1.5 kHz, the
 *Decode span* setting; 0 decodes the whole band) so CPU stays bounded no
@@ -62,15 +67,16 @@ what you hear.
 
 ---
 
-## Bigram beam search (default)
+## Beam search and the language prior
 
 Morse is **ambiguous** when dots run together (`·` vs `·` boundary). A single
 greedy decode confuses `E`/`T`/`I` chains.
 
-**Bigram decoder** keeps multiple hypotheses scored by:
+The Bayesian and Bigram decoders keep multiple hypotheses scored by:
 
-1. **Timing fit** — does this element length match dot/dash?
-2. **Language model** — common letter pairs in English/CW (bigrams).
+1. **Timing fit** — the duration posterior of each element reading.
+2. **Language model** — common letter pairs in CW traffic (bigrams, biased
+   toward CQ/DE and callsign shapes).
 
 ```text
   elements:  · − · ·   ?
@@ -82,10 +88,15 @@ Better on **calls and CQ** than random letters; still fails on heavy QRM same fr
 
 ---
 
-## Adaptive decoder (alternative)
+## Alternative decoders
 
-Finite-state machine with simpler adaptive dot tracking — lighter, used in tests
-and as reference. Production skimmer prefers **bigram** quality.
+**Bigram beam** is the previous default: an adaptive Schmitt trigger with a
+debouncing keyer and a percentile two-cluster dot fit, feeding the same beam
+search. Solid, but its key thresholds are fixed fractions of the tracked
+span and can want manual tuning on hard bands.
+
+**Adaptive** is a plain finite-state machine with the same front end —
+lightest CPU, used in tests and as a reference.
 
 ---
 
@@ -118,7 +129,7 @@ increase channel timeout if experimenting (advanced).
 |--------|--------------|
 | `E E E E` | Noise peak, not CW |
 | Partial call `G0A` | Weak, overlapping, or speed mismatch |
-| Wrong call one letter off | Bigram chose wrong path — verify on air |
+| Wrong call one letter off | Beam chose wrong path — verify on air |
 | Nothing | SNR/separation too strict, or SCP rejected |
 
 Use **MASTER.SCP** when you want stricter callsign acceptance — next chapter.
