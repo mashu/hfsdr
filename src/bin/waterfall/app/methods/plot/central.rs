@@ -59,7 +59,7 @@ impl WaterfallApp {
         let notches = self.enabled_notches(&overlay);
         let audio_rate = self.overlay_audio_rate();
         let labels = if self.skimmer_ui.skimmer_enabled {
-            self.spot_labels(self.radio.center_khz * 1000.0)
+            self.skimmer_ui.spot_label_cache.clone()
         } else {
             Vec::new()
         };

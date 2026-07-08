@@ -213,6 +213,12 @@ impl WaterfallApp {
                 scp_reload_deadline: None,
                 last_scp_loaded: false,
                 frame_visible_spots: Vec::new(),
+                spots_dirty: true,
+                last_spot_filter: None,
+                last_spot_refresh: None,
+                callsign_log_cache: Vec::new(),
+                spot_label_cache: Vec::new(),
+                last_label_center_hz: 0.0,
                 skimmer_decode_channels: Vec::new(),
             },
             chrome: ChromeState {
@@ -318,7 +324,7 @@ impl eframe::App for WaterfallApp {
         self.poll_kiwi_directory();
         self.handle_shortcuts(&ctx);
         self.pump_engine();
-        self.skimmer_ui.frame_visible_spots = self.visible_spots();
+        self.refresh_visible_spots();
 
         let meter_dt = ui.input(|i| i.stable_dt);
         self.tick_meter_display(meter_dt);

@@ -34,12 +34,32 @@ impl WaterfallApp {
         }
     }
 
-    pub(crate) fn visible_spots(&self) -> Vec<Spot> {
-        filter_spots(
-            &self.skimmer_ui.skimmer_spots,
-            &self.spot_filter_config(),
-            &self.resolver,
-        )
+    /// Refresh the cached visible-spot list only when something changed:
+    /// new spots from the engine, a filter edit, or the periodic tick that
+    /// age-based filters and the age column need. Filtering, cloning and
+    /// sorting every spot every frame was a measurable per-frame cost.
+    pub(crate) fn refresh_visible_spots(&mut self) {
+        const REFRESH_EVERY: Duration = Duration::from_millis(250);
+        let cfg = self.spot_filter_config();
+        let center_hz = self.radio.center_khz * 1000.0;
+        let stale = self
+            .skimmer_ui
+            .last_spot_refresh
+            .is_none_or(|t| t.elapsed() >= REFRESH_EVERY);
+        let cfg_changed = self.skimmer_ui.last_spot_filter.as_ref() != Some(&cfg);
+        let center_changed =
+            (center_hz - self.skimmer_ui.last_label_center_hz).abs() > 1e-6;
+        if !(self.skimmer_ui.spots_dirty || cfg_changed || stale || center_changed) {
+            return;
+        }
+        self.skimmer_ui.frame_visible_spots =
+            filter_spots(&self.skimmer_ui.skimmer_spots, &cfg, &self.resolver);
+        self.skimmer_ui.callsign_log_cache = self.callsign_log_entries();
+        self.skimmer_ui.spot_label_cache = self.spot_labels(center_hz);
+        self.skimmer_ui.last_label_center_hz = center_hz;
+        self.skimmer_ui.last_spot_filter = Some(cfg);
+        self.skimmer_ui.last_spot_refresh = Some(Instant::now());
+        self.skimmer_ui.spots_dirty = false;
     }
 
     /// Rolling callsign log (last 10 min), newest first — unfiltered by table SNR.

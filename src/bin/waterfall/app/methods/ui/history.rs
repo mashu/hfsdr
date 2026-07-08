@@ -44,7 +44,7 @@ impl WaterfallApp {
     }
 
     fn callsign_log_panel(&mut self, ui: &mut egui::Ui) {
-        let entries = self.callsign_log_entries();
+        let entries = self.skimmer_ui.callsign_log_cache.clone();
         let scroll_h = ui.available_height().max(24.0);
         if entries.is_empty() {
             let hint = if !self.skimmer_ui.skimmer_enabled {
@@ -118,7 +118,7 @@ impl WaterfallApp {
     }
 
     fn decoder_panel(&mut self, ui: &mut egui::Ui) {
-        let channels = self.skimmer_ui.skimmer_decode_channels.clone();
+        let channels = &self.skimmer_ui.skimmer_decode_channels;
         let scroll_h = ui.available_height().max(24.0);
         if channels.is_empty() {
             let hint = if !self.skimmer_ui.skimmer_enabled {
@@ -137,17 +137,14 @@ impl WaterfallApp {
             return;
         }
 
+        let mut tune_to: Option<f64> = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .max_height(scroll_h)
             .show(ui, |ui| {
                 for ch in channels {
                     let freq_khz = ch.frequency_hz / 1e3;
-                    let text = if ch.text.is_empty() {
-                        "…".to_string()
-                    } else {
-                        ch.text.clone()
-                    };
+                    let text = if ch.text.is_empty() { "…" } else { ch.text.as_str() };
                     let frame = egui::Frame::new()
                         .fill(Color32::from_rgb(28, 34, 48))
                         .corner_radius(egui::CornerRadius::same(6))
@@ -175,7 +172,7 @@ impl WaterfallApp {
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.small_button("Tune").clicked() {
-                                    self.tune_to_hz(ch.frequency_hz);
+                                    tune_to = Some(ch.frequency_hz);
                                 }
                             });
                         });
@@ -189,5 +186,8 @@ impl WaterfallApp {
                     ui.add_space(4.0);
                 }
             });
+        if let Some(hz) = tune_to {
+            self.tune_to_hz(hz);
+        }
     }
 }

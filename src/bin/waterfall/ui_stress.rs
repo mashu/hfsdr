@@ -5,7 +5,7 @@ use std::time::Instant;
 use eframe::egui::{Key, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
 
-use crate::app::WaterfallApp;
+use crate::app::{BottomPanelView, WaterfallApp};
 use crate::audio;
 use crate::engine::{ConnState, EnginePoll, FFT_SIZE};
 use crate::pipeline_flow::PipelineStage;
@@ -404,4 +404,72 @@ fn wideband_stats_perturbation() {
         );
         assert_ui_finite(harness.state());
     }
+}
+
+/// Live decode channels whose text grows every frame — the worst case for
+/// text layout caching.
+fn flood_decode_channels(n: usize, frame: usize) -> Vec<hfsdr::DecodeChannel> {
+    let phrase = "CQ CQ DE W1AW W1AW K TEST 5NN TU MY RIG IS KENWOOD TS 590 ES ANT DIPOLE ";
+    (0..n)
+        .map(|i| {
+            let len = ((frame * 2 + i * 7) % 64).max(1);
+            let text: String = phrase.chars().cycle().skip(i * 5).take(len).collect();
+            hfsdr::DecodeChannel {
+                offset_hz: -4_000.0 + i as f32 * 500.0,
+                frequency_hz: 14_010_000.0 + i as f64 * 500.0,
+                text,
+                snr_db: 10.0 + (frame % 13) as f32 * 0.3 + i as f32,
+                wpm: 18.0 + ((frame + i) % 9) as f32,
+                keyed: (frame + i) % 3 != 0,
+            }
+        })
+        .collect()
+}
+
+/// Frame-time profile with a fully loaded decode UI: mutating decoder
+/// boxes in the bottom panel plus spot labels on the plot.
+/// `cargo test --features gui --bin hfsdr decode_ui_frame_profile --release -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn decode_ui_frame_profile() {
+    let mut scenario = |label: &str,
+                        channels: usize,
+                        spots: usize,
+                        setup: &dyn Fn(&mut WaterfallApp)| {
+        let mut harness = stress_harness(Vec2::new(1580.0, 960.0), 100_000);
+        harness.run_steps(1);
+        harness.state_mut().skimmer_ui.skimmer_enabled = true;
+        harness.state_mut().chrome.bottom_panel_view = BottomPanelView::Decoder;
+        setup(harness.state_mut());
+        for frame in 0..10 {
+            let mut poll = synthetic_streaming_poll(frame);
+            poll.decode_channels = flood_decode_channels(channels, frame);
+            poll.spots = flood_spots(spots);
+            inject_and_step(&mut harness, poll, 1);
+        }
+        let n = 120usize;
+        let t0 = Instant::now();
+        for frame in 0..n {
+            let mut poll = synthetic_streaming_poll(frame + 10);
+            poll.decode_channels = flood_decode_channels(channels, frame + 10);
+            poll.spots = flood_spots(spots);
+            inject_and_step(&mut harness, poll, 1);
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        eprintln!("{label}: {ms:.2} ms/frame");
+    };
+
+    scenario("baseline (no channels, no spots)", 0, 0, &|_| {});
+    scenario("16 mutating channels           ", 16, 0, &|_| {});
+    scenario("80 spots                       ", 0, 80, &|_| {});
+    scenario("16 channels + 80 spots         ", 16, 80, &|_| {});
+    scenario("80 spots, right panel hidden   ", 0, 80, &|app| {
+        app.chrome.show_right = false;
+    });
+    scenario("80 spots, bottom panel hidden  ", 0, 80, &|app| {
+        app.chrome.show_history = false;
+    });
+    scenario("80 spots, skimmer UI disabled  ", 0, 80, &|app| {
+        app.skimmer_ui.skimmer_enabled = false;
+    });
 }

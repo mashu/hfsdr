@@ -7,7 +7,7 @@ use hfsdr::multisource::spot_display_snr;
 
 use crate::widgets::SpotLabel;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SpotFilterConfig {
     pub min_snr_db: f32,
     pub cq_only: bool,

@@ -25,4 +25,15 @@ pub struct SkimmerUiState {
     pub last_scp_loaded: bool,
     pub frame_visible_spots: Vec<Spot>,
     pub skimmer_decode_channels: Vec<hfsdr::DecodeChannel>,
+    /// New spots arrived from the engine since the last visible-spot refresh.
+    pub spots_dirty: bool,
+    /// Filter config used for the cached `frame_visible_spots`.
+    pub last_spot_filter: Option<crate::spot_filter::SpotFilterConfig>,
+    /// Last visible-spot refresh (age-based filters need periodic re-runs).
+    pub last_spot_refresh: Option<Instant>,
+    /// Cached callsign log (refreshed with the visible spots).
+    pub callsign_log_cache: Vec<Spot>,
+    /// Cached plot labels (offsets are center-relative, so retunes refresh).
+    pub spot_label_cache: Vec<crate::widgets::SpotLabel>,
+    pub last_label_center_hz: f64,
 }

@@ -221,7 +221,9 @@ fn visible_spots_respect_min_snr() {
         spot("G0AAA", 10.0, SpotKind::Heard),
         spot("G0AAB", 20.0, SpotKind::Heard),
     ];
-    let visible = app.visible_spots();
+    app.skimmer_ui.spots_dirty = true;
+    app.refresh_visible_spots();
+    let visible = &app.skimmer_ui.frame_visible_spots;
     assert_eq!(visible.len(), 1);
     assert_eq!(visible[0].callsign.as_deref(), Some("G0AAB"));
 }

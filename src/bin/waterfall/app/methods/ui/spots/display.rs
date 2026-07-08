@@ -171,48 +171,51 @@ impl WaterfallApp {
                     }
                 });
             })
-            .body(|mut body| {
-                for spot in spots {
-                    body.row(18.0, |mut row| {
-                        let (glyph, color) = match spot.kind {
-                            SpotKind::CallingCq => ("CQ", WARN),
-                            SpotKind::Answering => ("→", OK),
-                            SpotKind::Heard => ("·", MUTED),
-                        };
-                        row.col(|ui| {
-                            ui.label(egui::RichText::new(glyph).monospace().color(color));
-                        });
-                        row.col(|ui| {
-                            if let Some(call) = spot.callsign.as_deref() {
-                                ui.label(egui::RichText::new(call).monospace().color(color));
-                            }
-                        });
-                        row.col(|ui| {
-                            ui.label(format!("{:.1}", spot.frequency_hz / 1000.0));
-                        });
-                        row.col(|ui| {
-                            ui.label(format!("{:.0}", spot.snr_db));
-                        });
-                        row.col(|ui| {
-                            ui.label(format!("{:.0}", spot.wpm));
-                        });
-                        row.col(|ui| {
-                            let secs = spot.age().as_secs();
-                            ui.label(
-                                egui::RichText::new(if secs < 60 {
-                                    format!("{secs}s")
-                                } else {
-                                    format!("{}m", secs / 60)
-                                })
-                                .small()
-                                .color(MUTED),
-                            );
-                        });
-                        if row.response().clicked() {
-                            tune_to = Some(spot.frequency_hz);
+            .body(|body| {
+                // Virtualised rows: only the visible slice is laid out, so a
+                // full band of spots costs the same as a screenful.
+                body.rows(18.0, spots.len(), |mut row| {
+                    let Some(spot) = spots.get(row.index()) else {
+                        return;
+                    };
+                    let (glyph, color) = match spot.kind {
+                        SpotKind::CallingCq => ("CQ", WARN),
+                        SpotKind::Answering => ("→", OK),
+                        SpotKind::Heard => ("·", MUTED),
+                    };
+                    row.col(|ui| {
+                        ui.label(egui::RichText::new(glyph).monospace().color(color));
+                    });
+                    row.col(|ui| {
+                        if let Some(call) = spot.callsign.as_deref() {
+                            ui.label(egui::RichText::new(call).monospace().color(color));
                         }
                     });
-                }
+                    row.col(|ui| {
+                        ui.label(format!("{:.1}", spot.frequency_hz / 1000.0));
+                    });
+                    row.col(|ui| {
+                        ui.label(format!("{:.0}", spot.snr_db));
+                    });
+                    row.col(|ui| {
+                        ui.label(format!("{:.0}", spot.wpm));
+                    });
+                    row.col(|ui| {
+                        let secs = spot.age().as_secs();
+                        ui.label(
+                            egui::RichText::new(if secs < 60 {
+                                format!("{secs}s")
+                            } else {
+                                format!("{}m", secs / 60)
+                            })
+                            .small()
+                            .color(MUTED),
+                        );
+                    });
+                    if row.response().clicked() {
+                        tune_to = Some(spot.frequency_hz);
+                    }
+                });
             });
         if let Some(hz) = tune_to {
             self.tune_to_hz(hz);

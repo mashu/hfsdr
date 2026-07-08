@@ -197,6 +197,7 @@ impl WaterfallApp {
         }
         self.engine_ui.last_error = poll.last_error;
         self.skimmer_ui.skimmer_spots = poll.spots;
+        self.skimmer_ui.spots_dirty = true;
         self.skimmer_ui.skimmer_decode_channels = poll.decode_channels;
         self.audio.audio_scope = poll.audio_scope;
         self.audio.audio_waveform = poll.audio_waveform;
