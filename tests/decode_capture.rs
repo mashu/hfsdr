@@ -252,6 +252,59 @@ fn decode_capture_file() {
     }
 }
 
+/// Whole-band replay: decode every peak in the capture (focus off) and dump
+/// spots plus per-channel text. `CAPTURE=path cargo test --release --test
+/// decode_capture replay_whole_band -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn replay_whole_band() {
+    let path = std::path::PathBuf::from(std::env::var("CAPTURE").expect("CAPTURE env"));
+    let (meta, samples) = load_capture(&path);
+    let rate = meta.sample_rate as f32;
+    let center = meta.center_hz;
+    eprintln!(
+        "capture: {} samples @ {} Hz, center {:.6} MHz, {:.1}s",
+        samples.len(),
+        meta.sample_rate,
+        center / 1e6,
+        samples.len() as f64 / rate as f64
+    );
+    let mut analyzer = SpectrumAnalyzer::new(2048, 1024);
+    let mut peak_hold = vec![-140.0f32; 2048];
+    let mut skimmer = Skimmer::new(SkimmerConfig {
+        require_scp: false,
+        min_snr_db: 10.0,
+        min_decode_snr_db: 8.0,
+        focus_span_hz: 0.0,
+        max_channels: 12,
+        ..SkimmerConfig::default()
+    });
+    skimmer.reload_scp_discover();
+    for chunk in samples.chunks(2048) {
+        analyzer.process_limited(chunk, 1, |row| {
+            for (hold, &v) in peak_hold.iter_mut().zip(row.iter()) {
+                *hold = hold.max(v);
+            }
+        });
+        skimmer.process(chunk, rate, &peak_hold, rate, 0.0, center);
+    }
+    let spots = skimmer.store().sorted(SpotSort::SnrDesc);
+    eprintln!("spots: {}", spots.len());
+    for s in &spots {
+        eprintln!(
+            "  {:.2} kHz SNR{:.0} {:?} {}",
+            s.frequency_hz / 1e3,
+            s.snr_db,
+            s.kind,
+            s.callsign.as_deref().unwrap_or("—")
+        );
+    }
+    eprintln!("channels:");
+    for (off, text, snr) in skimmer.debug_channels() {
+        eprintln!("  {off:7.0} Hz SNR {snr:4.0}: {text:?}");
+    }
+}
+
 /// Mirrors the engine path: small IQ chunks + peak-hold spectrum for skimmer peaks.
 #[test]
 #[ignore]
