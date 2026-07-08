@@ -29,6 +29,24 @@ pub struct PlotState {
     pub last_plot_interaction_rect: Option<egui::Rect>,
     pub filter_overlay: FilterOverlayCache,
     pub tune_preview_offset_hz: Option<f64>,
+    /// Last click-to-tune retune — clicks are ignored until the display has
+    /// had time to show the new center (stale-row race protection).
+    pub last_center_tune: Option<Instant>,
+}
+
+/// How long after a click-to-tune the plot rows may still show the old
+/// center. Clicks inside this window would tune by a stale offset.
+const CENTER_TUNE_SETTLE: std::time::Duration = std::time::Duration::from_millis(350);
+
+impl PlotState {
+    pub fn mark_center_tune(&mut self) {
+        self.last_center_tune = Some(Instant::now());
+    }
+
+    pub fn center_tune_settled(&self) -> bool {
+        self.last_center_tune
+            .is_none_or(|t| t.elapsed() >= CENTER_TUNE_SETTLE)
+    }
 }
 
 #[derive(Clone, Debug, Default)]

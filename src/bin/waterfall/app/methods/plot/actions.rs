@@ -20,6 +20,13 @@ impl WaterfallApp {
                     }
                 }
                 PlotAction::CenterOnOffsetHz(offset) => {
+                    // Right after a click-to-tune the plot still shows rows
+                    // from the old center until the retuned stream arrives; a
+                    // second click in that window (double-click, impatient
+                    // re-click) would tune by a stale offset all over again.
+                    if !self.plot.center_tune_settled() {
+                        continue;
+                    }
                     if iq_playback {
                         self.radio.rit_hz = (offset as f32).clamp(RIT_MIN_HZ, RIT_MAX_HZ);
                         self.radio.rit_on = true;
@@ -27,11 +34,13 @@ impl WaterfallApp {
                         self.sync_filter_to_listen();
                     } else {
                         self.invalidate_waterfall_history();
+                        self.reset_trace_after_retune();
                         self.radio.center_khz += offset / 1000.0;
                         self.plot.plot_view.pan_offset_hz = 0.0;
                         self.plot.tune_preview_offset_hz = None;
                         self.clear_rit();
                         self.sync_filter_to_listen();
+                        self.plot.mark_center_tune();
                     }
                 }
                 PlotAction::PanViewDeltaHz(delta) => {
@@ -41,12 +50,26 @@ impl WaterfallApp {
                         self.plot_max_zoom_out(),
                     );
                 }
-                PlotAction::ZoomView(factor) => {
-                    self.plot.plot_view.zoom_by(
-                        factor,
-                        self.plot_full_span_hz(),
-                        self.plot_max_zoom_out(),
-                    );
+                PlotAction::ZoomView { factor, anchor_offset_hz } => {
+                    let full_span = self.plot_full_span_hz();
+                    let max_zoom = self.plot_max_zoom_out();
+                    let span_before =
+                        self.plot.plot_view.view_span_hz(full_span, max_zoom) as f64;
+                    self.plot.plot_view.zoom_by(factor, full_span, max_zoom);
+                    if let Some(anchor) = anchor_offset_hz {
+                        // Keep the frequency under the cursor fixed on screen:
+                        // scale its distance from the view centre by the span
+                        // ratio, then re-clamp.
+                        let span_after =
+                            self.plot.plot_view.view_span_hz(full_span, max_zoom) as f64;
+                        if span_before > 0.0 {
+                            let ratio = span_after / span_before;
+                            let pan = self.plot.plot_view.pan_offset_hz;
+                            self.plot.plot_view.pan_offset_hz =
+                                anchor - (anchor - pan) * ratio;
+                            self.plot.plot_view.clamp_pan(full_span, max_zoom);
+                        }
+                    }
                 }
                 PlotAction::SetPassbandHz(bw) => {
                     self.radio.cw.passband_hz =

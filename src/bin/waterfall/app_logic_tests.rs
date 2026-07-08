@@ -687,11 +687,64 @@ fn apply_plot_actions_zoom_and_pan() {
     app.engine_ui.stats.sample_rate = 12_000.0;
     app.engine_ui.stats.iq_passband_hz = 12_000.0;
     app.apply_plot_actions(vec![
-        PlotAction::ZoomView(0.5),
+        PlotAction::ZoomView { factor: 0.5, anchor_offset_hz: None },
         PlotAction::PanViewDeltaHz(50.0),
         PlotAction::SetViewPanHz(25.0),
     ]);
     assert!(app.plot.plot_view.zoom < 1.0);
+}
+
+#[test]
+fn zoom_with_anchor_keeps_cursor_frequency_fixed() {
+    let mut app = test_app();
+    app.engine_ui.stats.sample_rate = 12_000.0;
+    app.engine_ui.stats.iq_passband_hz = 12_000.0;
+    let full = app.plot_full_span_hz();
+    let max_zoom = app.plot_max_zoom_out();
+    // Anchor at +2 kHz, zoom in 2×: the anchor must stay at the same view t.
+    let anchor = 2_000.0f64;
+    let span0 = app.plot.plot_view.view_span_hz(full, max_zoom);
+    let t0 = hfsdr::offset_hz_to_view_t(anchor, span0, app.plot.plot_view.pan_offset_hz);
+    app.apply_plot_actions(vec![PlotAction::ZoomView {
+        factor: 0.5,
+        anchor_offset_hz: Some(anchor),
+    }]);
+    let span1 = app.plot.plot_view.view_span_hz(full, max_zoom);
+    let t1 = hfsdr::offset_hz_to_view_t(anchor, span1, app.plot.plot_view.pan_offset_hz);
+    assert!(span1 < span0);
+    assert!(
+        (t1 - t0).abs() < 0.01,
+        "anchor drifted: t0={t0:.3} t1={t1:.3} pan={}",
+        app.plot.plot_view.pan_offset_hz
+    );
+}
+
+#[test]
+fn second_center_click_within_settle_window_is_ignored() {
+    let mut app = test_app();
+    app.radio.lock_ham_bands = false;
+    app.radio.center_khz = 14_010.0;
+    app.apply_plot_actions(vec![PlotAction::CenterOnOffsetHz(200.0)]);
+    assert!((app.radio.center_khz - 14_010.2).abs() < 1e-3, "first click tunes");
+    // The display still shows pre-retune rows; a double-click's second
+    // release must not tune again by the stale offset.
+    app.apply_plot_actions(vec![PlotAction::CenterOnOffsetHz(200.0)]);
+    assert!(
+        (app.radio.center_khz - 14_010.2).abs() < 1e-3,
+        "stale second click retuned: {}",
+        app.radio.center_khz
+    );
+}
+
+#[test]
+fn center_click_blanks_stale_trace() {
+    let mut app = test_app();
+    app.radio.lock_ham_bands = false;
+    app.plot.latest = vec![-30.0; 512];
+    app.plot.smoothed_trace = vec![-40.0; 512];
+    app.apply_plot_actions(vec![PlotAction::CenterOnOffsetHz(500.0)]);
+    assert!(app.plot.latest.iter().all(|&v| v <= -119.0), "ghost trace kept");
+    assert!(app.plot.smoothed_trace.is_empty());
 }
 
 #[test]

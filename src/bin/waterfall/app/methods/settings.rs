@@ -338,6 +338,19 @@ impl WaterfallApp {
 
 
 
+    /// Blank the scope trace after a discrete retune. The engine keeps
+    /// streaming old-center rows for a few frames; without this, ghost peaks
+    /// from the previous center render under the new axis labels and invite
+    /// a mis-tuned follow-up click.
+    pub(crate) fn reset_trace_after_retune(&mut self) {
+        for v in &mut self.plot.latest {
+            *v = -120.0;
+        }
+        self.plot.smoothed_trace.clear();
+        self.plot.trace_composed.clear();
+        self.plot.waterfall.trace_refresh = true;
+    }
+
     pub(crate) fn invalidate_waterfall_history(&mut self) {
         self.plot.rows.clear();
         self.plot.waterfall.force_texture_full = true;

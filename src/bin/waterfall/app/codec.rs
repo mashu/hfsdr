@@ -11,7 +11,9 @@ use crate::interaction::PlotAction;
 pub(crate) fn plot_action_changes_view(action: &PlotAction) -> bool {
     matches!(
         action,
-        PlotAction::PanViewDeltaHz(_) | PlotAction::ZoomView(_) | PlotAction::SetViewPanHz(_)
+        PlotAction::PanViewDeltaHz(_)
+            | PlotAction::ZoomView { .. }
+            | PlotAction::SetViewPanHz(_)
     )
 }
 
@@ -363,7 +365,10 @@ mod tests {
     #[test]
     fn plot_action_changes_view_for_pan_and_zoom() {
         assert!(plot_action_changes_view(&PlotAction::PanViewDeltaHz(100.0)));
-        assert!(plot_action_changes_view(&PlotAction::ZoomView(1.5)));
+        assert!(plot_action_changes_view(&PlotAction::ZoomView {
+            factor: 1.5,
+            anchor_offset_hz: None,
+        }));
         assert!(plot_action_changes_view(&PlotAction::SetViewPanHz(500.0)));
         assert!(!plot_action_changes_view(&PlotAction::SetPassbandHz(200.0)));
         assert!(!plot_action_changes_view(&PlotAction::TuneDeltaHz(50.0)));

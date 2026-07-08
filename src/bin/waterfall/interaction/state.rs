@@ -54,7 +54,11 @@ pub enum PlotAction {
     TuneDeltaHz(f64),
     CenterOnOffsetHz(f64),
     PanViewDeltaHz(f64),
-    ZoomView(f32),
+    ZoomView {
+        factor: f32,
+        /// Frequency under the cursor (Hz rel. RX) — kept fixed while zooming.
+        anchor_offset_hz: Option<f64>,
+    },
     SetPassbandHz(f32),
     /// Move channel bandpass center without changing the VFO / listen point.
     SetFilterShiftHz(ChannelOffsetHz),
@@ -129,12 +133,22 @@ impl PlotViewState {
     }
 }
 
+/// Pointer travel below this is a tap, not a drag. Wider than egui's click
+/// tolerance on purpose: a slightly shaky press must still tune, not pan the
+/// view a few imperceptible hertz (the classic "click does nothing when
+/// zoomed" failure).
+const TAP_SLOP_PX: f32 = 10.0;
+
 pub struct PlotInteraction {
     pub drag_mode: DragMode,
     drag_origin: Option<Pos2>,
     drag_hz_origin: Option<f64>,
     drag_filter_shift_origin: Option<f32>,
     drag_notch_offset_origin: Option<ChannelOffsetHz>,
+    /// Still within [`TAP_SLOP_PX`] of the press — pan/tune deltas are
+    /// buffered so a tap never smears the view before it tunes.
+    tap_candidate: bool,
+    tap_pending_delta_hz: f64,
 }
 
 impl PlotInteraction {
@@ -145,6 +159,8 @@ impl PlotInteraction {
             drag_hz_origin: None,
             drag_filter_shift_origin: None,
             drag_notch_offset_origin: None,
+            tap_candidate: false,
+            tap_pending_delta_hz: 0.0,
         }
     }
 
@@ -191,7 +207,16 @@ impl PlotInteraction {
                     ));
                 } else if !filter_modify {
                     let factor = if scroll > 0.0 { 1.12 } else { 0.88 };
-                    actions.push(PlotAction::ZoomView(factor));
+                    // Anchor the zoom on the frequency under the cursor so
+                    // the signal being examined stays put while zooming.
+                    let anchor = ui
+                        .input(|i| i.pointer.hover_pos())
+                        .filter(|pos| rect.contains(*pos))
+                        .map(|pos| x_to_offset_hz(pos.x, rect, view_span, pan));
+                    actions.push(PlotAction::ZoomView {
+                        factor,
+                        anchor_offset_hz: anchor,
+                    });
                 }
             }
         }
@@ -223,6 +248,8 @@ impl PlotInteraction {
         if response.drag_started() {
             if let Some(pos) = response.interact_pointer_pos() {
                 self.drag_origin = Some(pos);
+                self.tap_candidate = true;
+                self.tap_pending_delta_hz = 0.0;
                 self.drag_hz_origin = Some(x_to_offset_hz(pos.x, rect, view_span, pan));
                 self.drag_mode = classify_press(
                     pos,
@@ -256,25 +283,37 @@ impl PlotInteraction {
         }
 
         if response.dragged() {
-            match self.drag_mode {
-                DragMode::Tune => {
-                    // Drag on empty spectrum: pan the view when zoomed, otherwise
-                    // walk the carrier. Pure taps are handled by `clicked()` above.
-                    let delta_hz =
-                        -response.drag_delta().x as f64 / rect.width() as f64 * view_span as f64;
-                    if delta_hz.abs() > f64::EPSILON {
-                        if can_pan {
-                            actions.push(PlotAction::PanViewDeltaHz(delta_hz));
-                        } else {
-                            actions.push(PlotAction::TuneDeltaHz(delta_hz));
-                        }
-                    }
+            // While the pointer stays within the tap slop, buffer pan/tune
+            // deltas instead of applying them: if this turns out to be a tap,
+            // the view must not have smeared before the tune fires.
+            if self.tap_candidate {
+                let moved = match (self.drag_origin, response.interact_pointer_pos()) {
+                    (Some(origin), Some(pos)) => (pos - origin).length(),
+                    _ => 0.0,
+                };
+                if moved > TAP_SLOP_PX {
+                    self.tap_candidate = false;
                 }
-                DragMode::PanView => {
+            }
+            match self.drag_mode {
+                DragMode::Tune | DragMode::PanView => {
+                    // Drag on empty spectrum: pan the view when zoomed, otherwise
+                    // walk the carrier (Tune); Shift always pans (PanView).
                     let delta_hz =
                         -response.drag_delta().x as f64 / rect.width() as f64 * view_span as f64;
-                    if delta_hz.abs() > f64::EPSILON {
-                        actions.push(PlotAction::PanViewDeltaHz(delta_hz));
+                    let pan_not_tune = matches!(self.drag_mode, DragMode::PanView) || can_pan;
+                    if self.tap_candidate {
+                        self.tap_pending_delta_hz += delta_hz;
+                    } else {
+                        let total = self.tap_pending_delta_hz + delta_hz;
+                        self.tap_pending_delta_hz = 0.0;
+                        if total.abs() > f64::EPSILON {
+                            if pan_not_tune {
+                                actions.push(PlotAction::PanViewDeltaHz(total));
+                            } else {
+                                actions.push(PlotAction::TuneDeltaHz(total));
+                            }
+                        }
                     }
                 }
                 DragMode::ResizeLeft | DragMode::ResizeRight => {
@@ -341,6 +380,18 @@ impl PlotInteraction {
         }
 
         if response.drag_stopped() {
+            // A press that never left the tap slop is a click, no matter how
+            // long it was held — egui's clicked() misses slow or slightly
+            // shaky presses, which used to silently pan a few hertz instead
+            // of tuning. The buffered delta is discarded: taps do not pan.
+            if self.tap_candidate
+                && matches!(self.drag_mode, DragMode::Tune | DragMode::PanView)
+            {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let offset = x_to_offset_hz(pos.x, rect, view_span, pan);
+                    actions.push(PlotAction::CenterOnOffsetHz(offset));
+                }
+            }
             match self.drag_mode {
                 DragMode::ResizeLeft | DragMode::ResizeRight => {
                     if let Some(pos) = response.interact_pointer_pos() {
@@ -379,6 +430,8 @@ impl PlotInteraction {
             self.drag_hz_origin = None;
             self.drag_filter_shift_origin = None;
             self.drag_notch_offset_origin = None;
+            self.tap_candidate = false;
+            self.tap_pending_delta_hz = 0.0;
         }
 
         actions

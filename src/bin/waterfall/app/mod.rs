@@ -161,6 +161,7 @@ impl WaterfallApp {
                 last_plot_interaction_rect: None,
                 filter_overlay: FilterOverlayCache::default(),
                 tune_preview_offset_hz: None,
+                last_center_tune: None,
             },
             display: DisplayState {
                 ref_db: -65.0,
