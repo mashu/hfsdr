@@ -57,13 +57,12 @@ operation; every tunable has a UI control and persists in settings.
 
 | Setting | What it does |
 |---------|----------------|
-| **Algorithm** | **Bayesian** (self-tuning, best copy), **Bigram beam**, or **Adaptive** (CPU) |
 | **Peak min SNR / separation** | Which FFT peaks spawn decoders |
 | **Max decoders** | Parallel channel cap |
 | **Channel LPF Hz** | Per-channel filter half-width before decode |
 | **Initial WPM** | Dot-length seed before speed adapts |
-| **Beam width** | Beam hypothesis count (Bayesian / Bigram) |
-| **Key thr low / high** | Envelope key-down thresholds (Bigram / Adaptive; Bayesian estimates its own) |
+| **Beam width** | Beam hypothesis count |
+| **Gate thr low / high** | Decode-gate arming thresholds (the decoder estimates its own key levels) |
 | **Channel timeout** | Retire decoder when peak vanishes (seconds) |
 | **Store max age** | Drop stale spots from engine store |
 | **Max decode chars** | Text buffer per channel |

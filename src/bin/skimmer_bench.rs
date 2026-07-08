@@ -5,10 +5,7 @@
 use std::f32::consts::TAU;
 use std::time::Instant;
 
-use hfsdr::{
-    detect_peaks_with_floor, noise_floor_db_into, Complex32, Skimmer, SkimmerConfig,
-    SkimmerDecoderKind,
-};
+use hfsdr::{detect_peaks_with_floor, noise_floor_db_into, Complex32, Skimmer, SkimmerConfig};
 
 const IQ_RATE: f32 = 384_000.0;
 const CENTER_HZ: f64 = 14_035_000.0;
@@ -115,7 +112,7 @@ fn main() {
     let chunk_len = (IQ_RATE as usize / 20).max(4096);
     let (iq, spectrum) = mix_channels(&offsets, chunk_len);
 
-    let mut config = SkimmerConfig {
+    let config = SkimmerConfig {
         max_channels: 16,
         min_snr_db: 8.0,
         min_decode_snr_db: 6.0,
@@ -155,31 +152,13 @@ fn main() {
     }
     let elapsed = start.elapsed().as_secs_f64();
 
-    // Decoder comparison microbench (same IQ, isolated).
-    config.decoder = SkimmerDecoderKind::Adaptive;
-    let mut sk_adaptive = Skimmer::new(config.clone());
-    config.decoder = SkimmerDecoderKind::Bigram;
-    let mut sk_bigram = Skimmer::new(config.clone());
-    config.decoder = SkimmerDecoderKind::Bayes;
+    // Isolated decoder microbench (same IQ, fresh skimmer).
     let mut sk_bayes = Skimmer::new(config);
-
     let warmup = 4usize;
     for _ in 0..warmup {
-        sk_adaptive.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
-        sk_bigram.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
         sk_bayes.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
     }
     let n = 200u32;
-    let t0 = Instant::now();
-    for _ in 0..n {
-        sk_adaptive.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
-    }
-    let adaptive_us = t0.elapsed().as_nanos() as f64 / n as f64 / 1000.0;
-    let t1 = Instant::now();
-    for _ in 0..n {
-        sk_bigram.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
-    }
-    let bigram_us = t1.elapsed().as_nanos() as f64 / n as f64 / 1000.0;
     let t2 = Instant::now();
     for _ in 0..n {
         sk_bayes.process(&iq, IQ_RATE, &spectrum, IQ_RATE, 0.0, CENTER_HZ);
@@ -208,7 +187,5 @@ fn main() {
         chunk_len as f64 / IQ_RATE as f64 * 1000.0
     );
     eprintln!("\nfixed chunk decoder ({} ch, {} samples):", offsets.len(), chunk_len);
-    eprintln!("  adaptive         {adaptive_us:.1} µs/frame");
-    eprintln!("  bigram           {bigram_us:.1} µs/frame");
     eprintln!("  bayes            {bayes_us:.1} µs/frame");
 }

@@ -28,7 +28,6 @@
 
 use std::collections::VecDeque;
 
-use super::bigram::bigram_log;
 use super::config::DecoderParams;
 use super::decoder::{wpm_from_dot_seconds, CwDecoder};
 use super::morse::decode_elements;
@@ -127,6 +126,30 @@ const CONFIDENT_EVIDENCE: f32 = 0.10;
 const CONFIDENT_MIN_EVENTS: u32 = 4;
 /// Spawn both mark readings when the weaker posterior exceeds exp(-2.3) ≈ 10%.
 const BRANCH_MIN_LOG_POST: f32 = -2.3;
+
+/// Log-prior for character bigrams, biased toward CQ/DE and callsign shapes —
+/// the text-layer language model behind the beam scores.
+fn bigram_log(prev: Option<char>, ch: char) -> f32 {
+    let p = prev.unwrap_or(' ');
+    let c = ch.to_ascii_uppercase();
+    match (p, c) {
+        (' ', 'C') => 1.2,
+        (' ', 'Q') => 0.8,
+        ('C', 'Q') => 1.5,
+        ('Q', ' ') => 0.6,
+        (' ', 'D') => 0.5,
+        ('D', 'E') => 0.8,
+        ('E', ' ') => 0.4,
+        (' ', 'W') | (' ', 'K') | (' ', 'N') | (' ', 'V') | (' ', 'G') => 0.9,
+        ('W', d) | ('K', d) | ('N', d) | ('V', d) | ('G', d) if d.is_ascii_digit() => 1.0,
+        (a, b) if a.is_ascii_digit() && b.is_ascii_digit() => 0.6,
+        (a, b) if a.is_ascii_digit() && b.is_ascii_alphabetic() => 0.7,
+        (a, b) if a.is_ascii_alphabetic() && b.is_ascii_digit() => 0.6,
+        (a, b) if a.is_ascii_alphabetic() && b.is_ascii_alphabetic() => 0.15,
+        (' ', b) if b.is_ascii_alphanumeric() => 0.3,
+        _ => 0.0,
+    }
+}
 
 /// Dot period handed to the debouncing [`Keyer`]. The HMM's transition prior
 /// already suppresses noise flips, so the keyer bridge stays short and nearly

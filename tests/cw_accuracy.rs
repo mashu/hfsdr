@@ -8,8 +8,7 @@
 use std::f32::consts::TAU;
 
 use hfsdr::{
-    encode_char, Complex32, MasterScp, Skimmer, SkimmerConfig, SkimmerDecoderKind,
-    SpectrumAnalyzer, SpotSort,
+    encode_char, Complex32, MasterScp, Skimmer, SkimmerConfig, SpectrumAnalyzer, SpotSort,
 };
 
 const RATE: f32 = 12_000.0;
@@ -155,9 +154,8 @@ fn synth_iq(stations: &[Station], seconds: f32, noise_rms: f32, seed: u64) -> Ve
     out
 }
 
-fn config_for(decoder: SkimmerDecoderKind) -> SkimmerConfig {
+fn test_config() -> SkimmerConfig {
     SkimmerConfig {
-        decoder,
         require_scp: true,
         min_snr_db: 10.0,
         min_decode_snr_db: 8.0,
@@ -165,10 +163,6 @@ fn config_for(decoder: SkimmerDecoderKind) -> SkimmerConfig {
         focus_span_hz: 0.0, // whole band — focus behaviour has its own test
         ..SkimmerConfig::default()
     }
-}
-
-fn test_config() -> SkimmerConfig {
-    config_for(SkimmerDecoderKind::Bigram)
 }
 
 /// Run IQ through the skimmer the way the engine does: peak-hold spectrum
@@ -310,75 +304,13 @@ fn decode_focus_limits_channels_to_tuned_span() {
     }
 }
 
-// --- Bayes decoder: same end-to-end scenarios plus harder stress cases ---
+
+
+
+
 
 #[test]
-fn bayes_decodes_clean_signal_across_speeds() {
-    for wpm in [12.0, 15.0, 20.0, 25.0, 32.0, 40.0, 45.0] {
-        let st = Station::new("CQ CQ DE W1AW W1AW K", wpm, 700.0, 1.0);
-        let iq = synth_iq(&[st], 40.0, 0.05, 7);
-        let skimmer = run_skimmer(&iq, config_for(SkimmerDecoderKind::Bayes), SAMPLE_SCP);
-        assert_spotted(&skimmer, "W1AW", &format!("bayes {wpm} wpm"));
-    }
-}
-
-#[test]
-fn bayes_decodes_weak_station_in_noise() {
-    let st = Station::new("CQ CQ DE OH2BH OH2BH K", 24.0, 500.0, 1.0);
-    let iq = synth_iq(&[st], 45.0, 3.2, 21);
-    let skimmer = run_skimmer(&iq, config_for(SkimmerDecoderKind::Bayes), SAMPLE_SCP);
-    assert_spotted(&skimmer, "OH2BH", "bayes weak station");
-}
-
-#[test]
-fn bayes_decodes_through_qsb_fading() {
-    let mut st = Station::new("CQ CQ DE SM5DAJ SM5DAJ K", 22.0, 600.0, 1.0);
-    st.qsb_depth = 0.92;
-    st.qsb_period_s = 5.0;
-    let iq = synth_iq(&[st], 55.0, 0.4, 3);
-    let skimmer = run_skimmer(&iq, config_for(SkimmerDecoderKind::Bayes), SAMPLE_SCP);
-    assert_spotted(&skimmer, "SM5DAJ", "bayes qsb");
-}
-
-#[test]
-fn bayes_decodes_wanted_station_with_interferer_10hz_away() {
-    let wanted = Station::new("CQ CQ DE VE3NEA VE3NEA K", 25.0, 800.0, 1.0);
-    let mut interferer = Station::new("TEST TEST TEST DE N2IC N2IC", 19.0, 810.0, 0.32);
-    interferer.start_delay_dits = 11.0;
-    let iq = synth_iq(&[wanted, interferer], 45.0, 0.25, 17);
-    let skimmer = run_skimmer(&iq, config_for(SkimmerDecoderKind::Bayes), SAMPLE_SCP);
-    assert_spotted(&skimmer, "VE3NEA", "bayes 10 Hz interferer");
-}
-
-#[test]
-fn bayes_decodes_crowded_band_without_false_calls() {
-    let stations = vec![
-        Station::new("CQ CQ DE W1AW W1AW K", 18.0, -1_500.0, 0.9),
-        Station::new("CQ CQ DE OH2BH OH2BH K", 24.0, -600.0, 0.7),
-        Station::new("CQ CQ DE K3LR K3LR K", 30.0, 300.0, 1.0),
-        Station::new("CQ CQ DE SM5DAJ SM5DAJ K", 21.0, 1_100.0, 0.55),
-        Station::new("CQ CQ DE DL1QQ DL1QQ K", 27.0, 2_000.0, 0.8),
-    ];
-    let expected = ["W1AW", "OH2BH", "K3LR", "SM5DAJ", "DL1QQ"];
-    let iq = synth_iq(&stations, 50.0, 0.3, 5);
-    let skimmer = run_skimmer(&iq, config_for(SkimmerDecoderKind::Bayes), SAMPLE_SCP);
-    let calls = spotted_calls(&skimmer);
-    let hits = expected.iter().filter(|e| calls.iter().any(|c| c == *e)).count();
-    assert!(
-        hits >= 4,
-        "bayes crowded band: only {hits}/5 decoded, spots {calls:?}, channels {:?}",
-        skimmer.debug_channels()
-    );
-    for c in &calls {
-        assert!(
-            expected.contains(&c.as_str()),
-            "bayes false callsign {c} spotted; all spots {calls:?}"
-        );
-    }
-}
-
-#[test]
-fn bayes_decodes_speed_change_mid_transmission() {
+fn decodes_speed_change_mid_transmission() {
     // Same channel, next sender QRQs from 16 to 30 WPM — the timing model
     // must re-lock without an operator hint. Spots are checked per over
     // because the store keeps one spot per frequency.
@@ -394,7 +326,7 @@ fn bayes_decodes_speed_change_mid_transmission() {
         0.3,
         14,
     );
-    let mut skimmer = Skimmer::new(config_for(SkimmerDecoderKind::Bayes));
+    let mut skimmer = Skimmer::new(test_config());
     skimmer.replace_scp(MasterScp::from_text(SAMPLE_SCP));
     let mut analyzer = SpectrumAnalyzer::new(2048, 1024);
     let mut peak_hold = vec![-140.0f32; 2048];
@@ -419,13 +351,13 @@ fn bayes_decodes_speed_change_mid_transmission() {
 #[test]
 #[ignore]
 fn debug_weak_signal_margin() {
-    for kind in [SkimmerDecoderKind::Bigram, SkimmerDecoderKind::Bayes] {
+    {
         for noise in [4.4f32, 5.0, 5.6, 6.2, 6.8] {
             let mut hits = 0;
             for seed in [21u64, 22, 23] {
                 let st = Station::new("CQ CQ DE OH2BH OH2BH K", 24.0, 500.0, 1.0);
                 let iq = synth_iq(&[st], 45.0, noise, seed);
-                let mut config = config_for(kind);
+                let mut config = test_config();
                 config.min_snr_db = 3.0;
                 config.min_decode_snr_db = 3.0;
                 let skimmer = run_skimmer(&iq, config, SAMPLE_SCP);
@@ -433,19 +365,19 @@ fn debug_weak_signal_margin() {
                     hits += 1;
                 }
             }
-            eprintln!("{kind:?} noise={noise}: {hits}/3 decoded");
+            eprintln!("noise={noise}: {hits}/3 decoded");
         }
         for wpm in [48.0f32, 52.0, 56.0] {
             let mut hits = 0;
             for seed in [7u64, 8, 9] {
                 let st = Station::new("CQ CQ DE W1AW W1AW K", wpm, 700.0, 1.0);
                 let iq = synth_iq(&[st], 40.0, 0.2, seed);
-                let skimmer = run_skimmer(&iq, config_for(kind), SAMPLE_SCP);
+                let skimmer = run_skimmer(&iq, test_config(), SAMPLE_SCP);
                 if spotted_calls(&skimmer).iter().any(|c| c == "W1AW") {
                     hits += 1;
                 }
             }
-            eprintln!("{kind:?} qrq wpm={wpm}: {hits}/3 decoded");
+            eprintln!("qrq wpm={wpm}: {hits}/3 decoded");
         }
         for (depth, period) in [(0.95f32, 5.0f32), (0.95, 2.5), (0.98, 3.5)] {
             let mut hits = 0;
@@ -454,12 +386,12 @@ fn debug_weak_signal_margin() {
                 st.qsb_depth = depth;
                 st.qsb_period_s = period;
                 let iq = synth_iq(&[st], 55.0, 0.4, seed);
-                let skimmer = run_skimmer(&iq, config_for(kind), SAMPLE_SCP);
+                let skimmer = run_skimmer(&iq, test_config(), SAMPLE_SCP);
                 if spotted_calls(&skimmer).iter().any(|c| c == "SM5DAJ") {
                     hits += 1;
                 }
             }
-            eprintln!("{kind:?} qsb depth={depth} period={period}s: {hits}/3 decoded");
+            eprintln!("qsb depth={depth} period={period}s: {hits}/3 decoded");
         }
     }
 }
@@ -474,7 +406,7 @@ fn debug_bayes_slow_over() {
         0.3,
         13,
     );
-    let mut skimmer = Skimmer::new(config_for(SkimmerDecoderKind::Bayes));
+    let mut skimmer = Skimmer::new(test_config());
     skimmer.replace_scp(MasterScp::from_text(SAMPLE_SCP));
     let mut analyzer = SpectrumAnalyzer::new(2048, 1024);
     let mut peak_hold = vec![-140.0f32; 2048];
@@ -502,50 +434,7 @@ fn debug_bayes_slow_over() {
     eprintln!("all channels: {:?}", skimmer.debug_channels());
 }
 
-#[test]
-fn bayes_pure_noise_produces_no_spots() {
-    let iq = synth_iq(&[], 40.0, 1.0, 42);
-    let mut config = config_for(SkimmerDecoderKind::Bayes);
-    config.require_scp = false;
-    config.min_snr_db = 6.0;
-    config.min_decode_snr_db = 6.0;
-    let skimmer = run_skimmer(&iq, config, SAMPLE_SCP);
-    let spots = skimmer.store().sorted(SpotSort::SnrDesc);
-    assert!(
-        spots.is_empty(),
-        "bayes: noise produced spots: {:?}, channels {:?}",
-        spots
-            .iter()
-            .map(|s| (s.callsign.clone(), s.kind))
-            .collect::<Vec<_>>(),
-        skimmer.debug_channels()
-    );
-}
 
-#[test]
-fn bayes_noise_bursts_produce_no_spots() {
-    let mut iq = synth_iq(&[], 30.0, 0.8, 99);
-    let mut rng = NoiseGen::new(123);
-    let burst_len = (0.030 * RATE) as usize;
-    for k in 0..60 {
-        let start = (k * iq.len() / 60).min(iq.len() - burst_len);
-        for slot in &mut iq[start..start + burst_len] {
-            let (a, b) = rng.gaussian_pair();
-            slot.re += 4.0 * a;
-            slot.im += 4.0 * b;
-        }
-    }
-    let mut config = config_for(SkimmerDecoderKind::Bayes);
-    config.require_scp = false;
-    config.min_snr_db = 6.0;
-    config.min_decode_snr_db = 6.0;
-    let skimmer = run_skimmer(&iq, config, SAMPLE_SCP);
-    let calls = spotted_calls(&skimmer);
-    assert!(
-        calls.is_empty(),
-        "bayes: noise bursts produced callsign spots: {calls:?}"
-    );
-}
 
 #[test]
 fn pure_noise_produces_no_spots() {

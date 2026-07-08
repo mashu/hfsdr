@@ -1,7 +1,7 @@
 //! Settings serialization helpers and small shared utilities.
 
 use hfsdr::{
-    AgcMode, ChannelFilterKind, CwDetectorMode, CwSideband, FftWindowKind, IirFilterKind, SkimmerConfig, SkimmerDecoderKind, SpotSort,
+    AgcMode, ChannelFilterKind, CwDetectorMode, CwSideband, FftWindowKind, IirFilterKind, SkimmerConfig, SpotSort,
     SidetoneEnvelopeShape, WindowKind, DecoderParams, EnvelopeSettings,
 };
 
@@ -201,25 +201,6 @@ pub(crate) fn spot_sort_from_u8(v: u8) -> SpotSort {
     }
 }
 
-pub(crate) fn skimmer_decoder_to_u8(d: SkimmerDecoderKind) -> u8 {
-    match d {
-        // 0 was Bigram when it was the default; treat it as "legacy default"
-        // on load and persist an explicit Bigram choice as 3 instead.
-        SkimmerDecoderKind::Bigram => 3,
-        SkimmerDecoderKind::Adaptive => 1,
-        SkimmerDecoderKind::Bayes => 2,
-    }
-}
-
-pub(crate) fn skimmer_decoder_from_u8(v: u8) -> SkimmerDecoderKind {
-    match v {
-        1 => SkimmerDecoderKind::Adaptive,
-        3 => SkimmerDecoderKind::Bigram,
-        // 0 (pre-Bayes default) and anything else migrate to the new default.
-        _ => SkimmerDecoderKind::Bayes,
-    }
-}
-
 /// Map a persisted value equal to a pre-rework default onto the new default.
 fn migrate_default(v: f32, old_default: f32, new_default: f32) -> f32 {
     if (v - old_default).abs() < 1e-3 {
@@ -241,7 +222,6 @@ pub(crate) fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
         spot_store_max_age_secs: s.skimmer_store_max_age_secs,
         source_label: "rx".to_string(),
         require_scp: s.scp_require,
-        decoder: skimmer_decoder_from_u8(s.skimmer_decoder),
         lpf_cutoff_hz: migrate_default(s.skimmer_lpf_cutoff_hz, 120.0, 50.0),
         decode_gate_ms: s.skimmer_decode_gate_ms,
         focus_span_hz: s.skimmer_focus_span_hz,
@@ -274,7 +254,7 @@ mod tests {
     use crate::interaction::PlotAction;
     use crate::settings::AppSettings;
     use hfsdr::{
-        AgcMode, ChannelFilterKind, FftWindowKind, IirFilterKind, SkimmerDecoderKind, SpotSort, WindowKind,
+        AgcMode, ChannelFilterKind, FftWindowKind, IirFilterKind, SpotSort, WindowKind,
     };
 
     #[test]
@@ -369,19 +349,6 @@ mod tests {
             assert_eq!(spot_sort_from_u8(spot_sort_to_u8(s)), s);
         }
         assert_eq!(spot_sort_from_u8(9), SpotSort::SnrDesc);
-    }
-
-    #[test]
-    fn skimmer_decoder_codec_roundtrip() {
-        for kind in [
-            SkimmerDecoderKind::Bayes,
-            SkimmerDecoderKind::Bigram,
-            SkimmerDecoderKind::Adaptive,
-        ] {
-            assert_eq!(skimmer_decoder_from_u8(skimmer_decoder_to_u8(kind)), kind);
-        }
-        // Pre-Bayes persisted default (0 = Bigram) migrates to the new default.
-        assert_eq!(skimmer_decoder_from_u8(0), SkimmerDecoderKind::Bayes);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hfsdr::{
-    IqSource, KiwiSource, MasterScp, Skimmer, SkimmerConfig, SkimmerDecoderKind, SpectrumAnalyzer,
+    IqSource, KiwiSource, MasterScp, Skimmer, SkimmerConfig, SpectrumAnalyzer,
     Spot, SpotSort, KIWI_IQ_HALF_HZ,
 };
 
@@ -19,14 +19,6 @@ fn run_secs() -> u64 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(300)
-}
-
-fn decoder_kind() -> SkimmerDecoderKind {
-    match std::env::var("KIWI_TEST_DECODER").as_deref() {
-        Ok("adaptive") => SkimmerDecoderKind::Adaptive,
-        Ok("bigram") => SkimmerDecoderKind::Bigram,
-        _ => SkimmerDecoderKind::Bigram,
-    }
 }
 
 fn plausible_callsign(call: &str, scp: &MasterScp) -> bool {
@@ -64,13 +56,11 @@ fn kiwi_skimmer_decodes_on_20m() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(14_030_000.0);
     let run_for = Duration::from_secs(run_secs());
-    let decoder = decoder_kind();
 
     eprintln!(
-        "=== skimmer live: {host}:{port} @ {:.3} MHz, {}s, decoder {:?} ===",
+        "=== skimmer live: {host}:{port} @ {:.3} MHz, {}s ===",
         center_hz / 1e6,
-        run_for.as_secs(),
-        decoder
+        run_for.as_secs()
     );
 
     let mut src = KiwiSource::new(&host, port).with_passband(-KIWI_IQ_HALF_HZ, KIWI_IQ_HALF_HZ);
@@ -87,7 +77,6 @@ fn kiwi_skimmer_decodes_on_20m() {
     let mut analyzer = SpectrumAnalyzer::new(2048, 1024);
     let mut spectrum = vec![-120.0f32; 2048];
     let mut skimmer = Skimmer::new(SkimmerConfig {
-        decoder,
         require_scp: true,
         min_snr_db: 7.0,
         min_decode_snr_db: 5.0,

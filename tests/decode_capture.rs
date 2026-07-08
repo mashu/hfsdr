@@ -11,7 +11,7 @@ use std::path::Path;
 use flate2::read::GzDecoder;
 use hfsdr::{
     detect_peaks, read_meta, strongest_offset_hz, Complex32, DecoderParams, EnvelopeSettings,
-    MasterScp, Skimmer, SkimmerConfig, SkimmerDecoderKind, SpectrumAnalyzer, SpotSort,
+    MasterScp, Skimmer, SkimmerConfig, SpectrumAnalyzer, SpotSort,
 };
 
 fn load_capture(path: &Path) -> (hfsdr::IqCaptureMeta, Vec<Complex32>) {
@@ -136,7 +136,6 @@ fn decode_capture_file() {
     );
 
     let base = SkimmerConfig {
-        decoder: SkimmerDecoderKind::Bigram,
         min_snr_db: 7.0,
         min_decode_snr_db: 5.0,
         decode_gate_ms: 45.0,

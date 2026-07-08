@@ -1,8 +1,6 @@
 //! In-band CW skimmer scaffolding and shared spectral tools.
 
-pub mod adaptive;
 pub mod bayes;
-pub mod bigram;
 pub mod config;
 pub mod decode_channel;
 pub mod decoder;
@@ -16,12 +14,8 @@ pub mod scp;
 pub mod spots;
 pub mod timing;
 
-pub use adaptive::AdaptiveCwDecoder;
 pub use bayes::BayesCwDecoder;
-pub use bigram::BigramCwDecoder;
-pub use config::{
-    DecoderParams, EnvelopeSettings, SkimmerConfig, SkimmerDecoderKind,
-};
+pub use config::{DecoderParams, EnvelopeSettings, SkimmerConfig};
 pub use decode_channel::DecodeChannel;
 pub use decoder::{dot_seconds_from_wpm, wpm_from_dot_seconds, CwDecoder};
 pub use engine::Skimmer;

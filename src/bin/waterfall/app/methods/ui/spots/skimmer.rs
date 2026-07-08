@@ -16,30 +16,11 @@ impl WaterfallApp {
         self.scp_body(ui);
 
         popup_section(ui, "Decoder", Some("How peaks become callsigns"), |ui| {
-            let dec_sel = match self.skimmer_ui.skimmer.decoder {
-                SkimmerDecoderKind::Bayes => 0,
-                SkimmerDecoderKind::Bigram => 1,
-                SkimmerDecoderKind::Adaptive => 2,
-            };
-            ui.label(egui::RichText::new("Algorithm").small().color(MUTED));
-            if let Some(i) = segment_choice(
-                ui,
-                "skim_decoder",
-                dec_sel,
-                &["Bayesian", "Bigram beam", "Adaptive"],
-            ) {
-                self.skimmer_ui.skimmer.decoder = match i {
-                    0 => SkimmerDecoderKind::Bayes,
-                    1 => SkimmerDecoderKind::Bigram,
-                    _ => SkimmerDecoderKind::Adaptive,
-                };
-            }
-            let dec_hint = match self.skimmer_ui.skimmer.decoder {
-                SkimmerDecoderKind::Bayes => "Statistical model — best weak-signal copy, self-tuning",
-                SkimmerDecoderKind::Bigram => "Beam search on threshold keying — higher CPU",
-                SkimmerDecoderKind::Adaptive => "Lighter CPU — good for casual browsing",
-            };
-            ui.label(egui::RichText::new(dec_hint).small().color(MUTED));
+            ui.label(
+                egui::RichText::new("Bayesian decoder — key levels and speed are estimated from the signal")
+                    .small()
+                    .color(MUTED),
+            );
             scroll_slider_f32(ui, &mut self.skimmer_ui.skimmer.min_snr_db, 6.0..=30.0, "Peak min SNR");
             scroll_slider_f32(
                 ui,
@@ -104,40 +85,37 @@ impl WaterfallApp {
                 8.0..=60.0,
                 "Initial WPM",
             );
-            if self.skimmer_ui.skimmer.decoder != SkimmerDecoderKind::Adaptive {
-                let mut beam = self.skimmer_ui.skimmer.decoder_params.beam_width as i32;
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Beam width").small().color(MUTED));
-                    ui.add(egui::DragValue::new(&mut beam).range(1..=64).speed(1));
-                });
-                self.skimmer_ui.skimmer.decoder_params.beam_width = beam as usize;
-            }
+            let mut beam = self.skimmer_ui.skimmer.decoder_params.beam_width as i32;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Beam width").small().color(MUTED));
+                ui.add(egui::DragValue::new(&mut beam).range(1..=64).speed(1));
+            });
+            self.skimmer_ui.skimmer.decoder_params.beam_width = beam as usize;
             scroll_slider_f32(ui, &mut self.skimmer_ui.skimmer.decode_gate_ms, 20.0..=500.0, "Key gate ms");
-            if self.skimmer_ui.skimmer.decoder == SkimmerDecoderKind::Bayes {
-                ui.label(
-                    egui::RichText::new("Key thresholds are estimated from the signal")
-                        .small()
-                        .color(MUTED),
-                );
-            } else {
-                scroll_slider_f32(
-                    ui,
-                    &mut self.skimmer_ui.skimmer.decoder_params.envelope.thr_low,
-                    0.05..=0.9,
-                    "Key thr low",
-                );
-                scroll_slider_f32(
-                    ui,
-                    &mut self.skimmer_ui.skimmer.decoder_params.envelope.thr_high,
-                    0.1..=0.99,
-                    "Key thr high",
-                );
-                if self.skimmer_ui.skimmer.decoder_params.envelope.thr_high
-                    <= self.skimmer_ui.skimmer.decoder_params.envelope.thr_low
-                {
-                    self.skimmer_ui.skimmer.decoder_params.envelope.thr_high =
-                        self.skimmer_ui.skimmer.decoder_params.envelope.thr_low + 0.05;
-                }
+            ui.label(
+                egui::RichText::new(
+                    "Gate thresholds arm decoding; the decoder estimates its own key levels",
+                )
+                .small()
+                .color(MUTED),
+            );
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer_ui.skimmer.decoder_params.envelope.thr_low,
+                0.05..=0.9,
+                "Gate thr low",
+            );
+            scroll_slider_f32(
+                ui,
+                &mut self.skimmer_ui.skimmer.decoder_params.envelope.thr_high,
+                0.1..=0.99,
+                "Gate thr high",
+            );
+            if self.skimmer_ui.skimmer.decoder_params.envelope.thr_high
+                <= self.skimmer_ui.skimmer.decoder_params.envelope.thr_low
+            {
+                self.skimmer_ui.skimmer.decoder_params.envelope.thr_high =
+                    self.skimmer_ui.skimmer.decoder_params.envelope.thr_low + 0.05;
             }
         });
 

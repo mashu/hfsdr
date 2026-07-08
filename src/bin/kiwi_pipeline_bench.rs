@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use hfsdr::{
     kiwi_iq_half_hz, Complex32, CwChannelSettings, FirDecimator, IqAudioDemod, IqSource,
-    KiwiSource, Skimmer, SkimmerConfig, SkimmerDecoderKind, SpectrumAnalyzer, SpectrumFrontEnd,
+    KiwiSource, Skimmer, SkimmerConfig, SpectrumAnalyzer, SpectrumFrontEnd,
     spectrum_hop, spectrum_plan,
 };
 
@@ -329,7 +329,6 @@ fn main() {
         min_snr_db: 8.7,
         min_decode_snr_db: 18.0,
         decode_gate_ms: 64.0,
-        decoder: SkimmerDecoderKind::Bigram,
         require_scp: false,
         source_label: "bench".into(),
         ..SkimmerConfig::default()

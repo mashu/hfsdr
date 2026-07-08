@@ -2,20 +2,9 @@
 
 use std::time::Duration;
 
-/// Morse decoder algorithm for each skimmer channel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum SkimmerDecoderKind {
-    /// Statistical model: HMM key detection over the log-envelope, online-EM
-    /// timing mixtures, posterior beam search (best copy, self-adapting).
-    #[default]
-    Bayes,
-    /// Beam search + callsign bigram model over Schmitt-threshold keying.
-    Bigram,
-    /// Adaptive envelope FSM (lightest CPU).
-    Adaptive,
-}
-
-/// Envelope keying thresholds as fractions of (peak − noise).
+/// Envelope keying thresholds as fractions of (peak − noise), used by the
+/// per-channel decode gate ([`super::envelope::DecodeGate`]). The Bayesian
+/// decoder itself estimates its own levels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EnvelopeSettings {
     pub thr_low: f32,
@@ -46,7 +35,7 @@ impl EnvelopeSettings {
     }
 }
 
-/// Per-decoder parameters (shared shape; beam width ignored by adaptive).
+/// Per-decoder parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DecoderParams {
     pub initial_wpm: f32,
@@ -90,7 +79,6 @@ pub struct SkimmerConfig {
     pub spot_store_max_age_secs: f32,
     pub source_label: String,
     pub require_scp: bool,
-    pub decoder: SkimmerDecoderKind,
     /// Single-sided channel filter cutoff (Hz) — half the keying passband.
     pub lpf_cutoff_hz: f32,
     /// Sustained keyed energy required before Morse decode (ms).
@@ -115,7 +103,6 @@ impl Default for SkimmerConfig {
             spot_store_max_age_secs: 300.0,
             source_label: "rx".to_string(),
             require_scp: false,
-            decoder: SkimmerDecoderKind::Bayes,
             lpf_cutoff_hz: 50.0,
             decode_gate_ms: 50.0,
             focus_span_hz: 3_000.0,
@@ -159,8 +146,7 @@ impl SkimmerConfig {
 
     /// Changing these requires tearing down active decoder channels.
     pub fn channel_dsp_changed(&self, other: &Self) -> bool {
-        self.decoder != other.decoder
-            || (self.lpf_cutoff_hz - other.lpf_cutoff_hz).abs() > f32::EPSILON
+        (self.lpf_cutoff_hz - other.lpf_cutoff_hz).abs() > f32::EPSILON
             || (self.decode_gate_ms - other.decode_gate_ms).abs() > f32::EPSILON
             || (self.min_decode_snr_db - other.min_decode_snr_db).abs() > f32::EPSILON
             || self.decoder_params != other.decoder_params
@@ -174,16 +160,15 @@ mod tests {
     #[test]
     fn defaults_are_valid() {
         let c = SkimmerConfig::default().clamped();
-        assert_eq!(c.decoder, SkimmerDecoderKind::Bayes);
         assert!(c.decode_gate_ms >= 20.0);
         assert!(c.decoder_params.envelope.thr_high > c.decoder_params.envelope.thr_low);
     }
 
     #[test]
-    fn channel_dsp_change_detects_decoder_switch() {
+    fn channel_dsp_change_detects_filter_change() {
         let a = SkimmerConfig::default();
         let mut b = a.clone();
-        b.decoder = SkimmerDecoderKind::Adaptive;
+        b.lpf_cutoff_hz += 10.0;
         assert!(a.channel_dsp_changed(&b));
     }
 

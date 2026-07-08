@@ -8,10 +8,8 @@ use rayon::prelude::*;
 use crate::dsp::{design_gaussian_lowpass, DecimFilterKind, Decimator, FirFilter, IqRotator};
 use crate::source::Complex32;
 
-use super::adaptive::AdaptiveCwDecoder;
 use super::bayes::BayesCwDecoder;
-use super::bigram::BigramCwDecoder;
-use super::config::{DecoderParams, SkimmerConfig, SkimmerDecoderKind};
+use super::config::SkimmerConfig;
 use super::decoder::CwDecoder;
 use super::envelope::{DecodeGate, KeyingEnvelope};
 use super::patterns::analyze;
@@ -33,44 +31,6 @@ const AFC_MAX_DEV_HZ: f32 = 30.0;
 /// Fraction of the measured residual applied per processed block.
 const AFC_GAIN: f32 = 0.2;
 
-enum ChannelDecoder {
-    Adaptive(AdaptiveCwDecoder),
-    Bigram(BigramCwDecoder),
-    Bayes(BayesCwDecoder),
-}
-
-impl ChannelDecoder {
-    fn new(kind: SkimmerDecoderKind, audio_rate: f32, params: DecoderParams) -> Self {
-        match kind {
-            SkimmerDecoderKind::Adaptive => {
-                Self::Adaptive(AdaptiveCwDecoder::with_params(audio_rate, params))
-            }
-            SkimmerDecoderKind::Bigram => {
-                Self::Bigram(BigramCwDecoder::with_params(audio_rate, params))
-            }
-            SkimmerDecoderKind::Bayes => {
-                Self::Bayes(BayesCwDecoder::with_params(audio_rate, params))
-            }
-        }
-    }
-
-    fn push_audio(&mut self, audio: &[f32], sample_rate: f32) -> String {
-        match self {
-            Self::Adaptive(d) => d.push_audio(audio, sample_rate),
-            Self::Bigram(d) => d.push_audio(audio, sample_rate),
-            Self::Bayes(d) => d.push_audio(audio, sample_rate),
-        }
-    }
-
-    fn wpm(&self) -> f32 {
-        match self {
-            Self::Adaptive(d) => d.wpm(),
-            Self::Bigram(d) => d.wpm(),
-            Self::Bayes(d) => d.wpm(),
-        }
-    }
-}
-
 struct DecoderChannel {
     offset_hz: f32,
     /// Fine frequency correction from the AFC discriminator.
@@ -88,7 +48,7 @@ struct DecoderChannel {
     env_buf: Vec<f32>,
     gate_env: KeyingEnvelope,
     gate: DecodeGate,
-    decoder: ChannelDecoder,
+    decoder: BayesCwDecoder,
     text: String,
     last_seen: Instant,
     snr_db: f32,
@@ -119,7 +79,7 @@ impl DecoderChannel {
             env_buf: Vec::with_capacity(512),
             gate_env: KeyingEnvelope::new(config.decoder_params.envelope, env_rate),
             gate: DecodeGate::new(env_rate, config.decode_gate_ms),
-            decoder: ChannelDecoder::new(config.decoder, env_rate, config.decoder_params),
+            decoder: BayesCwDecoder::with_params(env_rate, config.decoder_params),
             text: String::new(),
             last_seen: Instant::now(),
             snr_db,
@@ -516,7 +476,7 @@ fn trim_decoded_prefix(text: &mut String, call: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skimmer::config::{DecoderParams, EnvelopeSettings, SkimmerConfig, SkimmerDecoderKind};
+    use crate::skimmer::config::{DecoderParams, EnvelopeSettings, SkimmerConfig};
 
     /// Offline diagnostic: dump the channel envelope chain for a capture.
     /// CAPTURE=path OFFSET=hz OUT=csv cargo test --lib diagnose_capture -- --ignored --nocapture
@@ -567,64 +527,22 @@ mod tests {
             pct(0.05), pct(0.25), pct(0.50), pct(0.75), pct(0.90), pct(0.99)
         );
 
-        // Replay tracker + keyer over the envelope and log everything.
+        // Replay the decode-gate envelope over the capture for the CSV, and
+        // run the Bayesian decoder over the same envelope for the text.
         let mut env = KeyingEnvelope::new(config.decoder_params.envelope, ch.env_rate);
-        let mut keyer = crate::skimmer::timing::Keyer::new(ch.env_rate);
-        let mut clock = crate::skimmer::timing::ElementClock::new(config.decoder_params.initial_wpm);
-        keyer.set_dot_seconds(clock.dot_seconds());
-        let mut key = false;
-        let verbose = std::env::var("VERBOSE").is_ok();
-        let mut csv = String::from("i,env,noise_thr_low,thr_high,key,signal\n");
-        let mut marks: Vec<f32> = Vec::new();
-        let mut spaces: Vec<f32> = Vec::new();
+        let mut csv = String::from("i,env,thr_low,thr_high,signal\n");
         for (i, &x) in env_all.iter().enumerate() {
             let step = env.update(x);
-            key = if !step.signal_present { false } else if key { step.env >= step.thr_low } else { step.env > step.thr_high };
-            if let Some(ev) = keyer.step(key) {
-                match ev {
-                    crate::skimmer::timing::KeyEvent::Mark(s) => {
-                        clock.classify_mark(s);
-                        keyer.set_dot_seconds(clock.dot_seconds());
-                        marks.push(s);
-                        if verbose {
-                            eprintln!(
-                                "t={:6.2}s mark {:4.0} ms   dot {:4.0} dash {:4.0}",
-                                i as f32 / ch.env_rate, s * 1e3,
-                                clock.dot_seconds() * 1e3, clock.dash_seconds() * 1e3
-                            );
-                        }
-                    }
-                    crate::skimmer::timing::KeyEvent::Space(s) => {
-                        clock.record_space(s);
-                        if verbose && s / clock.dot_seconds() > 1.6 {
-                            eprintln!(
-                                "t={:6.2}s space {:5.1} dits  kind {:?}",
-                                i as f32 / ch.env_rate, s / clock.dot_seconds(),
-                                clock.space_kind(s)
-                            );
-                        }
-                        spaces.push(s);
-                    }
-                }
-            }
             csv.push_str(&format!(
-                "{i},{:.5},{:.5},{:.5},{},{}\n",
-                step.env, step.thr_low, step.thr_high, key as u8, step.signal_present as u8
+                "{i},{:.5},{:.5},{:.5},{}\n",
+                step.env, step.thr_low, step.thr_high, step.signal_present as u8
             ));
         }
         std::fs::write(&out_path, csv).unwrap();
-        let fmt = |v: &Vec<f32>| {
-            let mut s: Vec<f32> = v.clone();
-            s.sort_by(f32::total_cmp);
-            if s.is_empty() { return "none".into(); }
-            format!(
-                "n={} min {:.0}ms p25 {:.0} p50 {:.0} p75 {:.0} max {:.0}",
-                s.len(), s[0] * 1e3, s[s.len() / 4] * 1e3, s[s.len() / 2] * 1e3, s[3 * s.len() / 4] * 1e3, s[s.len() - 1] * 1e3
-            )
-        };
-        eprintln!("marks:  {}", fmt(&marks));
-        eprintln!("spaces: {}", fmt(&spaces));
-        eprintln!("clock dot {:.0} ms dash {:.0} ms → {:.0} wpm", clock.dot_seconds() * 1e3, clock.dash_seconds() * 1e3, 1.2 / clock.dot_seconds());
+        let mut dec = BayesCwDecoder::with_params(ch.env_rate, config.decoder_params);
+        let text = dec.push_audio(&env_all, ch.env_rate);
+        eprintln!("decoded text: {text:?}");
+        eprintln!("decoder wpm estimate: {:.0}", dec.wpm());
         eprintln!("csv written to {out_path}");
     }
     use crate::skimmer::morse::encode_char;
@@ -679,7 +597,6 @@ mod tests {
         let spectrum = spectrum_with_peak(offset, rate, 2048);
         let scp = MasterScp::from_text(SAMPLE_SCP);
         let mut sk = Skimmer::new(SkimmerConfig {
-            decoder: SkimmerDecoderKind::Bigram,
             require_scp: false,
             min_snr_db: 10.0,
             min_decode_snr_db: 10.0,
@@ -706,7 +623,6 @@ mod tests {
         let spectrum = spectrum_with_peak(offset, rate, 2048);
         let scp = MasterScp::from_text("VER20260202\nW1AW\n");
         let mut sk = Skimmer::new(SkimmerConfig {
-            decoder: SkimmerDecoderKind::Bigram,
             require_scp: true,
             min_snr_db: 10.0,
             min_decode_snr_db: 10.0,
@@ -734,14 +650,13 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_decoder_produces_spot() {
+    fn custom_envelope_gate_still_produces_spot() {
         let rate = 12_000.0;
         let offset = 1_000.0;
         let iq = keyed_iq("CQ DE W1AW", 25.0, rate, offset);
         let spectrum = spectrum_with_peak(offset, rate, 2048);
         let scp = MasterScp::from_text(SAMPLE_SCP);
         let mut sk = Skimmer::new(SkimmerConfig {
-            decoder: SkimmerDecoderKind::Adaptive,
             require_scp: false,
             min_snr_db: 10.0,
             min_decode_snr_db: 10.0,
@@ -765,7 +680,7 @@ mod tests {
                 .sorted(SpotSort::SnrDesc)
                 .iter()
                 .any(|s| s.callsign.is_some()),
-            "adaptive decoder produced no callsign spot"
+            "no callsign spot with custom gate thresholds"
         );
     }
 

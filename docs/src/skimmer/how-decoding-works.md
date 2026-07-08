@@ -72,7 +72,7 @@ what you hear.
 Morse is **ambiguous** when dots run together (`·` vs `·` boundary). A single
 greedy decode confuses `E`/`T`/`I` chains.
 
-The Bayesian and Bigram decoders keep multiple hypotheses scored by:
+The decoder keeps multiple hypotheses scored by:
 
 1. **Timing fit** — the duration posterior of each element reading.
 2. **Language model** — common letter pairs in CW traffic (bigrams, biased
@@ -85,18 +85,6 @@ The Bayesian and Bigram decoders keep multiple hypotheses scored by:
 ```
 
 Better on **calls and CQ** than random letters; still fails on heavy QRM same frequency.
-
----
-
-## Alternative decoders
-
-**Bigram beam** is the previous default: an adaptive Schmitt trigger with a
-debouncing keyer and a percentile two-cluster dot fit, feeding the same beam
-search. Solid, but its key thresholds are fixed fractions of the tracked
-span and can want manual tuning on hard bands.
-
-**Adaptive** is a plain finite-state machine with the same front end —
-lightest CPU, used in tests and as a reference.
 
 ---
 
