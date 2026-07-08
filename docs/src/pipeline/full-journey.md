@@ -63,7 +63,7 @@ See [How the panadapter works](./spectrum-and-waterfall.md).
 
 1. **Peak pick** on the latest spectrum row (SNR vs noise floor, min separation).
 2. For each peak, spawn/maintain a **cheap channel**: NCO + decimate + 2-pole LPF.
-3. **Envelope** feeds a **Morse decoder** (bigram beam search by default).
+3. **Envelope** feeds a **Morse decoder** (Bayesian HMM + beam search by default).
 4. **Pattern + SCP** turn raw text into CQ / call / heard spots in the store.
 
 The skimmer **trades fidelity for parallelism** — see [What the skimmer does](./../skimmer/contest-use.md).

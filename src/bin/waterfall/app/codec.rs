@@ -203,15 +203,20 @@ pub(crate) fn spot_sort_from_u8(v: u8) -> SpotSort {
 
 pub(crate) fn skimmer_decoder_to_u8(d: SkimmerDecoderKind) -> u8 {
     match d {
-        SkimmerDecoderKind::Bigram => 0,
+        // 0 was Bigram when it was the default; treat it as "legacy default"
+        // on load and persist an explicit Bigram choice as 3 instead.
+        SkimmerDecoderKind::Bigram => 3,
         SkimmerDecoderKind::Adaptive => 1,
+        SkimmerDecoderKind::Bayes => 2,
     }
 }
 
 pub(crate) fn skimmer_decoder_from_u8(v: u8) -> SkimmerDecoderKind {
     match v {
         1 => SkimmerDecoderKind::Adaptive,
-        _ => SkimmerDecoderKind::Bigram,
+        3 => SkimmerDecoderKind::Bigram,
+        // 0 (pre-Bayes default) and anything else migrate to the new default.
+        _ => SkimmerDecoderKind::Bayes,
     }
 }
 
@@ -368,18 +373,15 @@ mod tests {
 
     #[test]
     fn skimmer_decoder_codec_roundtrip() {
-        assert_eq!(
-            skimmer_decoder_from_u8(skimmer_decoder_to_u8(SkimmerDecoderKind::Bigram)),
-            SkimmerDecoderKind::Bigram
-        );
-        assert_eq!(
-            skimmer_decoder_from_u8(skimmer_decoder_to_u8(SkimmerDecoderKind::Adaptive)),
-            SkimmerDecoderKind::Adaptive
-        );
-        assert_eq!(
-            skimmer_decoder_from_u8(0),
-            SkimmerDecoderKind::Bigram
-        );
+        for kind in [
+            SkimmerDecoderKind::Bayes,
+            SkimmerDecoderKind::Bigram,
+            SkimmerDecoderKind::Adaptive,
+        ] {
+            assert_eq!(skimmer_decoder_from_u8(skimmer_decoder_to_u8(kind)), kind);
+        }
+        // Pre-Bayes persisted default (0 = Bigram) migrates to the new default.
+        assert_eq!(skimmer_decoder_from_u8(0), SkimmerDecoderKind::Bayes);
     }
 
     #[test]

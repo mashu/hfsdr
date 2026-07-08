@@ -57,13 +57,13 @@ operation; every tunable has a UI control and persists in settings.
 
 | Setting | What it does |
 |---------|----------------|
-| **Algorithm** | **Bigram beam** (quality) or **Adaptive** (CPU) |
+| **Algorithm** | **Bayesian** (self-tuning, best copy), **Bigram beam**, or **Adaptive** (CPU) |
 | **Peak min SNR / separation** | Which FFT peaks spawn decoders |
 | **Max decoders** | Parallel channel cap |
 | **Channel LPF Hz** | Per-channel filter half-width before decode |
 | **Initial WPM** | Dot-length seed before speed adapts |
-| **Beam width** | Bigram hypothesis count (Bigram only) |
-| **Key thr low / high** | Envelope key-down thresholds |
+| **Beam width** | Beam hypothesis count (Bayesian / Bigram) |
+| **Key thr low / high** | Envelope key-down thresholds (Bigram / Adaptive; Bayesian estimates its own) |
 | **Channel timeout** | Retire decoder when peak vanishes (seconds) |
 | **Store max age** | Drop stale spots from engine store |
 | **Max decode chars** | Text buffer per channel |
@@ -102,4 +102,4 @@ Clear spots when changing band or after major retune to avoid stale calls.
 
 ## Next
 
-[How decoding works](./how-decoding-works.md) — Morse timing and bigram search.
+[How decoding works](./how-decoding-works.md) — Morse timing and beam search.

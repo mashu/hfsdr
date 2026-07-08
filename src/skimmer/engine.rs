@@ -9,6 +9,7 @@ use crate::dsp::{design_gaussian_lowpass, DecimFilterKind, Decimator, FirFilter,
 use crate::source::Complex32;
 
 use super::adaptive::AdaptiveCwDecoder;
+use super::bayes::BayesCwDecoder;
 use super::bigram::BigramCwDecoder;
 use super::config::{DecoderParams, SkimmerConfig, SkimmerDecoderKind};
 use super::decoder::CwDecoder;
@@ -35,6 +36,7 @@ const AFC_GAIN: f32 = 0.2;
 enum ChannelDecoder {
     Adaptive(AdaptiveCwDecoder),
     Bigram(BigramCwDecoder),
+    Bayes(BayesCwDecoder),
 }
 
 impl ChannelDecoder {
@@ -46,6 +48,9 @@ impl ChannelDecoder {
             SkimmerDecoderKind::Bigram => {
                 Self::Bigram(BigramCwDecoder::with_params(audio_rate, params))
             }
+            SkimmerDecoderKind::Bayes => {
+                Self::Bayes(BayesCwDecoder::with_params(audio_rate, params))
+            }
         }
     }
 
@@ -53,6 +58,7 @@ impl ChannelDecoder {
         match self {
             Self::Adaptive(d) => d.push_audio(audio, sample_rate),
             Self::Bigram(d) => d.push_audio(audio, sample_rate),
+            Self::Bayes(d) => d.push_audio(audio, sample_rate),
         }
     }
 
@@ -60,6 +66,7 @@ impl ChannelDecoder {
         match self {
             Self::Adaptive(d) => d.wpm(),
             Self::Bigram(d) => d.wpm(),
+            Self::Bayes(d) => d.wpm(),
         }
     }
 }

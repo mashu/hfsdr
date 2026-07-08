@@ -5,10 +5,13 @@ use std::time::Duration;
 /// Morse decoder algorithm for each skimmer channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SkimmerDecoderKind {
-    /// Beam search + callsign bigram model (best quality, more CPU).
+    /// Statistical model: HMM key detection over the log-envelope, online-EM
+    /// timing mixtures, posterior beam search (best copy, self-adapting).
     #[default]
+    Bayes,
+    /// Beam search + callsign bigram model over Schmitt-threshold keying.
     Bigram,
-    /// Adaptive envelope FSM (lighter CPU).
+    /// Adaptive envelope FSM (lightest CPU).
     Adaptive,
 }
 
@@ -112,7 +115,7 @@ impl Default for SkimmerConfig {
             spot_store_max_age_secs: 300.0,
             source_label: "rx".to_string(),
             require_scp: false,
-            decoder: SkimmerDecoderKind::Bigram,
+            decoder: SkimmerDecoderKind::Bayes,
             lpf_cutoff_hz: 50.0,
             decode_gate_ms: 50.0,
             focus_span_hz: 3_000.0,
@@ -171,7 +174,7 @@ mod tests {
     #[test]
     fn defaults_are_valid() {
         let c = SkimmerConfig::default().clamped();
-        assert_eq!(c.decoder, SkimmerDecoderKind::Bigram);
+        assert_eq!(c.decoder, SkimmerDecoderKind::Bayes);
         assert!(c.decode_gate_ms >= 20.0);
         assert!(c.decoder_params.envelope.thr_high > c.decoder_params.envelope.thr_low);
     }

@@ -244,7 +244,8 @@ impl BigramCwDecoder {
 }
 
 /// Log-prior for character bigrams, biased toward CQ/DE and callsign shapes.
-fn bigram_log(prev: Option<char>, ch: char) -> f32 {
+/// Shared with [`super::bayes`] as the text-layer language prior.
+pub(crate) fn bigram_log(prev: Option<char>, ch: char) -> f32 {
     let p = prev.unwrap_or(' ');
     let c = ch.to_ascii_uppercase();
     match (p, c) {
