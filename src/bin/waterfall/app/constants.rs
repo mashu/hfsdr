@@ -175,7 +175,8 @@ pub(crate) struct StorageKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ViewportKey {
     view_span_hz: u32,
-    pan_bits: u64,
+    /// Pan in whole destination columns — see [`quantized_pan_steps`].
+    pan_bits: i64,
     plot_width: u32,
 }
 
@@ -183,10 +184,30 @@ impl ViewportKey {
     pub(crate) fn from_view(view_span_hz: f32, pan_offset_hz: f64, plot_width: usize) -> Self {
         Self {
             view_span_hz: view_span_hz.round() as u32,
-            pan_bits: pan_offset_hz.to_bits(),
+            pan_bits: quantized_pan_steps(view_span_hz, pan_offset_hz, plot_width),
             plot_width: plot_width as u32,
         }
     }
+}
+
+/// Pan offset quantized to whole destination columns.
+///
+/// A pan smaller than one column cannot change a single waterfall pixel, so it
+/// must not invalidate the viewport key — an exact f64 comparison here forces a
+/// full 360-row recompose on every frame of a drag (10-17 ms at 1200-1920 px)
+/// instead of the ~0.1 ms incremental append. Same reasoning as
+/// [`stable_plot_width`], applied to the other axis.
+pub(crate) fn quantized_pan_steps(
+    view_span_hz: f32,
+    pan_offset_hz: f64,
+    plot_width: usize,
+) -> i64 {
+    let width = plot_width.max(1) as f64;
+    let hz_per_column = (view_span_hz.max(0.0) as f64) / width;
+    if !(hz_per_column > 0.0) || !pan_offset_hz.is_finite() {
+        return 0;
+    }
+    (pan_offset_hz / hz_per_column).round() as i64
 }
 
 /// Quantize plot width so minor egui layout jitter does not rebuild the waterfall texture every frame.
@@ -250,6 +271,85 @@ mod tests {
     fn stable_plot_width_quantizes_to_eight_pixels() {
         assert_eq!(stable_plot_width(1201.0), 1208);
         assert_eq!(stable_plot_width(1200.0), 1200);
+    }
+
+    /// Regression guard for the drag-pan cliff: a pan too small to move a pixel
+    /// must keep the viewport key, or every drag frame forces a full recompose.
+    #[test]
+    fn sub_column_pan_preserves_viewport_key() {
+        let span = 12_000.0f32;
+        let width = 1200usize;
+        let hz_per_column = f64::from(span) / width as f64;
+
+        let base = ViewportKey::from_view(span, 0.0, width);
+        let tenth = ViewportKey::from_view(span, hz_per_column * 0.1, width);
+        let third = ViewportKey::from_view(span, hz_per_column * 0.3, width);
+        assert_eq!(base, tenth, "a tenth-column pan cannot change a pixel");
+        assert_eq!(base, third, "a third-column pan cannot change a pixel");
+
+        let one = ViewportKey::from_view(span, hz_per_column * 1.0, width);
+        let two = ViewportKey::from_view(span, hz_per_column * 2.0, width);
+        assert_ne!(base, one, "a whole-column pan must invalidate");
+        assert_ne!(one, two, "successive column pans stay distinct");
+    }
+
+    #[test]
+    fn quantized_pan_steps_counts_columns_and_survives_degenerate_input() {
+        let span = 9_600.0f32;
+        let width = 960usize; // 10 Hz per column
+        assert_eq!(quantized_pan_steps(span, 0.0, width), 0);
+        assert_eq!(quantized_pan_steps(span, 10.0, width), 1);
+        assert_eq!(quantized_pan_steps(span, -30.0, width), -3);
+        assert_eq!(quantized_pan_steps(span, 4.0, width), 0, "rounds to nearest");
+        // Degenerate inputs must not produce a NaN or panic key.
+        assert_eq!(quantized_pan_steps(0.0, 100.0, width), 0);
+        assert_eq!(quantized_pan_steps(span, f64::NAN, width), 0);
+        assert_eq!(quantized_pan_steps(span, 10.0, 0), 0);
+    }
+
+    /// Quantifies the phase-2 win across drag speeds: how many frames of a drag
+    /// keep the incremental append path instead of forcing a full recompose.
+    #[test]
+    fn drag_rebuild_rate_by_speed() {
+        let span = 12_000.0f32;
+        let width = 1200usize;
+        let hz_per_column = f64::from(span) / width as f64;
+        let frames = 60;
+
+        for &columns_per_frame in &[0.05f64, 0.25, 0.5, 1.0, 3.0] {
+            let mut rebuilds = 0usize;
+            let mut prev = ViewportKey::from_view(span, 0.0, width);
+            for f in 1..=frames {
+                let pan = hz_per_column * columns_per_frame * f as f64;
+                let key = ViewportKey::from_view(span, pan, width);
+                if key != prev {
+                    rebuilds += 1;
+                    prev = key;
+                }
+            }
+            println!(
+                "drag {columns_per_frame:>4} col/frame -> {rebuilds:>2}/{frames} rebuilds                  ({:.0}% frames on the fast path)",
+                100.0 * (frames - rebuilds) as f64 / frames as f64
+            );
+            // Rebuilds can never exceed the columns actually crossed.
+            let crossed = (columns_per_frame * frames as f64).ceil() as usize;
+            assert!(rebuilds <= crossed.min(frames));
+        }
+
+        // A slow, precise drag is the case this fix exists for.
+        let mut rebuilds = 0usize;
+        let mut prev = ViewportKey::from_view(span, 0.0, width);
+        for f in 1..=frames {
+            let key = ViewportKey::from_view(span, hz_per_column * 0.25 * f as f64, width);
+            if key != prev {
+                rebuilds += 1;
+                prev = key;
+            }
+        }
+        assert!(
+            rebuilds <= frames / 3,
+            "a quarter-column-per-frame drag should skip most rebuilds, got {rebuilds}/{frames}"
+        );
     }
 
     #[test]
