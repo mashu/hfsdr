@@ -216,6 +216,7 @@ fn pipeline_drawer_toggles_stage() {
     assert_ne!(harness.state().radio.cw.agc.enabled, before);
 }
 
+#[cfg(feature = "airspy")]
 #[test]
 fn connection_form_airspy_kind_renders() {
     let mut harness = panel_harness();
@@ -226,6 +227,7 @@ fn connection_form_airspy_kind_renders() {
     assert_eq!(harness.state().connection.form.kind, SourceKind::Airspy);
 }
 
+#[cfg(feature = "rtlsdr")]
 #[test]
 fn connection_form_rtlsdr_kind_renders() {
     let mut harness = panel_harness();

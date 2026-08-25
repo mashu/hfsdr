@@ -338,6 +338,7 @@ fn source_kind_switch_while_offline() {
     harness.state_mut().connection.form.show_connection_drawer = true;
     for kind in [
         SourceKind::Kiwi,
+        #[cfg(feature = "airspy")]
         SourceKind::Airspy,
         #[cfg(feature = "rtlsdr")]
         SourceKind::RtlSdr,
