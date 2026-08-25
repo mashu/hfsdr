@@ -7,20 +7,26 @@ use eframe::egui::{self, Color32};
 use crate::app::prelude::*;
 use crate::app::WaterfallApp;
 use crate::app::ViewportKey;
-use crate::colormap::db_to_colour;
+use crate::colormap::palette_colour;
+use hfsdr::WaterfallPalette;
 
 impl WaterfallApp {
+    /// Colourise one composed row into the pixel buffer.
+    ///
+    /// This is the hot loop of the whole waterfall: at 1580x360 a full recompose
+    /// is ~570k calls, and evaluating the ramp directly (a `powf` plus a stop
+    /// interpolation each) costs ~10 ms of the ~15 ms rebuild. Going through the
+    /// prebuilt palette makes it an index and a load.
     pub(crate) fn write_row_pixels(
         pixels: &mut [Color32],
         y: usize,
         width: usize,
         db_row: &[f32],
-        ref_db: f32,
-        range_db: f32,
+        palette: &WaterfallPalette,
     ) {
         let base = y * width;
         for (x, &db) in db_row.iter().enumerate().take(width) {
-            pixels[base + x] = db_to_colour(db, ref_db, range_db);
+            pixels[base + x] = palette_colour(palette, db);
         }
     }
 
@@ -150,20 +156,23 @@ impl WaterfallApp {
         if can_append {
             let t_compose = Instant::now();
             let head = self.plot.waterfall.viewport_row_head;
+            // Borrow the reusable buffers out of the cache for the duration of the
+            // loop so composing and pixel-writing can hold disjoint borrows of self.
+            self.plot.waterfall.palette.sync(ref_db, range_db);
+            let mut scratch = std::mem::take(&mut self.plot.waterfall.compose_scratch);
             for i in 0..n_apply {
                 let y = (head + i) % h;
                 let history_idx = pending_start - n_apply + i;
-                let row_db =
-                    self.waterfall_row_db_for_viewport(history_idx, &view, dst_w, avg);
+                self.waterfall_row_db_into(history_idx, &view, dst_w, avg, &mut scratch);
                 Self::write_row_pixels(
                     &mut self.plot.waterfall.viewport_pixels,
                     y,
                     dst_w,
-                    &row_db,
-                    ref_db,
-                    range_db,
+                    &scratch.acc,
+                    &self.plot.waterfall.palette,
                 );
             }
+            self.plot.waterfall.compose_scratch = scratch;
             self.plot.waterfall.perf.compose_ns = t_compose.elapsed().as_nanos() as u64;
             self.upload_waterfall_ring_rows(ctx, dst_w, head, n_apply);
             self.plot.waterfall.viewport_row_head = (head + n_apply) % h;
@@ -189,20 +198,22 @@ impl WaterfallApp {
         self.plot.waterfall.viewport_pixels.resize(dst_w * h, Color32::BLACK);
         let fill = h.min(self.plot.rows.len());
         let mut head = 0usize;
+        self.plot.waterfall.palette.sync(ref_db, range_db);
+        let mut scratch = std::mem::take(&mut self.plot.waterfall.compose_scratch);
         for i in 0..fill {
             let history_idx = fill - 1 - i;
             let y = head;
-            let row_db = self.waterfall_row_db_for_viewport(history_idx, &view, dst_w, avg);
+            self.waterfall_row_db_into(history_idx, &view, dst_w, avg, &mut scratch);
             Self::write_row_pixels(
                 &mut self.plot.waterfall.viewport_pixels,
                 y,
                 dst_w,
-                &row_db,
-                ref_db,
-                range_db,
+                &scratch.acc,
+                &self.plot.waterfall.palette,
             );
             head = (head + 1) % h;
         }
+        self.plot.waterfall.compose_scratch = scratch;
         self.plot.waterfall.perf.compose_ns = t_compose.elapsed().as_nanos() as u64;
         self.plot.waterfall.viewport_tex_width = dst_w;
         self.plot.waterfall.viewport_row_head = head;

@@ -30,13 +30,23 @@ pub fn panadapter_output_bins(data_len: usize, view_span_hz: f32, data_span_hz: 
 
 /// Peak-hold downsample for spectrum / waterfall rows.
 pub fn downsample_row_peak(src: &[f32], out_len: usize) -> Vec<f32> {
+    let mut out = Vec::new();
+    downsample_row_peak_into(src, out_len, &mut out);
+    out
+}
+
+/// [`downsample_row_peak`] writing into caller-owned scratch (no allocation when
+/// `out` already has the capacity). `out` is cleared first.
+pub fn downsample_row_peak_into(src: &[f32], out_len: usize, out: &mut Vec<f32>) {
+    out.clear();
     if out_len == 0 {
-        return Vec::new();
+        return;
     }
     if src.len() <= out_len {
-        return src.to_vec();
+        out.extend_from_slice(src);
+        return;
     }
-    let mut out = Vec::with_capacity(out_len);
+    out.reserve(out_len);
     for i in 0..out_len {
         let start = i * src.len() / out_len;
         let end = ((i + 1) * src.len() / out_len).max(start + 1).min(src.len());
@@ -46,7 +56,6 @@ pub fn downsample_row_peak(src: &[f32], out_len: usize) -> Vec<f32> {
             .fold(f32::NEG_INFINITY, f32::max);
         out.push(peak);
     }
-    out
 }
 
 fn cap_panadapter_bins(row: Vec<f32>) -> Vec<f32> {
@@ -123,6 +132,38 @@ pub fn compose_panadapter_row(
     pan_offset_hz: f64,
     allow_band_padding: bool,
 ) -> Vec<f32> {
+    let mut out = Vec::new();
+    let mut scratch = Vec::new();
+    compose_panadapter_row_into(
+        row,
+        row_rate_hz,
+        view_span_hz,
+        data_span_hz,
+        pan_offset_hz,
+        allow_band_padding,
+        &mut out,
+        &mut scratch,
+    );
+    out
+}
+
+/// [`compose_panadapter_row`] writing into caller-owned buffers.
+///
+/// `out` receives the composed row; `scratch` is working space for the padded
+/// band-overview path. Both are cleared first and reused across calls, which is
+/// what keeps the waterfall recompose off the allocator — this runs once per
+/// row per frame, times the averaging depth.
+#[allow(clippy::too_many_arguments)]
+pub fn compose_panadapter_row_into(
+    row: &[f32],
+    row_rate_hz: f32,
+    view_span_hz: f32,
+    data_span_hz: f32,
+    pan_offset_hz: f64,
+    allow_band_padding: bool,
+    out: &mut Vec<f32>,
+    scratch: &mut Vec<f32>,
+) {
     const FLOOR: f32 = -120.0;
     let data_span = data_span_hz.min(row_rate_hz.max(1.0));
     let view_span = if allow_band_padding {
@@ -137,28 +178,60 @@ pub fn compose_panadapter_row(
     } else {
         panadapter_output_bins(row.len(), view_span, data_span)
     };
-    let composed = if !allow_band_padding || view_span <= data_span + 1.0 {
-        cap_panadapter_bins(data.to_vec())
+
+    if !allow_band_padding || view_span <= data_span + 1.0 {
+        // Common path: `data` is a subslice of `row`, so compose straight into
+        // `out` without the intermediate copy the allocating version made.
+        if data.len() > MAX_PANADAPTER_BINS {
+            downsample_row_peak_into(data, MAX_PANADAPTER_BINS, out);
+        } else {
+            out.clear();
+            out.extend_from_slice(data);
+        }
     } else {
         let ratio = view_span / data_span;
         let out_len = target;
         let data_width = ((out_len as f32 / ratio).round() as usize)
             .clamp(1, data.len())
             .min(out_len);
-        let core = if data.len() > data_width {
-            downsample_row_peak(data, data_width)
+        if data.len() > data_width {
+            downsample_row_peak_into(data, data_width, scratch);
         } else {
-            data.to_vec()
-        };
-        let mut out = vec![FLOOR; out_len];
-        let start = out_len.saturating_sub(core.len()) / 2;
-        let end = start + core.len();
-        if end <= out_len {
-            out[start..end].copy_from_slice(&core);
+            scratch.clear();
+            scratch.extend_from_slice(data);
         }
-        out
-    };
-    fit_panadapter_row_width(composed, target)
+        out.clear();
+        out.resize(out_len, FLOOR);
+        let start = out_len.saturating_sub(scratch.len()) / 2;
+        let end = start + scratch.len();
+        if end <= out_len {
+            out[start..end].copy_from_slice(scratch);
+        }
+    }
+
+    fit_panadapter_row_width_in_place(out, target, scratch);
+}
+
+/// [`fit_panadapter_row_width`] operating on `row` in place, using `scratch` for
+/// the downsample case (which cannot be done in place).
+fn fit_panadapter_row_width_in_place(row: &mut Vec<f32>, target: usize, scratch: &mut Vec<f32>) {
+    const FLOOR: f32 = -120.0;
+    let target = target.max(1);
+    if row.len() == target {
+        return;
+    }
+    if row.len() > target {
+        downsample_row_peak_into(row, target, scratch);
+        std::mem::swap(row, scratch);
+        return;
+    }
+    let pad = (target - row.len()) / 2;
+    scratch.clear();
+    scratch.reserve(target);
+    scratch.resize(pad, FLOOR);
+    scratch.extend_from_slice(row);
+    scratch.resize(target, FLOOR);
+    std::mem::swap(row, scratch);
 }
 
 /// Full-span centered view (pan offset zero).
@@ -229,26 +302,35 @@ pub fn waterfall_storage_mapping(
 
 /// Linearly resample a composed panadapter row to an exact pixel width (matches trace X mapping).
 pub fn stretch_row_to_width(src: &[f32], width: usize) -> Vec<f32> {
+    let mut out = Vec::new();
+    stretch_row_to_width_into(src, width, &mut out);
+    out
+}
+
+/// [`stretch_row_to_width`] writing into caller-owned scratch. `out` is cleared first.
+pub fn stretch_row_to_width_into(src: &[f32], width: usize, out: &mut Vec<f32>) {
     const FLOOR: f32 = -120.0;
     let width = width.max(1);
+    out.clear();
+    out.reserve(width);
     if src.is_empty() {
-        return vec![FLOOR; width];
+        out.resize(width, FLOOR);
+        return;
     }
     if src.len() == 1 {
-        return vec![src[0]; width];
+        out.resize(width, src[0]);
+        return;
     }
     let denom = width.saturating_sub(1).max(1) as f32;
     let last = src.len() - 1;
-    (0..width)
-        .map(|x| {
-            let t = x as f32 / denom;
-            let fidx = t * last as f32;
-            let i0 = fidx.floor() as usize;
-            let i1 = (i0 + 1).min(last);
-            let frac = fidx - i0 as f32;
-            src[i0] * (1.0 - frac) + src[i1] * frac
-        })
-        .collect()
+    for x in 0..width {
+        let t = x as f32 / denom;
+        let fidx = t * last as f32;
+        let i0 = fidx.floor() as usize;
+        let i1 = (i0 + 1).min(last);
+        let frac = fidx - i0 as f32;
+        out.push(src[i0] * (1.0 - frac) + src[i1] * frac);
+    }
 }
 
 /// Map the visible frequency window to texture UV coordinates along the stored row.
@@ -322,6 +404,46 @@ pub fn spectrum_view_mapping(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The scratch-buffer variants must be bit-identical to the allocating ones,
+    /// including across reuse of a dirty buffer (the case that actually runs).
+    #[test]
+    fn into_variants_match_allocating_variants() {
+        let row: Vec<f32> = (0..4096)
+            .map(|i| -100.0 + ((i * 7) % 53) as f32)
+            .collect();
+        let mut out = vec![1.0f32; 999];
+        let mut scratch = vec![2.0f32; 7];
+        let mut stretched = vec![3.0f32; 5];
+
+        for &(view, data, pan, pad) in &[
+            (12_000.0f32, 12_000.0f32, 0.0f64, false),
+            (3_000.0, 12_000.0, 1_500.0, false),
+            (48_000.0, 12_000.0, 0.0, true),
+            (12_000.0, 12_000.0, -2_000.0, true),
+            (200.0, 12_000.0, 0.0, false),
+        ] {
+            let expect = compose_panadapter_row(&row, 12_000.0, view, data, pan, pad);
+            compose_panadapter_row_into(
+                &row, 12_000.0, view, data, pan, pad, &mut out, &mut scratch,
+            );
+            assert_eq!(out, expect, "compose mismatch for view={view} pad={pad}");
+
+            for &w in &[1usize, 320, 1200, 1920] {
+                let expect_s = stretch_row_to_width(&out, w);
+                stretch_row_to_width_into(&out, w, &mut stretched);
+                assert_eq!(stretched, expect_s, "stretch mismatch at width {w}");
+            }
+        }
+
+        for &n in &[0usize, 1, 100, 5000] {
+            let expect_d = downsample_row_peak(&row, n);
+            downsample_row_peak_into(&row, n, &mut scratch);
+            assert_eq!(scratch, expect_d, "downsample mismatch at out_len {n}");
+        }
+    }
+
     use super::*;
 
     #[test]

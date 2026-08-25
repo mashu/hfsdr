@@ -63,6 +63,7 @@ use eframe::egui;
 
 fn main() -> eframe::Result {
     log::init();
+    hfsdr::dsp_pool::init();
     hfsdr::native_sdr::init();
     log_native_sdr_availability();
     log::info("hfsdr starting");

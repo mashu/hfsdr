@@ -9,7 +9,8 @@ pub(crate) use eframe::egui;
 pub(crate) use egui::Color32;
 pub(crate) use egui_extras::{Column, TableBuilder};
 pub(crate) use hfsdr::{
-    decimation_factor, compose_panadapter_row, panadapter_output_bins, stretch_row_to_width,
+    decimation_factor, compose_panadapter_row, compose_panadapter_row_into,
+    panadapter_output_bins, stretch_row_to_width, stretch_row_to_width_into,
     strongest_offset_hz, Continent,
     ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, CwSideband, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
     SpotKind, SpotSort, SkimmerConfig, channel_group_delay_ms, IirFilterKind,
@@ -89,3 +90,5 @@ pub(crate) use crate::app::codec::{
     window_from_u8, window_to_u8,
 };
 pub(crate) use crate::app::constants::*;
+
+pub(crate) use crate::app::state::RowComposeScratch;

@@ -32,6 +32,7 @@ pub mod rtlsdr;
 pub mod qmx;
 pub mod cty;
 pub mod dsp;
+pub mod dsp_pool;
 pub mod history;
 pub mod iq_record;
 pub mod kiwi;
@@ -57,12 +58,15 @@ pub use cty::{Continent, ContinentResolver};
 pub use history::{Annotation, RowFold, SlowWaterfall};
 pub use iq_record::{default_capture_dir, read_meta, timestamped_capture_path, timestamped_capture_path_in, IqCaptureMeta, IqPlayback, IqRecorder};
 pub use dsp::{
+    db_to_rgba, WaterfallPalette,
     auto_fft_size, bin_width_hz, channel_group_delay_ms, decimation_factor, design_gaussian_lowpass,
     design_lowpass,
-    effective_decimation, audio_sample_rate, compose_panadapter_row, fit_panadapter_row_width,
+    effective_decimation, audio_sample_rate, compose_panadapter_row, compose_panadapter_row_into,
+    downsample_row_peak_into, fit_panadapter_row_width,
     extract_passband_view, extract_view_window, panadapter_output_bins, iq_to_audio, spectrum_plan, spectrum_view_mapping,
     waterfall_storage_mapping, waterfall_storage_span_hz, waterfall_texture_u_range,
     view_t_to_offset_hz, offset_hz_to_view_t, offset_hz_to_storage_u, stretch_row_to_width,
+    stretch_row_to_width_into,
     BasebandOffsetHz, ChannelOffsetHz, ListenOrigin,
     AgcMode, AgcSettings, ApfSettings, AutoNotchSettings,     build_filter_overlay,
     build_listen_filter_curves, channel_magnitude_db_at, filter_curve_span_hz, ChannelFilterKind, CwChannel, CwChannelSettings, CwDetectorMode, CwSideband, CwStageMetrics,

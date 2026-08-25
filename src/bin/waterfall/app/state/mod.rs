@@ -18,6 +18,6 @@ pub use display::DisplayState;
 pub use engine_ui::EngineUiState;
 pub use meter::MeterDisplayState;
 pub use plot::{FilterOverlayCache, PlotState};
-pub use plot_cache::WaterfallTextureCache;
+pub use plot_cache::{RowComposeScratch, WaterfallTextureCache};
 pub use radio::RadioState;
 pub use skimmer::SkimmerUiState;

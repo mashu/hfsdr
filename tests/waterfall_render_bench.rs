@@ -3,7 +3,10 @@
 
 use std::time::Instant;
 
-use hfsdr::{compose_panadapter_row, stretch_row_to_width, SpectrumViewMapping};
+use hfsdr::{
+    compose_panadapter_row_into, db_to_rgba, stretch_row_to_width_into, SpectrumViewMapping,
+    WaterfallPalette,
+};
 
 type Pixel = [u8; 4];
 
@@ -11,38 +14,49 @@ const BLACK: Pixel = [0, 0, 0, 255];
 
 const WATERFALL_ROWS: usize = 360;
 
-fn db_to_colour(db: f32, ref_db: f32, range_db: f32) -> Pixel {
-    let floor = ref_db - range_db;
-    let t = ((db - floor) / range_db).clamp(0.0, 1.0);
-    let t = t.powf(1.15);
-    let r = (t * 255.0) as u8;
-    let g = (t * 200.0) as u8;
-    let b = ((1.0 - t) * 180.0 + t * 255.0) as u8;
-    [r, g, b, 255]
-}
-
-fn write_row_pixels(pixels: &mut [Pixel], y: usize, width: usize, db_row: &[f32], ref_db: f32, range_db: f32) {
+/// Exact per-pixel ramp evaluation — the pre-LUT behaviour, kept as the baseline
+/// this bench exists to compare against.
+fn write_row_pixels_direct(
+    pixels: &mut [Pixel],
+    y: usize,
+    width: usize,
+    db_row: &[f32],
+    ref_db: f32,
+    range_db: f32,
+) {
     let base = y * width;
     for (x, &db) in db_row.iter().enumerate().take(width) {
-        pixels[base + x] = db_to_colour(db, ref_db, range_db);
+        pixels[base + x] = db_to_rgba(db, ref_db, range_db);
     }
 }
 
-fn row_db_for_viewport(
-    src_row: &[f32],
-    view: &SpectrumViewMapping,
-    width: usize,
-) -> Vec<f32> {
-    let row = compose_panadapter_row(
+/// What the app actually runs: the prebuilt palette.
+fn write_row_pixels(pixels: &mut [Pixel], y: usize, width: usize, db_row: &[f32], pal: &WaterfallPalette) {
+    let base = y * width;
+    for (x, &db) in db_row.iter().enumerate().take(width) {
+        pixels[base + x] = pal.rgba(db);
+    }
+}
+
+#[derive(Default)]
+struct Scratch {
+    composed: Vec<f32>,
+    work: Vec<f32>,
+    stretched: Vec<f32>,
+}
+
+fn row_db_for_viewport(src_row: &[f32], view: &SpectrumViewMapping, width: usize, s: &mut Scratch) {
+    compose_panadapter_row_into(
         src_row,
         view.row_rate_hz,
         view.view_span_hz,
         view.data_span_hz,
         view.compose_pan_offset_hz,
         view.allow_band_padding,
+        &mut s.composed,
+        &mut s.work,
     );
-    let stretched = stretch_row_to_width(&row, width);
-    stretched
+    stretch_row_to_width_into(&s.composed, width, &mut s.stretched);
 }
 
 fn bench_append_row(plot_width: usize, fft_size: usize, n_rows: usize) -> f64 {
@@ -52,6 +66,8 @@ fn bench_append_row(plot_width: usize, fft_size: usize, n_rows: usize) -> f64 {
     let ref_db = -20.0f32;
     let range_db = 80.0f32;
 
+    let mut scratch = Scratch::default();
+    let pal = WaterfallPalette::new(ref_db, range_db);
     let t0 = Instant::now();
     for _ in 0..n_rows {
         let stride = plot_width;
@@ -59,8 +75,8 @@ fn bench_append_row(plot_width: usize, fft_size: usize, n_rows: usize) -> f64 {
             let src = y * stride;
             pixels.copy_within(src..src + stride, (y + 1) * stride);
         }
-        let row_db = row_db_for_viewport(&src_row, &view, plot_width);
-        write_row_pixels(&mut pixels, 0, plot_width, &row_db, ref_db, range_db);
+        row_db_for_viewport(&src_row, &view, plot_width, &mut scratch);
+        write_row_pixels(&mut pixels, 0, plot_width, &scratch.stretched, &pal);
     }
     t0.elapsed().as_secs_f64() / n_rows as f64 * 1000.0
 }
@@ -76,19 +92,30 @@ fn view_12k() -> SpectrumViewMapping {
     }
 }
 
-fn bench_full_rebuild(plot_width: usize, fft_size: usize) -> f64 {
+/// Returns (palette rebuild ms, direct-evaluation rebuild ms).
+fn bench_full_rebuild(plot_width: usize, fft_size: usize) -> (f64, f64) {
     let view = view_12k();
     let src_row: Vec<f32> = (0..fft_size).map(|i| -90.0 + (i % 40) as f32).collect();
     let ref_db = -20.0f32;
     let range_db = 80.0f32;
-
-    let t0 = Instant::now();
     let mut pixels = vec![BLACK; plot_width * WATERFALL_ROWS];
+
+    let mut scratch = Scratch::default();
+    // Palette build is part of the cost when levels change, so time it too.
+    let t0 = Instant::now();
+    let pal = WaterfallPalette::new(ref_db, range_db);
     for y in 0..WATERFALL_ROWS {
-        let row_db = row_db_for_viewport(&src_row, &view, plot_width);
-        write_row_pixels(&mut pixels, y, plot_width, &row_db, ref_db, range_db);
+        row_db_for_viewport(&src_row, &view, plot_width, &mut scratch);
+        write_row_pixels(&mut pixels, y, plot_width, &scratch.stretched, &pal);
     }
-    t0.elapsed().as_secs_f64() * 1000.0
+    let lut_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let t1 = Instant::now();
+    for y in 0..WATERFALL_ROWS {
+        row_db_for_viewport(&src_row, &view, plot_width, &mut scratch);
+        write_row_pixels_direct(&mut pixels, y, plot_width, &scratch.stretched, ref_db, range_db);
+    }
+    (lut_ms, t1.elapsed().as_secs_f64() * 1000.0)
 }
 
 #[test]
@@ -99,9 +126,9 @@ fn waterfall_ui_render_cost() {
     for &fft in &fft_sizes {
         for &w in &plot_widths {
             let append_ms = bench_append_row(w, fft, 500);
-            let full_ms = bench_full_rebuild(w, fft);
+            let (full_ms, direct_ms) = bench_full_rebuild(w, fft);
             eprintln!(
-                "fft={fft:5} plot_w={w:4}  append_row={append_ms:.2} ms  full_rebuild={full_ms:.1} ms"
+                "fft={fft:5} plot_w={w:4}  append_row={append_ms:.2} ms                   full_rebuild={full_ms:.1} ms  (was {direct_ms:.1} ms before the LUT)"
             );
         }
     }
