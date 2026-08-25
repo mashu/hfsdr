@@ -45,10 +45,44 @@ pub fn complex_mul_block(a: &[Complex32], b: &[Complex32], out: &mut [Complex32]
         }
     }
 
+    // NEON is baseline on aarch64, so no runtime detection is needed.
+    #[cfg(target_arch = "aarch64")]
+    {
+        if n >= 4 {
+            unsafe {
+                while i + 4 <= n {
+                    complex_mul_neon_x4(
+                        a.as_ptr().add(i),
+                        b.as_ptr().add(i),
+                        out.as_mut_ptr().add(i),
+                    );
+                    i += 4;
+                }
+            }
+        }
+    }
+
     while i < n {
         out[i] = complex_mul(a[i], b[i]);
         i += 1;
     }
+}
+
+/// Four complex multiplies via de-interleaved NEON lanes — same shape as the
+/// SSE/AVX kernels, using `vld2q` to split re/im instead of shuffles.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn complex_mul_neon_x4(a: *const Complex32, b: *const Complex32, out: *mut Complex32) {
+    use std::arch::aarch64::*;
+
+    // vld2q_f32 de-interleaves: .0 = [re0..re3], .1 = [im0..im3].
+    let va = vld2q_f32(a.cast());
+    let vb = vld2q_f32(b.cast());
+
+    let re = vfmsq_f32(vmulq_f32(va.0, vb.0), va.1, vb.1);
+    let im = vfmaq_f32(vmulq_f32(va.0, vb.1), va.1, vb.0);
+
+    vst2q_f32(out.cast(), float32x4x2_t(re, im));
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -141,6 +175,23 @@ pub fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        if n >= 4 {
+            unsafe {
+                use std::arch::aarch64::*;
+                let mut acc = vdupq_n_f32(0.0);
+                while i + 4 <= n {
+                    let va = vld1q_f32(a.as_ptr().add(i));
+                    let vb = vld1q_f32(b.as_ptr().add(i));
+                    acc = vfmaq_f32(acc, va, vb);
+                    i += 4;
+                }
+                sum = vaddvq_f32(acc);
+            }
+        }
+    }
+
     while i < n {
         sum += a[i] * b[i];
         i += 1;
@@ -151,6 +202,40 @@ pub fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exercise every vector width and remainder on whichever SIMD path this
+    /// build selected (AVX, SSE, NEON or scalar) against the scalar reference.
+    #[test]
+    fn simd_kernels_match_scalar_across_lengths() {
+        let mk = |i: usize| Complex32 {
+            re: (i as f32 * 0.37).sin() * 2.0,
+            im: (i as f32 * 0.11).cos() - 0.5,
+        };
+        // Lengths straddling 2/4/8-wide blocks and their remainders.
+        for n in [0usize, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 127, 128] {
+            let a: Vec<Complex32> = (0..n).map(mk).collect();
+            let b: Vec<Complex32> = (0..n).map(|i| mk(i + 7)).collect();
+            let mut out = vec![Complex32::default(); n];
+            complex_mul_block(&a, &b, &mut out);
+            for i in 0..n {
+                let want = complex_mul(a[i], b[i]);
+                assert!(
+                    (out[i].re - want.re).abs() < 1e-4 && (out[i].im - want.im).abs() < 1e-4,
+                    "complex_mul_block mismatch at n={n} i={i}: {:?} vs {want:?}",
+                    out[i]
+                );
+            }
+
+            let fa: Vec<f32> = (0..n).map(|i| (i as f32 * 0.21).sin()).collect();
+            let fb: Vec<f32> = (0..n).map(|i| (i as f32 * 0.13).cos()).collect();
+            let want: f32 = fa.iter().zip(&fb).map(|(x, y)| x * y).sum();
+            let got = dot_f32(&fa, &fb);
+            assert!(
+                (got - want).abs() < 1e-3,
+                "dot_f32 mismatch at n={n}: {got} vs {want}"
+            );
+        }
+    }
 
     #[test]
     fn complex_mul_block_matches_scalar() {

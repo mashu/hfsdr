@@ -58,14 +58,6 @@ pub fn downsample_row_peak_into(src: &[f32], out_len: usize, out: &mut Vec<f32>)
     }
 }
 
-fn cap_panadapter_bins(row: Vec<f32>) -> Vec<f32> {
-    if row.len() > MAX_PANADAPTER_BINS {
-        downsample_row_peak(&row, MAX_PANADAPTER_BINS)
-    } else {
-        row
-    }
-}
-
 /// Pad or peak-downsample a row to an exact bin count (texture rows must match).
 pub fn fit_panadapter_row_width(row: Vec<f32>, target: usize) -> Vec<f32> {
     const FLOOR: f32 = -120.0;
@@ -443,8 +435,6 @@ mod tests {
             assert_eq!(scratch, expect_d, "downsample mismatch at out_len {n}");
         }
     }
-
-    use super::*;
 
     #[test]
     fn zoomed_mapping_uses_spectrum_rate() {
