@@ -66,6 +66,18 @@ pub fn demod_uses_full_batch(recording: bool, full_demod: bool) -> bool {
     recording || full_demod
 }
 
+/// IQ samples the listen demod consumes from a drained batch.
+///
+/// The whole batch when recording or `full_demod` is set, otherwise the most
+/// recent [`demod_tail_max`] samples — the tail cap that bounds audio latency.
+pub fn demod_input_len(batch_len: usize, rate: f32, recording: bool, full_demod: bool) -> usize {
+    if demod_uses_full_batch(recording, full_demod) {
+        batch_len
+    } else {
+        wideband_tail_len(batch_len, rate, demod_tail_max(rate))
+    }
+}
+
 /// Decimated ingress length that covers the same time span as [`demod_tail_max`].
 pub fn spectrum_aligned_len(
     device_batch_len: usize,
@@ -177,24 +189,6 @@ pub const RECONNECT_BUSY_DELAY_SECS: f32 = 15.0;
 mod tests {
     use super::*;
 
-    const MAX_FFT_INPUT_WB: usize = 20_480;
-
-    fn max_fft_input_for(sample_rate: f32, spectrum_hop: usize, fft_size: usize) -> usize {
-        if sample_rate > WIDEBAND_IQ_THRESHOLD {
-            (spectrum_hop * MAX_SPECTRUM_ROWS_WIDEBAND + fft_size).min(MAX_FFT_INPUT_WB)
-        } else {
-            usize::MAX
-        }
-    }
-
-    fn demod_input_len(batch_len: usize, rate: f32, recording: bool, full_demod: bool) -> usize {
-        if demod_uses_full_batch(recording, full_demod) {
-            batch_len
-        } else {
-            wideband_tail_len(batch_len, rate, demod_tail_max(rate))
-        }
-    }
-
     #[test]
     fn ring_catchup_only_when_full_and_not_recording() {
         let cap = 1000;
@@ -273,13 +267,6 @@ mod tests {
             MAX_CATCHUP_PUMPS + 4
         );
         assert_eq!(catchup_pumps_max(0.1, false, false), MAX_CATCHUP_PUMPS_LIGHT);
-    }
-
-    #[test]
-    fn max_fft_input_caps_wideband() {
-        let cap = max_fft_input_for(384_000.0, 4096, 8192);
-        assert!(cap <= MAX_FFT_INPUT_WB);
-        assert_eq!(max_fft_input_for(12_000.0, 4096, 8192), usize::MAX);
     }
 
     #[test]

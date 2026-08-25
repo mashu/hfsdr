@@ -492,6 +492,9 @@ fn skimmer_runtime_enabled_on_kiwi_despite_wide_span() {
     app.skimmer_ui.skimmer_enabled = true;
     app.radio.is_kiwi = true;
     app.engine_ui.stats.spectrum_rate = 200_000.0;
+    // The runtime gate also requires a live stream; without this the assertion
+    // below fails for that reason rather than the wide span it means to test.
+    app.engine_ui.conn_state = ConnState::Streaming;
     assert!(app.skimmer_spectrum_ok());
     assert!(app.skimmer_runtime_enabled());
 }
