@@ -20,7 +20,11 @@
 //! decimated rings before the engine pump.
 
 pub mod log;
+// Native driver loading is dlopen-based and cannot exist on wasm32, where the
+// only reachable source is a network one (KiwiSDR over WebSocket).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod native_sdr;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sdr_ffi;
 #[cfg(feature = "soapy")]
 pub mod soapy;

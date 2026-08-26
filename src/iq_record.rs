@@ -335,7 +335,8 @@ pub fn timestamped_capture_path_in(dir: impl AsRef<Path>) -> PathBuf {
     dir.as_ref().join(format!("capture-{now}.hiq.gz"))
 }
 
-#[cfg(test)]
+// Recording spawns a writer thread and touches the filesystem: native-only.
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
 

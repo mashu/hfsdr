@@ -34,6 +34,10 @@ ureq = { version = "2.12", optional = true, default-features = false, features =
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# wasm32 needs an explicit getrandom backend (transitively via tungstenite).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
 [features]
 default = ["airspy"]
 # Runtime-loaded libairspyhf on Windows, Linux, and macOS.

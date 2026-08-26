@@ -236,7 +236,8 @@ pub fn reader_loop(
     let _ = ws.close(None);
 }
 
-#[cfg(test)]
+// Wraps a TcpStream-backed WebSocket: native-only.
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
 

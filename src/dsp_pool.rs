@@ -22,7 +22,13 @@ static INIT: Once = Once::new();
 ///
 /// Safe to call after rayon has already been used — the build simply fails and
 /// the existing pool stays, which is why the result is deliberately ignored.
+///
+/// On wasm targets without threads there is no pool to size, so this does
+/// nothing and callers need no `cfg` of their own.
 pub fn init() {
+    if cfg!(target_family = "wasm") {
+        return;
+    }
     INIT.call_once(|| {
         let cores = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -45,6 +51,8 @@ pub fn init() {
 mod tests {
     use super::*;
 
+    // rayon cannot build a thread pool on single-threaded wasm.
+    #[cfg_attr(target_family = "wasm", ignore)]
     #[test]
     fn init_is_idempotent_and_bounded() {
         init();

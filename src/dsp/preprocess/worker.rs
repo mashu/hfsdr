@@ -1,4 +1,8 @@
 //! Background ingress decimation — runs anti-alias FIR on a dedicated core.
+//!
+//! Native-only: this spawns an OS thread, which wasm32 targets without threads
+//! cannot do. The pump already has a non-threaded fallback that decimates
+//! inline, so a wasm frontend simply never constructs this.
 
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::Arc;
@@ -128,7 +132,9 @@ fn worker_loop(cmd_rx: Receiver<WorkerCmd>, done_tx: SyncSender<WorkerDone>) {
     }
 }
 
-#[cfg(test)]
+// Every test here constructs an IngressWorker, which spawns an OS thread —
+// unavailable on single-threaded wasm targets.
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
     use std::sync::Arc;

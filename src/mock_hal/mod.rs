@@ -248,7 +248,8 @@ pub fn soapy_mock_driver(args: &str) -> String {
     "mock".into()
 }
 
-#[cfg(test)]
+// The mock IQ stream spawns a producer thread: native-only.
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
 

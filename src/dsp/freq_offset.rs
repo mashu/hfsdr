@@ -131,6 +131,9 @@ mod tests {
     }
 
     #[test]
+    // Reads its own source files, so it needs a real filesystem — wasm targets
+    // have none, and the check is about repository content, not runtime behaviour.
+    #[cfg_attr(target_family = "wasm", ignore)]
     fn dsp_sources_use_convert_for_notch_not_raw_subtract() {
         let channel = std::fs::read_to_string("src/dsp/cw/channel.rs").expect("channel.rs");
         assert!(
