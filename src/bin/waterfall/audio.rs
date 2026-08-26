@@ -1,5 +1,67 @@
 //! Speaker output via cpal — plays demodulated baseband audio from the IQ stream.
 
+
+// The cpal implementation is desktop-only. A browser build keeps the same
+// public surface but drops the samples: WebAudio needs a user gesture and its
+// own worklet, so silence is the honest behaviour until that exists rather
+// than a half-working stream.
+#[cfg(not(feature = "gui-core"))]
+mod web_stub {
+    use std::sync::Mutex;
+
+    static TEST_OUTPUT_DEVICES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+    /// Injection point used by UI tests; the browser has no device list.
+    pub fn set_test_output_devices(devices: Option<Vec<String>>) {
+        if let Ok(mut g) = TEST_OUTPUT_DEVICES.lock() {
+            *g = devices;
+        }
+    }
+
+    pub const OUTPUT_SAMPLE_RATE: u32 = 48_000;
+
+    /// Silent sink with the same shape as the cpal output.
+    pub struct AudioOutput {
+        device_name: String,
+    }
+
+    impl AudioOutput {
+        pub fn list_output_devices() -> Vec<String> {
+            TEST_OUTPUT_DEVICES
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_default()
+        }
+
+        pub fn try_open_default(_iq_rate: u32) -> Option<Self> {
+            None
+        }
+
+        pub fn try_open_named(_name: &str, _iq_rate: u32) -> Option<Self> {
+            None
+        }
+
+        pub fn skip_seconds(&self, _secs: f32) {}
+
+        pub fn output_rate(&self) -> u32 {
+            OUTPUT_SAMPLE_RATE
+        }
+
+        pub fn device_name(&self) -> &str {
+            &self.device_name
+        }
+
+        pub fn push(&mut self, _mono: &[f32], _source_rate: u32, _volume: f32) {}
+    }
+}
+
+#[cfg(not(feature = "gui-core"))]
+pub use web_stub::*;
+
+#[cfg(feature = "gui-core")]
+mod cpal_impl {
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -413,3 +475,8 @@ mod tests {
         assert!(names.iter().any(|n| n == "Test Output"));
     }
 }
+
+}
+
+#[cfg(feature = "gui-core")]
+pub use cpal_impl::*;

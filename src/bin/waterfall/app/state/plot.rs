@@ -1,7 +1,7 @@
 //! Plot interaction state, row history, and waterfall texture cache.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use eframe::egui;
 

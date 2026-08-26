@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use hfsdr::{
     Complex32, DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, IqPlayback, IqRecorder,

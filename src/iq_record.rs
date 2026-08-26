@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use crate::time::Duration;
 
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -328,8 +328,8 @@ pub fn timestamped_capture_path() -> PathBuf {
 }
 
 pub fn timestamped_capture_path_in(dir: impl AsRef<Path>) -> PathBuf {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = crate::time::SystemTime::now()
+        .duration_since(crate::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     dir.as_ref().join(format!("capture-{now}.hiq.gz"))
@@ -358,8 +358,8 @@ mod tests {
 
         let mut pb = IqPlayback::open(path.clone()).expect("play");
         let mut got = Vec::new();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while got.len() < samples.len() && std::time::Instant::now() < deadline {
+        let deadline = crate::time::Instant::now() + Duration::from_secs(5);
+        while got.len() < samples.len() && crate::time::Instant::now() < deadline {
             while let Some(s) = pb.pop() {
                 got.push(s);
             }
@@ -468,8 +468,8 @@ mod tests {
         let mut pb = IqPlayback::open(&path).expect("open");
         assert_eq!(pb.meta().sample_count, 256);
         let mut got = 0usize;
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while got < 256 && std::time::Instant::now() < deadline {
+        let deadline = crate::time::Instant::now() + Duration::from_secs(3);
+        while got < 256 && crate::time::Instant::now() < deadline {
             while pb.pop().is_some() {
                 got += 1;
             }

@@ -6,7 +6,7 @@
 //! This module owns the data model; rendering lives in the GUI binary.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use crate::time::{Duration, Instant};
 
 /// How successive fast rows are folded into one slow row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

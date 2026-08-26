@@ -1,6 +1,6 @@
 //! Waterfall texture upload and incremental cache sync.
 
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use eframe::egui::{self, Color32};
 

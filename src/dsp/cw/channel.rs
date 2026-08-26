@@ -281,7 +281,7 @@ impl CwChannel {
         let nb_used_scratch = if settings.noise_blanker.enabled {
             let nb = &settings.noise_blanker;
             if let Some(m) = metrics.as_mut() {
-                let t = std::time::Instant::now();
+                let t = crate::time::Instant::now();
                 self.noise_blanker.process_block(
                     input,
                     &mut self.work_iq,
@@ -309,7 +309,7 @@ impl CwChannel {
             if nb_used_scratch {
                 let front = std::mem::take(&mut self.work_iq);
                 if let Some(m) = metrics.as_mut() {
-                    let t = std::time::Instant::now();
+                    let t = crate::time::Instant::now();
                     self.decimator
                         .decimate_block(&front, &mut self.work_decim, diag.decim_fir);
                     m.decim_ns = t.elapsed().as_nanos() as u64;
@@ -319,7 +319,7 @@ impl CwChannel {
                 }
                 self.work_iq = front;
             } else if let Some(m) = metrics.as_mut() {
-                let t = std::time::Instant::now();
+                let t = crate::time::Instant::now();
                 self.decimator
                     .decimate_block(input, &mut self.work_decim, diag.decim_fir);
                 m.decim_ns = t.elapsed().as_nanos() as u64;
@@ -334,7 +334,7 @@ impl CwChannel {
                 input
             };
             if let Some(m) = metrics.as_mut() {
-                let t_nco = std::time::Instant::now();
+                let t_nco = crate::time::Instant::now();
                 self.shift_nco.mix_down_block(
                     nco_in,
                     &mut self.work_mix,
@@ -343,7 +343,7 @@ impl CwChannel {
                 );
                 m.nco_ns = t_nco.elapsed().as_nanos() as u64;
                 let mixed = std::mem::take(&mut self.work_mix);
-                let t_decim = std::time::Instant::now();
+                let t_decim = crate::time::Instant::now();
                 self.decimator
                     .decimate_block(&mixed, &mut self.work_decim, diag.decim_fir);
                 m.decim_ns = t_decim.elapsed().as_nanos() as u64;
@@ -408,7 +408,7 @@ impl CwChannel {
     ) {
         let channel_filter = settings.effective_channel_filter();
 
-        let t_notch = metrics.as_ref().map(|_| std::time::Instant::now());
+        let t_notch = metrics.as_ref().map(|_| crate::time::Instant::now());
         self.work_mix.clear();
         self.work_mix.reserve(decimated.len());
         for &sample in decimated {
@@ -425,7 +425,7 @@ impl CwChannel {
             m.notches_ns = t.elapsed().as_nanos() as u64;
         }
 
-        let t_fir = metrics.as_ref().map(|_| std::time::Instant::now());
+        let t_fir = metrics.as_ref().map(|_| crate::time::Instant::now());
         if diag.channel_fir {
             self.work_iq.clear();
             self.work_iq.extend_from_slice(&self.work_mix);
@@ -475,7 +475,7 @@ impl CwChannel {
             }
         }
 
-        let t_agc = metrics.as_ref().map(|_| std::time::Instant::now());
+        let t_agc = metrics.as_ref().map(|_| crate::time::Instant::now());
         self.work_mix.clear();
         self.work_mix.reserve(self.work_iq.len());
         if settings.agc.enabled && settings.agc_mode == AgcMode::Lookahead {
@@ -554,7 +554,7 @@ impl CwChannel {
             m.agc_ns = t.elapsed().as_nanos() as u64;
         }
 
-        let t_det = metrics.as_ref().map(|_| std::time::Instant::now());
+        let t_det = metrics.as_ref().map(|_| crate::time::Instant::now());
         out.reserve(out.len() + self.work_mix.len());
         for &scaled in &self.work_mix {
             let matched_dit = if settings.detector_mode == CwDetectorMode::MatchedDit {
@@ -587,7 +587,7 @@ impl CwChannel {
             m.detector_ns = t.elapsed().as_nanos() as u64;
         }
 
-        let t_polish = metrics.as_ref().map(|_| std::time::Instant::now());
+        let t_polish = metrics.as_ref().map(|_| crate::time::Instant::now());
         let polish_start = out.len().saturating_sub(self.work_iq.len());
         for audio in &mut out[polish_start..] {
             if settings.apf.enabled {

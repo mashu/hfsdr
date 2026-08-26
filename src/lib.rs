@@ -20,6 +20,8 @@
 //! decimated rings before the engine pump.
 
 pub mod log;
+/// Clock types that also work on wasm32 (see module docs).
+pub mod time;
 // Native driver loading is dlopen-based and cannot exist on wasm32, where the
 // only reachable source is a network one (KiwiSDR over WebSocket).
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,7 +39,7 @@ pub mod qmx;
 pub mod cty;
 pub mod dsp;
 /// egui/wgpu rendering shared by the desktop and browser frontends.
-#[cfg(any(feature = "gui-core", feature = "gui-wasm"))]
+#[cfg(any(feature = "gui-base", feature = "gui-core", feature = "gui-web"))]
 pub mod render;
 pub mod dsp_pool;
 pub mod history;

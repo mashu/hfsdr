@@ -6,7 +6,7 @@
 
 use std::io::Read;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use hfsdr::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +91,20 @@ pub fn refresh_nearby_receivers() -> Result<(Option<GeoLocation>, Vec<KiwiReceiv
     Ok((geo, receivers))
 }
 
+// Network fetches use ureq, which needs real sockets. A browser build would do
+// this through fetch(), which is async and does not fit this blocking signature;
+// until that exists, say so rather than pretending the lookup failed.
+#[cfg(not(feature = "gui-core"))]
+fn fetch_geo() -> Result<GeoLocation, String> {
+    Err("receiver directory is not available in the browser build".into())
+}
+
+#[cfg(not(feature = "gui-core"))]
+fn fetch_list_body() -> Result<String, String> {
+    Err("receiver directory is not available in the browser build".into())
+}
+
+#[cfg(feature = "gui-core")]
 fn fetch_geo() -> Result<GeoLocation, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
@@ -119,6 +133,7 @@ fn fetch_geo() -> Result<GeoLocation, String> {
     })
 }
 
+#[cfg(feature = "gui-core")]
 fn fetch_list_body() -> Result<String, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(45))

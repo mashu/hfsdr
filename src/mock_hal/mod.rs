@@ -6,7 +6,7 @@ use std::f32::consts::TAU;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use crate::time::Duration;
 
 use rtrb::{Consumer, RingBuffer};
 

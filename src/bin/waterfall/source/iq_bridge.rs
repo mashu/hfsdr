@@ -171,11 +171,11 @@ pub fn attach_dual_ring(
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
-    use std::time::Duration;
+    use hfsdr::time::Duration;
 
     #[test]
     fn bridge_decimates_into_second_ring() {
-        use std::time::Instant;
+        use hfsdr::time::Instant;
 
         let (mut dev_prod, dev_cons) = RingBuffer::<Complex32>::new(256);
         for i in 0..32i32 {

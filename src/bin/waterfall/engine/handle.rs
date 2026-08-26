@@ -48,6 +48,23 @@ impl EngineHandle {
         }
     }
 
+    /// Engine handle with no worker thread.
+    ///
+    /// Browser builds cannot spawn threads, and the headless UI harness does not
+    /// want one. Polls are supplied by the caller via [`Self::inject_poll`]
+    /// instead of coming from a running pipeline.
+    #[cfg(any(test, not(feature = "gui-core")))]
+    pub fn spawn_detached() -> Self {
+        Self {
+            cmd_tx: None,
+            shared: Arc::new(Mutex::new(EngineShared::default())),
+            params: Arc::new(Mutex::new(EngineParams::default())),
+            connect_cancel: Arc::new(AtomicBool::new(false)),
+            join: None,
+            test_polls: Some(Arc::new(Mutex::new(VecDeque::new()))),
+        }
+    }
+
     /// Headless UI harness: no engine thread; push [`EnginePoll`] snapshots via [`Self::inject_poll`].
     #[cfg(test)]
     pub fn spawn_for_test() -> Self {
@@ -61,8 +78,8 @@ impl EngineHandle {
         }
     }
 
-    /// Queue a synthetic engine poll (test handles only).
-    #[cfg(test)]
+    /// Queue a synthetic engine poll (detached handles only).
+    #[cfg(any(test, not(feature = "gui-core")))]
     pub fn inject_poll(&self, poll: EnginePoll) {
         let Some(q) = &self.test_polls else {
             return;

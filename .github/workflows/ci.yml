@@ -256,7 +256,7 @@ jobs:
 
       - name: Check browser app on wasm32
         run: |
-          cargo check --bin hfsdr-wasm --no-default-features \
-            --features gui-wasm --target wasm32-unknown-unknown
+          cargo check --bin hfsdr --no-default-features \
+            --features gui-web --target wasm32-unknown-unknown
         env:
           RUSTFLAGS: --cfg getrandom_backend="wasm_js"

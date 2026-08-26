@@ -11,9 +11,9 @@ cd "$(dirname "$0")/.."
 export RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"wasm_js\""
 
 cargo build --release \
-  --bin hfsdr-wasm \
+  --bin hfsdr \
   --no-default-features \
-  --features gui-wasm \
+  --features gui-web \
   --target wasm32-unknown-unknown
 
 wasm-bindgen \
@@ -21,7 +21,7 @@ wasm-bindgen \
   --no-typescript \
   --out-dir web/pkg \
   --out-name hfsdr \
-  target/wasm32-unknown-unknown/release/hfsdr-wasm.wasm
+  target/wasm32-unknown-unknown/release/hfsdr.wasm
 
 # wasm-opt is optional: binaryen older than the wasm-bindgen output can corrupt
 # the function table (observed with binaryen 108 vs wasm-bindgen 0.2.125), and a

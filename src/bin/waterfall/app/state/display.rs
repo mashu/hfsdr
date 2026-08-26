@@ -1,4 +1,4 @@
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use eframe::egui;
 use hfsdr::FftWindowKind;

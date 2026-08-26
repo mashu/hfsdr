@@ -22,7 +22,7 @@ use std::f32::consts::TAU;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{
     ChannelFilterKind, ChannelOffsetHz, Complex32, CwChannel, CwChannelSettings, CwStageMetrics,

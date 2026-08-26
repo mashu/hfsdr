@@ -1,7 +1,7 @@
 //! Handshake, stall detection, auto-reconnect.
 
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 use crate::source::SourceKind;
 

@@ -32,6 +32,8 @@ mod status_icons;
 mod status_widgets;
 mod theme;
 mod widgets;
+#[cfg(not(feature = "gui-core"))]
+mod web_demo;
 mod waterfall_perf;
 
 #[cfg(test)]
@@ -58,6 +60,7 @@ mod ui_eval;
 use app::WaterfallApp;
 use eframe::egui;
 
+#[cfg(feature = "gui-core")]
 fn main() -> eframe::Result {
     log::init();
     hfsdr::dsp_pool::init();
@@ -107,6 +110,64 @@ fn main() -> eframe::Result {
     )
 }
 
+
+/// Browser entry point.
+///
+/// The desktop `main` cannot be reused: it calls `run_native`, loads native SDR
+/// drivers via dlopen, and starts an engine thread — none of which exist in a
+/// tab. The UI itself is the same `WaterfallApp`, so every panel, the filter
+/// chain, the VFO and the waterfall are the real ones.
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+fn main() {
+    use wasm_bindgen::JsCast as _;
+
+    // Panics otherwise vanish into the console with no stack.
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(&format!("hfsdr panic: {info}").into());
+    }));
+
+    wasm_bindgen_futures::spawn_local(async {
+        let document = web_sys::window()
+            .expect("no window")
+            .document()
+            .expect("no document");
+        let canvas = document
+            .get_element_by_id("hfsdr_canvas")
+            .expect("missing #hfsdr_canvas")
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .expect("#hfsdr_canvas is not a canvas");
+
+        let result = eframe::WebRunner::new()
+            .start(
+                canvas,
+                eframe::WebOptions::default(),
+                Box::new(|cc| {
+                    crate::theme::apply(&cc.egui_ctx);
+                    let gpu = crate::widgets::install_waterfall_gpu(cc);
+                    let mut app = WaterfallApp::new_for_web();
+                    app.set_waterfall_gpu_available(gpu);
+                    Ok(Box::new(app) as Box<dyn eframe::App>)
+                }),
+            )
+            .await;
+
+        // Replace the loading text either way, so a failure is visible.
+        if let Some(el) = document.get_element_by_id("loading") {
+            match result {
+                Ok(_) => el.remove(),
+                Err(e) => el.set_text_content(Some(&format!("Failed to start: {e:?}"))),
+            }
+        }
+    });
+}
+
+/// Non-wasm builds without gui-core have no entry point of their own.
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "gui-core")))]
+fn main() {
+    eprintln!("hfsdr: this build has no frontend; enable gui-core or build for wasm32");
+}
+
+#[cfg(feature = "gui-core")]
 fn log_native_sdr_availability() {
     #[cfg(feature = "airspy")]
     if !hfsdr::native_sdr::airspy_available() {
