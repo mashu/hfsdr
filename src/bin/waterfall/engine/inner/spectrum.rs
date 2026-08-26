@@ -1,6 +1,6 @@
 //! Spectrum chain sync and wideband slicing.
 
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{Complex32, spectrum_hop, spectrum_plan, SpectrumAnalyzer, MIN_KAISER_BETA, MAX_KAISER_BETA};
 

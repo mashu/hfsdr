@@ -88,7 +88,7 @@ impl FirDecimator {
 mod tests {
     use super::*;
     use super::super::super::cw::DecimFilterKind;
-    use std::time::{Duration, Instant};
+    use crate::time::{Duration, Instant};
 
     #[test]
     fn decimate_block_completes_quickly() {

@@ -1,6 +1,6 @@
 //! Pure app-logic tests (no egui harness).
 
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use hfsdr::offset_hz_to_bin;
 

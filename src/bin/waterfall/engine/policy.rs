@@ -1,6 +1,6 @@
 //! Pure pump / wideband policy (unit-tested, no I/O).
 
-use std::time::Duration;
+use hfsdr::time::Duration;
 
 pub const WIDEBAND_IQ_THRESHOLD: f32 = 96_000.0;
 pub const MAX_DRAIN_NARROW: usize = 1 << 16;

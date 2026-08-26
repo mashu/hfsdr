@@ -40,6 +40,9 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = ["Document", "Window", "Element", "HtmlCanvasElement", "console"] }
+# std::time::Instant panics on wasm32-unknown-unknown ("time not implemented");
+# web-time is a drop-in backed by performance.now().
+web-time = "1"
 
 [features]
 default = ["airspy"]
@@ -51,23 +54,22 @@ rtlsdr = []
 qmx = ["dep:serialport", "dep:cpal"]
 # Runtime-loaded libSoapySDR on Windows, Linux, and macOS.
 soapy = []
+# UI dependencies shared by the desktop and browser builds. The hfsdr binary
+# needs only these; everything platform-specific hangs off gui-core.
+gui-base = ["dep:eframe", "dep:egui_extras", "dep:serde", "dep:serde_json"]
 # GUI without librtlsdr / SoapySDR (Kiwi/QMX-only builds).
-gui-core = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd", "qmx"]
+gui-core = ["gui-base", "dep:cpal", "dep:ureq", "dep:rfd", "qmx"]
 gui = ["gui-core", "rtlsdr", "soapy"]
 # Browser build: eframe only. No serialport (qmx), no ureq (needs real sockets),
 # no native drivers. KiwiSDR over the browser WebSocket API is the only source.
-gui-wasm = ["dep:eframe", "dep:egui_extras", "dep:serde", "dep:serde_json",
-            "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+# Browser build of the real UI. Excludes cpal, rfd, ureq and serialport (qmx):
+# none of them work on wasm32, and the browser has its own equivalents.
+gui-web = ["gui-base", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [[bin]]
 name = "hfsdr"
 path = "src/bin/waterfall/main.rs"
-required-features = ["gui-core"]
-
-[[bin]]
-name = "hfsdr-wasm"
-path = "src/bin/wasm_app/main.rs"
-required-features = ["gui-wasm"]
+required-features = ["gui-base"]
 
 [[bin]]
 name = "airspy-probe"

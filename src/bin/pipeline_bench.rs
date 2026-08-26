@@ -2,7 +2,7 @@
 //!
 //! Usage: `cargo run --release --features airspy --bin pipeline-bench [seconds]`
 
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{
     spectrum_hop, spectrum_plan, Complex32, CwChannelSettings, FirDecimator, IqAudioDemod,

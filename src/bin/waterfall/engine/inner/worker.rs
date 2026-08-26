@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA};
 

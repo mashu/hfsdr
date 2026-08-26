@@ -3,7 +3,7 @@
 pub(crate) use std::collections::HashSet;
 pub(crate) use std::collections::VecDeque;
 pub(crate) use std::sync::mpsc::Receiver;
-pub(crate) use std::time::{Duration, Instant};
+pub(crate) use hfsdr::time::{Duration, Instant};
 
 pub(crate) use eframe::egui;
 pub(crate) use egui::Color32;

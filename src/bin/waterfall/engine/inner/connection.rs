@@ -1,7 +1,7 @@
 //! Connect, teardown, audio device.
 
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use crate::audio::AudioOutput;
 use hfsdr::IqAudioDemod;

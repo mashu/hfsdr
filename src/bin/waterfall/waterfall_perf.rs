@@ -1,6 +1,6 @@
 //! UI-thread waterfall texture sync timings (compose, upload, row cadence).
 
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 /// Smoothed metrics for the waterfall viewport path (main thread).
 #[derive(Clone, Debug, Default)]

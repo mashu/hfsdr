@@ -1,6 +1,6 @@
 //! Headless panel / drawer smoke tests — exercise egui chrome not covered by ui_smoke.
 
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use eframe::egui::Vec2;
 use egui_kittest::{Harness, kittest::Queryable as _};

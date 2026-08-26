@@ -136,7 +136,7 @@ fn worker_loop(cmd_rx: Receiver<WorkerCmd>, done_tx: SyncSender<WorkerDone>) {
 // unavailable on single-threaded wasm targets.
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
-    use std::time::{Duration, Instant};
+    use crate::time::{Duration, Instant};
 
     use super::*;
     use std::sync::Arc;

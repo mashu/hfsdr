@@ -9,6 +9,19 @@ impl WaterfallApp {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.connection.kiwi.fetch_rx = Some(rx);
+
+        // A browser tab cannot spawn threads, and the directory fetch needs
+        // sockets it does not have either — answer on the spot so the UI shows
+        // why rather than waiting on a worker that will never exist.
+        #[cfg(not(feature = "gui-core"))]
+        {
+            let _ = force_refresh;
+            let _ = tx.send(Err(
+                "receiver directory is not available in the browser build".to_string(),
+            ));
+        }
+
+        #[cfg(feature = "gui-core")]
         std::thread::spawn(move || {
             let result = if force_refresh {
                 crate::kiwi_directory::refresh_nearby_receivers()

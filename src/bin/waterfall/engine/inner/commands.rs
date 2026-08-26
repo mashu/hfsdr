@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use hfsdr::{IqAudioDemod, IqPlayback, IqRecorder};
 

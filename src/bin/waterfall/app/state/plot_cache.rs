@@ -1,6 +1,6 @@
 //! Waterfall GPU/CPU texture cache (storage + viewport).
 
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use eframe::egui::{self, Color32};
 

@@ -3,7 +3,7 @@
 //! Commands are semicolon-terminated with no CR/LF. See the QMX CAT manual.
 
 use std::io::{Read, Write};
-use std::time::Duration;
+use crate::time::Duration;
 
 use serialport::SerialPort;
 

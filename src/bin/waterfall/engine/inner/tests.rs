@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{Complex32, IqRecorder};
 

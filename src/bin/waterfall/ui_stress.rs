@@ -1,6 +1,6 @@
 //! Stress and perturbation tests — rapid state changes, corrupt engine polls, layout extremes.
 
-use std::time::Instant;
+use hfsdr::time::Instant;
 
 use eframe::egui::{Key, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};

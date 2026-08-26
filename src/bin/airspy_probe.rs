@@ -2,7 +2,7 @@
 //! reports throughput. Useful for verifying libairspyhf is installed.
 
 use hfsdr::{AirspyHf, IqSource};
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 fn main() {
     println!("libairspyhf {}", AirspyHf::lib_version());

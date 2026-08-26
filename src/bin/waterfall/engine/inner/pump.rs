@@ -1,7 +1,7 @@
 //! IQ drain pump and stats publishing.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{Complex32, FirDecimator, PipelineMetrics};
 use rayon::join;
