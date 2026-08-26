@@ -108,8 +108,6 @@ fn evaluate_reconnecting_badge() {
             retry_in_s: 2.0,
         },
         stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
@@ -120,53 +118,6 @@ fn evaluate_reconnecting_badge() {
     harness.get_by_label("RECONNECT #1 (2s)");
 }
 
-/// wgpu `render()` is not safe to call from parallel tests — keep screenshots in one test.
-#[test]
-fn capture_ui_screenshot_states() {
-    let mut harness = eval_harness(WINDOW_SIZE);
-    harness.run_steps(4);
-    if !wgpu_render_available(&mut harness) {
-        return;
-    }
-    save_render(&mut harness, "01_startup_offline").expect("write startup screenshot");
-
-    inject_and_step(&mut harness, synthetic_streaming_poll(0), 4);
-    save_render(&mut harness, "02_streaming_default").expect("write streaming screenshot");
-
-    {
-        let app = harness.state_mut();
-        app.chrome.show_left = true;
-        app.chrome.show_right = true;
-        app.skimmer_ui.skimmer_enabled = true;
-    }
-    harness.run_steps(8);
-    save_render(&mut harness, "03_streaming_full_ui").expect("write full-ui screenshot");
-
-    harness.state_mut().connection.form.show_connection_drawer = true;
-    harness.run_steps(4);
-    save_render(&mut harness, "04_connection_drawer").expect("write drawer screenshot");
-
-    harness.state().inject_engine_poll(EnginePoll {
-        state: ConnState::Reconnecting {
-            attempt: 1,
-            retry_in_s: 2.0,
-        },
-        stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
-        rows: Vec::new(),
-        latest: vec![-90.0; FFT_SIZE],
-        last_error: None,
-        audio_scope: Vec::new(),
-        audio_waveform: Vec::new(),
-    });
-    harness.run_steps(4);
-    save_render(&mut harness, "05_reconnecting").expect("write reconnecting screenshot");
-
-    let mut min_harness = eval_harness(Vec2::new(1100.0, 720.0));
-    min_harness.run_steps(4);
-    save_render(&mut min_harness, "06_minimum_window").expect("write minimum-window screenshot");
-}
 
 /// End-to-end check of the shader waterfall inside the real app.
 ///
@@ -208,8 +159,6 @@ fn gpu_waterfall_paints_in_the_real_app() {
         harness.state().inject_engine_poll(EnginePoll {
             state: ConnState::Streaming,
             stats: streaming_stats(),
-            spots: Vec::new(),
-            decode_channels: Vec::new(),
             rows: vec![row.clone()],
             latest: row,
             last_error: None,

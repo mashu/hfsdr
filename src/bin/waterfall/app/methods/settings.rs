@@ -108,17 +108,6 @@ impl WaterfallApp {
         self.audio.audio_enabled = s.audio_enabled;
         self.audio.volume = s.volume;
 
-        self.skimmer_ui.skimmer_enabled = s.skimmer_enabled;
-        self.skimmer_ui.skimmer = skimmer_config_from_settings(s);
-        self.skimmer_ui.min_spot_snr = s.min_spot_snr;
-        self.skimmer_ui.spot_cq_only = s.spot_cq_only;
-        self.skimmer_ui.spot_hide_heard_labels = s.spot_hide_heard_labels;
-        self.skimmer_ui.spot_max_age_secs = s.spot_max_age_secs.max(0.0);
-        self.skimmer_ui.spot_callsign_filter = s.spot_callsign_filter.clone();
-        self.skimmer_ui.spot_label_limit = s.spot_label_limit.clamp(8, 80);
-        self.skimmer_ui.spot_sort = spot_sort_from_u8(s.spot_sort);
-        self.skimmer_ui.continent_filter = s.continent_filter;
-        self.skimmer_ui.show_continents = s.show_continents;
         self.chrome.show_console = s.show_console;
         self.chrome.show_history = s.show_history;
         self.chrome.bottom_panel_view = if s.bottom_panel_view == 1 {
@@ -259,32 +248,6 @@ impl WaterfallApp {
             perf_trace: self.display.perf_trace,
             audio_enabled: self.audio.audio_enabled,
             volume: self.audio.volume,
-            skimmer_enabled: self.skimmer_ui.skimmer_enabled,
-            skimmer_min_snr_db: self.skimmer_ui.skimmer.min_snr_db,
-            skimmer_min_decode_snr_db: self.skimmer_ui.skimmer.min_decode_snr_db,
-            skimmer_decode_gate_ms: self.skimmer_ui.skimmer.decode_gate_ms,
-            skimmer_max_channels: self.skimmer_ui.skimmer.max_channels,
-            skimmer_bucket_hz: self.skimmer_ui.skimmer.bucket_hz,
-            skimmer_min_separation_bins: self.skimmer_ui.skimmer.min_separation_bins,
-            skimmer_beam_width: self.skimmer_ui.skimmer.decoder_params.beam_width,
-            skimmer_lpf_cutoff_hz: self.skimmer_ui.skimmer.lpf_cutoff_hz,
-            skimmer_focus_span_hz: self.skimmer_ui.skimmer.focus_span_hz,
-            skimmer_initial_wpm: self.skimmer_ui.skimmer.decoder_params.initial_wpm,
-            skimmer_thr_low: self.skimmer_ui.skimmer.decoder_params.envelope.thr_low,
-            skimmer_thr_high: self.skimmer_ui.skimmer.decoder_params.envelope.thr_high,
-            skimmer_channel_timeout_secs: self.skimmer_ui.skimmer.channel_timeout_secs,
-            skimmer_store_max_age_secs: self.skimmer_ui.skimmer.spot_store_max_age_secs,
-            skimmer_max_decode_chars: self.skimmer_ui.skimmer.decoder_params.max_text_chars,
-            min_spot_snr: self.skimmer_ui.min_spot_snr,
-            spot_cq_only: self.skimmer_ui.spot_cq_only,
-            spot_hide_heard_labels: self.skimmer_ui.spot_hide_heard_labels,
-            spot_max_age_secs: self.skimmer_ui.spot_max_age_secs,
-            spot_callsign_filter: self.skimmer_ui.spot_callsign_filter.clone(),
-            spot_label_limit: self.skimmer_ui.spot_label_limit,
-            scp_require: self.skimmer_ui.skimmer.require_scp,
-            spot_sort: spot_sort_to_u8(self.skimmer_ui.spot_sort),
-            continent_filter: self.skimmer_ui.continent_filter,
-            show_continents: self.skimmer_ui.show_continents,
             show_console: self.chrome.show_console,
             filter_wide: self.radio.passband_wide,
             show_history: self.chrome.show_history,

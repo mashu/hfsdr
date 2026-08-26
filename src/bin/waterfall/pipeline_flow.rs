@@ -28,7 +28,6 @@ pub enum PipelineStage {
     AutoNotch,
     NoiseReduction,
     Squelch,
-    Skimmer,
     AudioOutput,
 }
 
@@ -49,7 +48,6 @@ impl PipelineStage {
             Self::AutoNotch => "Auto-notch",
             Self::NoiseReduction => "Noise reduction",
             Self::Squelch => "Squelch",
-            Self::Skimmer => "Skimmer",
             Self::AudioOutput => "Audio output",
         }
     }
@@ -95,7 +93,6 @@ enum NodeId {
     SpectrumFront,
     Fft,
     Waterfall,
-    Skimmer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,7 +132,6 @@ pub struct PipelineSnapshot<'a> {
     pub device_rate_hz: f32,
     pub ingress_decim: usize,
     pub cw: &'a CwChannelSettings,
-    pub skimmer_enabled: bool,
     pub audio_enabled: bool,
     /// User software RF gain (dB); applied once before all IQ consumers.
     pub rf_gain_db: f32,
@@ -515,17 +511,6 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             true,
             NodeKind::Sink,
         ),
-        node_toggle(
-            NodeId::Skimmer,
-            "Skimmer",
-            format!(
-                "IQ + peak hold · {} ch",
-                snap.stats.skimmer_channels
-            ),
-            snap.skimmer_enabled,
-            NodeKind::Process,
-            PipelineStage::Skimmer,
-        ),
     ];
 
     if wideband_listen {
@@ -570,7 +555,7 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             )
         } else {
             format!(
-                "÷{} → {:.0} kS/s · spectrum + skimmer",
+                "÷{} → {:.0} kS/s · spectrum",
                 snap.ingress_decim,
                 snap.stats.sample_rate / 1000.0
             )
@@ -648,13 +633,6 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             snap.streaming,
             EdgeStyle::Solid,
         ));
-        edges.push(edge(
-            port(NodeId::IngressDecim, PortSide::Right, 0.65),
-            port(NodeId::Skimmer, PortSide::Left, 0.35),
-            false,
-            snap.streaming && snap.skimmer_enabled,
-            EdgeStyle::Solid,
-        ));
     } else {
         edges.push(edge(
             port(NodeId::RfGain, PortSide::Right, 0.25),
@@ -670,25 +648,11 @@ fn build_graph(snap: &PipelineSnapshot<'_>) -> Graph {
             snap.streaming,
             EdgeStyle::Solid,
         ));
-        edges.push(edge(
-            port(NodeId::RfGain, PortSide::Right, 0.75),
-            port(NodeId::Skimmer, PortSide::Left, 0.35),
-            false,
-            snap.streaming && snap.skimmer_enabled,
-            EdgeStyle::Solid,
-        ));
     }
 
     chain_edges(&mut edges, &listen_chain, true);
     chain_edges(&mut edges, &spectrum_chain, false);
 
-    edges.push(edge(
-        port(NodeId::Fft, PortSide::Right, 0.65),
-        port(NodeId::Skimmer, PortSide::Left, 0.75),
-        false,
-        snap.streaming && snap.skimmer_enabled,
-        EdgeStyle::PeakHold,
-    ));
 
     Graph { nodes, edges }
 }
@@ -858,7 +822,6 @@ fn default_pos(id: NodeId) -> Pos2 {
         NodeId::SpectrumFront => Pos2::new(346.0, 224.0),
         NodeId::Fft => Pos2::new(346.0, 304.0),
         NodeId::Waterfall => Pos2::new(346.0, 384.0),
-        NodeId::Skimmer => Pos2::new(668.0, 240.0),
     }
 }
 
@@ -1066,8 +1029,6 @@ fn legend_row(ui: &mut Ui, snap: &PipelineSnapshot<'_>) {
         ui.spacing_mut().item_spacing.x = 12.0;
         legend_chip(ui, "Listen path", ACCENT);
         legend_chip(ui, "Spectrum", TRACE);
-        legend_chip(ui, "Skimmer IQ", WARN);
-        legend_dashed_chip(ui, "Peak hold → skimmer", WARN);
         if snap.cw.diagnostic.any_active() {
             legend_chip(ui, "Diagnostic bypass active", WARN);
         }
@@ -1086,22 +1047,6 @@ fn legend_row(ui: &mut Ui, snap: &PipelineSnapshot<'_>) {
     });
 }
 
-fn legend_dashed_chip(ui: &mut Ui, label: &str, color: Color32) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(14.0, 12.0), Sense::hover());
-        let painter = ui.painter_at(rect);
-        let y = rect.center().y;
-        let mut x = rect.left();
-        let stroke = Stroke::new(2.0, color);
-        while x < rect.right() {
-            let x_end = (x + 4.0).min(rect.right());
-            painter.line_segment([egui::pos2(x, y), egui::pos2(x_end, y)], stroke);
-            x += 7.0;
-        }
-        ui.label(egui::RichText::new(label).small().color(MUTED));
-    });
-}
 
 fn legend_chip(ui: &mut Ui, label: &str, color: Color32) {
     ui.horizontal(|ui| {
@@ -1138,7 +1083,6 @@ mod tests {
             device_rate_hz: 384_000.0,
             ingress_decim,
             cw,
-            skimmer_enabled: true,
             audio_enabled: true,
             rf_gain_db: 0.0,
             stats,
@@ -1149,7 +1093,6 @@ mod tests {
     fn pipeline_stage_labels_non_empty() {
         let stages = [
             PipelineStage::NoiseBlanker,
-            PipelineStage::Skimmer,
             PipelineStage::AudioOutput,
         ];
         for stage in stages {
@@ -1224,7 +1167,6 @@ mod tests {
             device_rate_hz: 12_000.0,
             ingress_decim: 1,
             cw: &cw,
-            skimmer_enabled: true,
             audio_enabled: true,
             rf_gain_db: 0.0,
             stats: &stats,
@@ -1235,18 +1177,6 @@ mod tests {
         assert!(graph.nodes.iter().any(|n| n.id == NodeId::Decimator));
     }
 
-    #[test]
-    fn build_graph_links_fft_peak_hold_to_skimmer() {
-        let cw = CwChannelSettings::default();
-        let stats = EngineStats::default();
-        let snap = sample_snapshot(1, &cw, &stats);
-        let graph = build_graph(&snap);
-        assert!(graph.edges.iter().any(|e| {
-            e.from.node == NodeId::Fft
-                && e.to.node == NodeId::Skimmer
-                && e.style == EdgeStyle::PeakHold
-        }));
-    }
 
     #[test]
     fn build_graph_links_weak_signal_stages_before_agc() {
@@ -1258,7 +1188,6 @@ mod tests {
             device_rate_hz: 12_000.0,
             ingress_decim: 1,
             cw: &cw,
-            skimmer_enabled: false,
             audio_enabled: true,
             rf_gain_db: 0.0,
             stats: &stats,
@@ -1285,7 +1214,6 @@ mod tests {
             device_rate_hz: 12_000.0,
             ingress_decim: 1,
             cw: &cw,
-            skimmer_enabled: true,
             audio_enabled: true,
             rf_gain_db: 6.0,
             stats: &stats,
@@ -1342,7 +1270,6 @@ mod tests {
             AutoNotch,
             NoiseReduction,
             Squelch,
-            Skimmer,
             AudioOutput,
         ] {
             assert!(!stage.label().is_empty());
@@ -1352,7 +1279,6 @@ mod tests {
     #[test]
     fn diagnostic_stages_flagged() {
         assert!(PipelineStage::Bfo.is_diagnostic());
-        assert!(!PipelineStage::Skimmer.is_diagnostic());
         assert!(!PipelineStage::Agc.is_diagnostic());
     }
 }

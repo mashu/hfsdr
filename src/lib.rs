@@ -1,11 +1,11 @@
 //! # hfsdr — HF SDR / CW client library
 //!
-//! Source-agnostic IQ pipeline: panadapter FFT, contest-grade CW demodulation, in-band skimmer.
+//! Source-agnostic IQ pipeline: panadapter FFT and contest-grade CW demodulation.
 //!
 //! ## Documentation (read this first)
 //!
 //! The **[mdBook](https://github.com/mashu/hfsdr/tree/main/docs)** explains behavior and
-//! algorithms for operators and contributors — IQ basics, filter shapes, CW demod, skimmer,
+//! algorithms for operators and contributors — IQ basics, filter shapes, CW demod,
 //! and why the UI stays responsive. Build locally: `./scripts/build-docs.sh`.
 //!
 //! `cargo doc` is the API reference (types and functions), not a substitute for the book.
@@ -13,7 +13,7 @@
 //! ## Architecture in one diagram
 //!
 //! ```text
-//! IqSource → ring(s) → engine { listen (CwChannel) | FFT | skimmer } → GUI try_poll
+//! IqSource → ring(s) → engine { listen (CwChannel) | FFT } → GUI try_poll
 //! ```
 //!
 //! When ingress decimation is configured, a bridge thread fans device IQ into raw +
@@ -37,10 +37,7 @@ pub mod history;
 pub mod iq_record;
 pub mod kiwi;
 pub mod pipeline_metrics;
-pub mod multisource;
 pub use pipeline_metrics::PipelineMetrics;
-pub use multisource::{select_best, snr_weights, spot_display_snr, spot_primary_source, SourceSnr};
-pub mod skimmer;
 pub mod source;
 
 #[cfg(any(test, coverage, mock_hal))]
@@ -59,6 +56,8 @@ pub use history::{Annotation, RowFold, SlowWaterfall};
 pub use iq_record::{default_capture_dir, read_meta, timestamped_capture_path, timestamped_capture_path_in, IqCaptureMeta, IqPlayback, IqRecorder};
 pub use dsp::{
     db_to_rgba, WaterfallPalette,
+    bin_to_offset_hz, detect_peaks, detect_peaks_with_floor, noise_floor_db, noise_floor_db_into,
+    offset_hz_to_bin, strongest_offset_hz, strongest_offset_hz_with_floor, Peak,
     auto_fft_size, bin_width_hz, channel_group_delay_ms, decimation_factor, design_gaussian_lowpass,
     design_lowpass,
     effective_decimation, audio_sample_rate, compose_panadapter_row, compose_panadapter_row_into,
@@ -88,12 +87,6 @@ pub use dsp::{
 };
 pub use kiwi::protocol::{kiwi_iq_half_hz, KIWI_IQ_HALF_HZ, KIWI_IQ_RATE};
 pub use kiwi::KiwiSource;
-pub use skimmer::{
-    detect_peaks, detect_peaks_with_floor, strongest_offset_hz, strongest_offset_hz_with_floor,
-    encode_char, noise_floor_db, noise_floor_db_into, BayesCwDecoder, CwDecoder, DecodeChannel,
-    DecoderParams, EnvelopeSettings, MasterScp, Peak, Skimmer, SkimmerConfig, Spot, SpotKind,
-    SpotSort, SpotStore, MASTER_SCP_URL,
-};
 pub use source::ingress::{
     effective_iq_process_hz, ingress_decimation_from_hz, DEFAULT_WIDEBAND_PROCESS_HZ,
     WIDEBAND_PROCESS_THRESHOLD_HZ,

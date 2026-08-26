@@ -2,8 +2,8 @@
 
 use std::time::Instant;
 
-use hfsdr::skimmer::peaks::offset_hz_to_bin;
-use hfsdr::{Spot, SpotKind};
+use hfsdr::offset_hz_to_bin;
+
 
 use crate::app::WaterfallApp;
 use crate::audio;
@@ -38,20 +38,6 @@ fn kiwi_request(host: &str) -> ConnectRequest {
     }
 }
 
-fn spot(call: &str, snr: f32, kind: SpotKind) -> Spot {
-    let now = Instant::now();
-    Spot {
-        frequency_hz: 14_010_000.0,
-        callsign: Some(call.into()),
-        kind,
-        snr_db: snr,
-        wpm: 24.0,
-        first_heard: now,
-        last_heard: now,
-        sources: Vec::new(),
-        callsign_rank: 0,
-    }
-}
 
 #[test]
 fn cw_band_for_center_finds_20m() {
@@ -159,8 +145,6 @@ fn reconnecting_poll_updates_conn_state() {
             retry_in_s: 3.5,
         },
         stats: EngineStats::default(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
@@ -201,32 +185,7 @@ fn remember_host_deduplicates_and_caps() {
     assert_eq!(app.connection.form.recent_hosts[0].host, "host11");
 }
 
-#[test]
-fn annotate_new_spots_adds_history_marker() {
-    let mut app = test_app();
-    app.skimmer_ui.skimmer_spots = vec![spot("G0ABC", 18.0, SpotKind::CallingCq)];
-    app.annotate_new_spots(14_010_000.0);
-    let labels = app.history_labels();
-    assert_eq!(labels.len(), 1);
-    assert!(labels[0].contains("G0ABC"));
-    app.annotate_new_spots(14_010_000.0);
-    assert_eq!(app.history_labels().len(), 1);
-}
 
-#[test]
-fn visible_spots_respect_min_snr() {
-    let mut app = test_app();
-    app.skimmer_ui.min_spot_snr = 15.0;
-    app.skimmer_ui.skimmer_spots = vec![
-        spot("G0AAA", 10.0, SpotKind::Heard),
-        spot("G0AAB", 20.0, SpotKind::Heard),
-    ];
-    app.skimmer_ui.spots_dirty = true;
-    app.refresh_visible_spots();
-    let visible = &app.skimmer_ui.frame_visible_spots;
-    assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0].callsign.as_deref(), Some("G0AAB"));
-}
 
 #[test]
 fn passband_max_hz_follows_filter_wide() {
@@ -282,8 +241,6 @@ fn slow_link_shows_unstable_badge() {
     app.inject_engine_poll(EnginePoll {
         state: ConnState::Streaming,
         stats,
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
@@ -302,8 +259,6 @@ fn streaming_poll_appends_waterfall_rows() {
     app.inject_engine_poll(EnginePoll {
         state: ConnState::Streaming,
         stats: EngineStats::default(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: vec![row.clone(), row.clone()],
         latest: row,
         last_error: None,
@@ -367,19 +322,6 @@ fn center_hz_returns_khz_times_thousand() {
     assert_eq!(app.center_hz(), 14_010_000.0);
 }
 
-#[test]
-fn spot_labels_respect_hide_heard_and_limit() {
-    let mut app = test_app();
-    app.skimmer_ui.spot_hide_heard_labels = true;
-    app.skimmer_ui.frame_visible_spots = vec![spot("G0ABC", 20.0, SpotKind::Heard)];
-    assert!(app.spot_labels(14_010_000.0).is_empty());
-
-    app.skimmer_ui.spot_hide_heard_labels = false;
-    app.skimmer_ui.frame_visible_spots = vec![spot("G0ABC", 20.0, SpotKind::CallingCq)];
-    let labels = app.spot_labels(14_010_000.0);
-    assert_eq!(labels.len(), 1);
-    assert!(labels[0].cq);
-}
 
 #[test]
 #[cfg(feature = "rtlsdr")]
@@ -413,39 +355,7 @@ fn waterfall_trace_row_index_follows_displayed_row_not_latest() {
     assert_eq!(app.waterfall_trace_row_index(), 0);
 }
 
-#[test]
-fn pump_engine_ingests_skimmer_spots() {
-    let mut app = test_app();
-    let spot = spot("G0XYZ", 18.0, SpotKind::Heard);
-    app.inject_engine_poll(EnginePoll {
-        state: ConnState::Streaming,
-        stats: EngineStats::default(),
-        spots: vec![spot],
-            decode_channels: Vec::new(),
-        rows: Vec::new(),
-        latest: vec![-90.0; FFT_SIZE],
-        last_error: None,
-        audio_scope: Vec::new(),
-        audio_waveform: Vec::new(),
-    });
-    app.pump_engine();
-    assert_eq!(app.skimmer_ui.skimmer_spots.len(), 1);
-    assert_eq!(
-        app.skimmer_ui.skimmer_spots[0].callsign.as_deref(),
-        Some("G0XYZ")
-    );
-}
 
-#[test]
-fn clear_spots_wipes_local_state() {
-    let mut app = test_app();
-    app.skimmer_ui.skimmer_spots = vec![spot("G0ABC", 20.0, SpotKind::CallingCq)];
-    app.annotate_new_spots(14_010_000.0);
-    assert!(!app.history_labels().is_empty());
-    app.clear_spots();
-    assert!(app.skimmer_ui.skimmer_spots.is_empty());
-    assert!(app.skimmer_ui.frame_visible_spots.is_empty());
-}
 
 #[test]
 fn plot_full_span_uses_spectrum_rate_from_stats() {
@@ -462,8 +372,6 @@ fn fft_size_change_on_poll_resets_row_buffer() {
     app.inject_engine_poll(EnginePoll {
         state: ConnState::Streaming,
         stats: EngineStats::default(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; 1024],
         last_error: None,
@@ -475,49 +383,9 @@ fn fft_size_change_on_poll_resets_row_buffer() {
     assert!(app.plot.rows.is_empty());
 }
 
-#[test]
-fn skimmer_runtime_disabled_when_span_too_wide() {
-    let mut app = test_app();
-    app.skimmer_ui.skimmer_enabled = true;
-    app.radio.is_kiwi = false;
-    app.engine_ui.stats.spectrum_rate = 200_000.0;
-    app.engine_ui.stats.iq_passband_hz = 200_000.0;
-    assert!(!app.skimmer_spectrum_ok());
-    assert!(!app.skimmer_runtime_enabled());
-}
 
-#[test]
-fn skimmer_runtime_enabled_on_kiwi_despite_wide_span() {
-    let mut app = test_app();
-    app.skimmer_ui.skimmer_enabled = true;
-    app.radio.is_kiwi = true;
-    app.engine_ui.stats.spectrum_rate = 200_000.0;
-    // The runtime gate also requires a live stream; without this the assertion
-    // below fails for that reason rather than the wide span it means to test.
-    app.engine_ui.conn_state = ConnState::Streaming;
-    assert!(app.skimmer_spectrum_ok());
-    assert!(app.skimmer_runtime_enabled());
-}
 
-#[test]
-fn effective_skimmer_caps_channels_on_wideband() {
-    let mut app = test_app();
-    app.skimmer_ui.skimmer.max_channels = 32;
-    app.radio.is_kiwi = false;
-    app.engine_ui.stats.iq_passband_hz = 384_000.0;
-    app.engine_ui.stats.sample_rate = 384_000.0;
-    let cfg = app.effective_skimmer();
-    assert!(cfg.max_channels <= 8);
-}
 
-#[test]
-fn effective_skimmer_uses_connection_alias_when_streaming() {
-    let mut app = test_app();
-    app.connection.form.host = "rx.test".into();
-    app.engine_ui.conn_state = ConnState::Streaming;
-    let cfg = app.effective_skimmer();
-    assert_eq!(cfg.source_label, "rx.test:8073");
-}
 
 #[test]
 fn effective_target_fps_caps_wideband() {
@@ -830,31 +698,6 @@ fn quick_connect_uses_recent_host() {
     assert_eq!(app.connection.form.host, "recent.test");
 }
 
-#[test]
-fn toggle_all_pipeline_stages() {
-    let mut app = test_app();
-    use crate::pipeline_flow::PipelineStage;
-    for stage in [
-        PipelineStage::NoiseBlanker,
-        PipelineStage::ManualNotches,
-        PipelineStage::ListenNco,
-        PipelineStage::DecimatorFir,
-        PipelineStage::ChannelFir,
-        PipelineStage::IqApf,
-        PipelineStage::IqWiener,
-        PipelineStage::Agc,
-        PipelineStage::Bfo,
-        PipelineStage::Sidetone,
-        PipelineStage::Apf,
-        PipelineStage::AutoNotch,
-        PipelineStage::NoiseReduction,
-        PipelineStage::Squelch,
-        PipelineStage::Skimmer,
-        PipelineStage::AudioOutput,
-    ] {
-        app.toggle_pipeline_stage(stage);
-    }
-}
 
 #[test]
 fn pump_engine_ingests_injected_poll() {
@@ -871,8 +714,6 @@ fn pump_engine_ingests_injected_poll() {
             s.snr_db = 10.0;
             s
         },
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: vec![vec![-90.0; FFT_SIZE]],
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
@@ -911,16 +752,6 @@ fn connection_unstable_during_reconnect() {
     assert!(app.connection_unstable());
 }
 
-#[test]
-fn skimmer_runtime_disabled_when_spectrum_too_wide() {
-    let mut app = test_app();
-    app.skimmer_ui.skimmer_enabled = true;
-    app.radio.is_kiwi = false;
-    app.engine_ui.stats.iq_passband_hz = 384_000.0;
-    app.engine_ui.stats.sample_rate = 384_000.0;
-    app.engine_ui.stats.spectrum_rate = 384_000.0;
-    assert!(!app.skimmer_runtime_enabled());
-}
 
 #[test]
 fn process_iq_cmds_stop_playback() {

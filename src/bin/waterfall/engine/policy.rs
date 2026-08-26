@@ -117,17 +117,6 @@ pub fn adaptive_spectrum_rows(
     }
 }
 
-pub fn skimmer_throttle(is_kiwi: bool, skimmer_iq_rate: f32) -> u64 {
-    if is_kiwi && skimmer_iq_rate <= 24_000.0 {
-        2
-    } else if skimmer_iq_rate > 96_000.0 {
-        4
-    } else if skimmer_iq_rate > 48_000.0 {
-        2
-    } else {
-        1
-    }
-}
 
 pub fn handshake_timeout(is_kiwi: bool) -> Duration {
     if is_kiwi {
@@ -218,13 +207,6 @@ mod tests {
         assert_eq!(adaptive_spectrum_rows(384_000.0, 100_000.0, 0.9), 2);
     }
 
-    #[test]
-    fn skimmer_throttle_matrix() {
-        assert_eq!(skimmer_throttle(true, 12_000.0), 2);
-        assert_eq!(skimmer_throttle(false, 384_000.0), 4);
-        assert_eq!(skimmer_throttle(false, 49_000.0), 2);
-        assert_eq!(skimmer_throttle(false, 12_000.0), 1);
-    }
 
     #[test]
     fn stall_timeouts() {

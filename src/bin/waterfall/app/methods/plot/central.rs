@@ -58,11 +58,8 @@ impl WaterfallApp {
         let overlay = self.filter_overlay_cached().clone();
         let notches = self.enabled_notches(&overlay);
         let audio_rate = self.overlay_audio_rate();
-        let labels = if self.skimmer_ui.skimmer_enabled {
-            self.skimmer_ui.spot_label_cache.clone()
-        } else {
-            Vec::new()
-        };
+        // Spot labels came from the skimmer, which has been removed.
+        let labels: Vec<crate::widgets::SpotLabel> = Vec::new();
 
         let bw_max = self.passband_max_hz();
         let plot_width = stable_plot_width(ui.available_width());

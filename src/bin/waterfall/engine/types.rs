@@ -2,10 +2,8 @@
 
 use std::collections::VecDeque;
 
-use hfsdr::{CwChannelSettings, DecodeChannel, FftWindowKind, PipelineMetrics, Spot, DEFAULT_KAISER_BETA, DEFAULT_FFT_WINDOW};
-use hfsdr::SkimmerConfig;
+use hfsdr::{CwChannelSettings, FftWindowKind, PipelineMetrics, DEFAULT_KAISER_BETA, DEFAULT_FFT_WINDOW};
 
-use crate::skimmer::ScpStatus;
 use crate::source::ConnectRequest;
 
 use crate::engine::policy::MIN_SPECTRUM_ROWS_WIDEBAND;
@@ -36,13 +34,11 @@ pub struct EngineStats {
     pub audio_rate: u32,
     pub slow: bool,
     pub is_kiwi: bool,
-    pub skimmer_channels: usize,
     pub spectrum_rate: f32,
     pub spectrum_fft: usize,
     pub spectrum_decim: usize,
     pub spectrum_zoomed: bool,
     pub spectrum_rows_per_pump: usize,
-    pub scp: ScpStatus,
     pub iq_recording: bool,
     pub iq_playback: bool,
     pub iq_capture_samples: u64,
@@ -91,13 +87,11 @@ impl Default for EngineStats {
             audio_rate: 0,
             slow: false,
             is_kiwi: false,
-            skimmer_channels: 0,
             spectrum_rate: 12_000.0,
             spectrum_fft: FFT_SIZE,
             spectrum_decim: 1,
             spectrum_zoomed: false,
             spectrum_rows_per_pump: MIN_SPECTRUM_ROWS_WIDEBAND,
-            scp: ScpStatus::default(),
             iq_recording: false,
             iq_playback: false,
             iq_capture_samples: 0,
@@ -126,8 +120,6 @@ pub struct EngineParams {
     pub cw: CwChannelSettings,
     pub audio_enabled: bool,
     pub volume: f32,
-    pub skimmer_enabled: bool,
-    pub skimmer: SkimmerConfig,
     pub fft_size: usize,
     pub fft_auto: bool,
     /// FFT analysis window for panadapter / waterfall.
@@ -150,8 +142,6 @@ impl Default for EngineParams {
             cw: CwChannelSettings::default(),
             audio_enabled: true,
             volume: 1.0,
-            skimmer_enabled: false,
-            skimmer: SkimmerConfig::default(),
             fft_size: FFT_SIZE,
             fft_auto: true,
             spectrum_window: DEFAULT_FFT_WINDOW,
@@ -169,8 +159,6 @@ pub struct EngineShared {
     pub new_rows: VecDeque<Vec<f32>>,
     pub state: ConnState,
     pub stats: EngineStats,
-    pub spots: Vec<Spot>,
-    pub skimmer_decode_channels: Vec<DecodeChannel>,
     pub last_error: Option<String>,
     pub rows_seq: u64,
     /// Recent demod audio envelope slots for the AF scope (oldest first).
@@ -186,8 +174,6 @@ impl Default for EngineShared {
             new_rows: VecDeque::with_capacity(WATERFALL_ROWS),
             state: ConnState::Disconnected,
             stats: EngineStats::default(),
-            spots: Vec::new(),
-            skimmer_decode_channels: Vec::new(),
             last_error: None,
             rows_seq: 0,
             audio_scope: Vec::new(),
@@ -234,9 +220,6 @@ pub enum EngineCommand {
     #[cfg(feature = "soapy")]
     SetSoapyAntenna(String),
     SetAudioDevice(Option<String>),
-    ClearSkimmerSpots,
-    ReloadScp,
-    ReloadScpFrom(std::path::PathBuf),
     StartIqRecord(std::path::PathBuf),
     StopIqRecord,
     PlayIqFile(std::path::PathBuf),
@@ -249,8 +232,6 @@ pub enum EngineCommand {
 pub struct EnginePoll {
     pub state: ConnState,
     pub stats: EngineStats,
-    pub spots: Vec<hfsdr::Spot>,
-    pub decode_channels: Vec<DecodeChannel>,
     pub rows: Vec<Vec<f32>>,
     pub latest: Vec<f32>,
     pub last_error: Option<String>,
@@ -348,8 +329,6 @@ mod tests {
         let poll = EnginePoll {
             state: ConnState::Streaming,
             stats: EngineStats::default(),
-            spots: Vec::new(),
-            decode_channels: Vec::new(),
             rows: Vec::new(),
             latest: Vec::new(),
             last_error: None,
@@ -370,8 +349,6 @@ mod tests {
         let poll = EnginePoll {
             state: ConnState::Streaming,
             stats: EngineStats::default(),
-            spots: Vec::new(),
-            decode_channels: Vec::new(),
             rows: vec![latest.clone()],
             latest,
             last_error: None,
@@ -388,8 +365,6 @@ mod tests {
         let poll = EnginePoll {
             state: ConnState::Streaming,
             stats: EngineStats::default(),
-            spots: Vec::new(),
-            decode_channels: Vec::new(),
             rows: vec![vec![]],
             latest: vec![-90.0; 8],
             last_error: None,

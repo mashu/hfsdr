@@ -12,8 +12,7 @@ pub(crate) use hfsdr::{
     decimation_factor, compose_panadapter_row, compose_panadapter_row_into,
     panadapter_output_bins, stretch_row_to_width, stretch_row_to_width_into,
     strongest_offset_hz, Continent,
-    ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, CwSideband, RowFold, SlowWaterfall, SpectrumViewMapping, Spot,
-    SpotKind, SpotSort, SkimmerConfig, channel_group_delay_ms, IirFilterKind,
+    ContinentResolver, AgcMode, ChannelFilterKind, ChannelOffsetHz, CwChannelSettings, CwSideband, RowFold, SlowWaterfall, SpectrumViewMapping,  channel_group_delay_ms, IirFilterKind,
     CwDetectorMode,
     SidetoneEnvelopeShape, WindowKind, FftWindowKind, DEFAULT_KAISER_BETA,
     MAX_KAISER_BETA, MAX_NOTCHES, MIN_KAISER_BETA,
@@ -62,9 +61,6 @@ pub(crate) use crate::settings::{AppSettings, NotchData};
 pub(crate) use crate::source::{AirspySettings, ConnectRequest, KiwiSettings, QmxSettings, RtlSdrSettings, SourceKind};
 #[cfg(feature = "soapy")]
 pub(crate) use crate::source::SoapySettings;
-pub(crate) use crate::spot_filter::{
-    build_spot_labels, continent_index, filter_spots, SpotFilterConfig, SpotLabelConfig,
-};
 pub(crate) use crate::theme::{
     apply, attach_rich_tooltip, band_lock_toggle, clickable_badge, collapsible_section,
     section_card, section_frame, section_heading, section_heading_with_tip, section_hint,
@@ -81,8 +77,8 @@ pub(crate) use crate::source::{
 pub(crate) use crate::app::codec::{
     agc_mode_from_u8, agc_mode_to_u8, channel_filter_from_u8, channel_filter_to_u8,
     iir_filter_from_u8, iir_filter_to_u8,
-    normalize_waterfall_avg, plot_action_changes_view, skimmer_config_from_settings,
-    spot_sort_from_u8, spot_sort_to_u8,
+    normalize_waterfall_avg, plot_action_changes_view, 
+    
     st_envelope_shape_from_u8, st_envelope_shape_to_u8,
     sideband_from_u8, sideband_to_u8,
     detector_mode_from_u8, detector_mode_to_u8,

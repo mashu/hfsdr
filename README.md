@@ -8,7 +8,7 @@
 
 A **CW-focused** HF receiver and panadapter for **KiwiSDR**, **Airspy HF+**,
 **RTL-SDR**, and **QRP Labs QMX/QMX+**. The UI is built around what CW operators
-actually touch: band presets, VFO, RIT, filter chain, and skimmer — without
+actually touch: band presets, VFO, RIT, and filter chain — without
 phone/AM/FM modes or unrelated clutter.
 
 <img width="3160" height="1920" alt="image" src="https://github.com/user-attachments/assets/8a1443fa-e2a0-45fe-807e-34e90ef18e89" />

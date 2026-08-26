@@ -22,7 +22,6 @@ use hfsdr::{
 };
 
 use crate::audio::AudioOutput;
-use crate::skimmer::SkimmerHandle;
 use crate::source::{Connection, ConnectRequest};
 
 use super::audio::{AudioScopeRing, AudioWaveformRing};
@@ -33,7 +32,6 @@ pub(crate) struct Engine {
     cmd_rx: Receiver<EngineCommand>,
     shared: Arc<Mutex<EngineShared>>,
     params: Arc<Mutex<EngineParams>>,
-    skimmer: SkimmerHandle,
 
     pub(crate) conn: Option<Connection>,
     request: Option<ConnectRequest>,

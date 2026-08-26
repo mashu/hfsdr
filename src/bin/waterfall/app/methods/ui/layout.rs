@@ -42,10 +42,6 @@ impl WaterfallApp {
                 return;
             }
             this.display_section(ui);
-            this.spot_display_section(ui);
-            collapsible_section(ui, "skimmer-settings", "Skimmer settings", None, false, |ui| {
-                this.skimmer_settings_body(ui);
-            });
             collapsible_section(ui, "audio", "Audio", None, false, |ui| {
                 this.audio_card_body(ui);
             });

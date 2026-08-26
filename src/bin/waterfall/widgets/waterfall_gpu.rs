@@ -301,9 +301,6 @@ impl WaterfallRenderer {
         }
     }
 
-    pub fn row_width(&self) -> usize {
-        self.row_width
-    }
 
     /// (Re)allocate the ring texture when the row width changes.
     fn ensure_texture(&mut self, device: &wgpu::Device, row_width: usize) {

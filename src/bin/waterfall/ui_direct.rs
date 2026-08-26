@@ -9,27 +9,11 @@ use crate::app::WaterfallApp;
 use crate::audio;
 use crate::engine::EngineStats;
 use crate::iq_panel::IqPanelView;
-use crate::skimmer::ScpStatus;
-use hfsdr::{Spot, SpotKind};
+
 
 fn seeded_app() -> WaterfallApp {
     audio::set_test_output_devices(Some(vec!["Test Output".into()]));
     let mut app = WaterfallApp::new_for_test(None);
-    app.skimmer_ui.skimmer_enabled = true;
-    app.skimmer_ui.skimmer_channels = 3;
-    let now = Instant::now();
-    app.skimmer_ui.frame_visible_spots = vec![Spot {
-        frequency_hz: 14_010_500.0,
-        callsign: Some("G0ABC".into()),
-        kind: SpotKind::CallingCq,
-        snr_db: 20.0,
-        wpm: 22.0,
-        first_heard: now,
-        last_heard: now,
-        sources: Vec::new(),
-        callsign_rank: 0,
-    }];
-    app.skimmer_ui.skimmer_spots = app.skimmer_ui.frame_visible_spots.clone();
     app.engine_ui.stats = EngineStats {
         sample_rate: 96_000.0,
         iq_passband_hz: 96_000.0,
@@ -37,12 +21,6 @@ fn seeded_app() -> WaterfallApp {
         spectrum_fft: 4096,
         audio_device: Some("Test Output".into()),
         audio_rate: 48_000,
-        scp: ScpStatus {
-            loaded: true,
-            calls: 5000,
-            version: Some("test".into()),
-            path: Some("/tmp/MASTER.SCP".into()),
-        },
         ..EngineStats::default()
     };
     app
@@ -60,33 +38,9 @@ where
     harness.run_steps(8);
 }
 
-#[test]
-fn spot_display_body_renders() {
-    let app = seeded_app();
-    run_ui(app, |app, ui| app.spot_display_body(ui));
-}
 
-#[test]
-fn spot_display_section_renders() {
-    let app = seeded_app();
-    run_ui(app, |app, ui| app.spot_display_section(ui));
-}
 
-#[test]
-fn skimmer_settings_body_renders() {
-    let app = seeded_app();
-    run_ui(app, |app, ui| app.skimmer_settings_body(ui));
-}
 
-#[test]
-fn scp_body_renders_loaded_and_empty() {
-    let app = seeded_app();
-    run_ui(app, |app, ui| app.scp_body(ui));
-
-    let mut empty = seeded_app();
-    empty.engine_ui.stats.scp = ScpStatus::default();
-    run_ui(empty, |app, ui| app.scp_body(ui));
-}
 
 #[test]
 fn audio_card_body_renders() {
@@ -112,18 +66,7 @@ fn performance_section_renders() {
     run_ui(wide, |app, ui| app.performance_section(ui));
 }
 
-#[test]
-fn history_panel_with_annotations() {
-    let mut app = seeded_app();
-    app.annotate_new_spots(14_010_000.0);
-    run_ui(app, |app, ui| app.history_panel(ui));
-}
 
-#[test]
-fn history_panel_empty_state() {
-    let app = seeded_app();
-    run_ui(app, |app, ui| app.history_panel(ui));
-}
 
 #[test]
 fn iq_panel_show_renders() {
@@ -143,13 +86,6 @@ fn display_section_renders() {
     run_ui(app, |app, ui| app.display_section(ui));
 }
 
-#[test]
-fn spot_display_airspy_skimmer_warning() {
-    let mut app = seeded_app();
-    app.radio.is_kiwi = false;
-    app.engine_ui.stats.sample_rate = 768_000.0;
-    run_ui(app, |app, ui| app.spot_display_body(ui));
-}
 
 #[test]
 fn cw_demod_and_af_tuning_cards_render() {

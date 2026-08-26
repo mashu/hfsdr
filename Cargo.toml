@@ -64,14 +64,6 @@ path = "src/bin/pipeline_bench.rs"
 required-features = ["airspy"]
 
 [[bin]]
-name = "skimmer-bench"
-path = "src/bin/skimmer_bench.rs"
-
-[[bin]]
-name = "kiwi-pipeline-bench"
-path = "src/bin/kiwi_pipeline_bench.rs"
-
-[[bin]]
 name = "engine-bench"
 path = "src/bin/waterfall/bench_main.rs"
 required-features = ["gui-core"]

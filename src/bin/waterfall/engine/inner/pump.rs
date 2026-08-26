@@ -10,7 +10,7 @@ use crate::log;
 use super::Engine;
 use crate::engine::perf::perf_enabled;
 use crate::engine::policy::{
-    is_wideband_rate, ring_catchup_target_slots, skimmer_throttle, SKIMMER_PEAK_HOLD_DECAY_DB,
+    is_wideband_rate, ring_catchup_target_slots, SKIMMER_PEAK_HOLD_DECAY_DB,
 };
 use crate::engine::types::{ConnState, EngineStats};
 use crate::engine::{WATERFALL_ROWS};
@@ -395,42 +395,6 @@ impl Engine {
         }
 
         self.pump_serial = self.pump_serial.wrapping_add(1);
-        let run_skimmer = params.skimmer_enabled;
-        self.skimmer.set_enabled(run_skimmer);
-        let t_skimmer = Instant::now();
-        if run_skimmer {
-            let spectrum_iq_rate = if let Some(pb) = &self.playback {
-                pb.meta().sample_rate as f32
-            } else if let Some(c) = &self.conn {
-                c.sample_rate
-            } else {
-                device_rate
-            };
-            let (skimmer_iq, skimmer_iq_rate) =
-                if (dual_ring || ingress_decim > 1) && !self.drain_decim.is_empty() {
-                (self.drain_decim.as_slice(), spectrum_iq_rate)
-            } else {
-                (batch.as_slice(), device_rate)
-            };
-            let is_kiwi = self.conn.as_ref().is_some_and(|c| c.is_kiwi);
-            let throttle = skimmer_throttle(is_kiwi, skimmer_iq_rate);
-            if self.pump_serial.is_multiple_of(throttle) {
-                let mut cfg = params.skimmer.clone();
-                cfg.source_label = "rx".to_string();
-                self.skimmer.set_config(cfg);
-                self.skimmer.submit(
-                    skimmer_iq,
-                    &self.skimmer_peak_hold,
-                    skimmer_iq_rate,
-                    self.spectrum_rate,
-                    self.spectrum_pan_hz,
-                    center_hz,
-                );
-            }
-        }
-        if perf {
-            metrics.skimmer_submit_ns = t_skimmer.elapsed().as_nanos() as u64;
-        }
 
         // Reclaim the drained batch buffer for the next pump (no per-pump alloc).
         if let Ok(mut v) = Arc::try_unwrap(batch) {
@@ -545,17 +509,8 @@ impl Engine {
         };
         self.iq_buffer_secs = self.iq_buffer_secs * 0.5 + queued_secs * 0.5;
     }
-    pub(super) fn skimmer_snapshot(&self) -> (Vec<hfsdr::Spot>, Vec<hfsdr::DecodeChannel>, usize, crate::skimmer::ScpStatus) {
-        (
-            self.skimmer.spots(),
-            self.skimmer.live_channels(),
-            self.skimmer.active_channels(),
-            self.skimmer.scp_status(),
-        )
-    }
 
     pub(super) fn publish_rows(&mut self, rows: Vec<Vec<f32>>, snr: f32, got: usize) {
-        let (spots, decode_channels, channels, scp) = self.skimmer_snapshot();
         let dropped = self.conn.as_ref().map(|c| c.device.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.device.rssi_dbm());
         let (sample_rate, _, is_kiwi) = self.link_meta();
@@ -584,8 +539,6 @@ impl Engine {
                 guard.new_rows.push_back(row);
                 guard.rows_seq = guard.rows_seq.wrapping_add(1);
             }
-            guard.spots = spots;
-            guard.skimmer_decode_channels = decode_channels;
             let mut stats = EngineStats {
                 sample_rate: self
                     .conn
@@ -602,13 +555,11 @@ impl Engine {
                 audio_rate,
                 slow,
                 is_kiwi,
-                skimmer_channels: channels,
                 spectrum_rate: self.spectrum_rate,
                 spectrum_fft: self.fft_size,
                 spectrum_decim: self.spectrum_decim,
                 spectrum_zoomed: self.spectrum_decim > 1,
                 spectrum_rows_per_pump: self.last_spectrum_rows,
-                scp,
                 iq_recording,
                 iq_playback,
                 iq_capture_samples,
@@ -647,7 +598,6 @@ impl Engine {
     }
 
     pub(super) fn publish_stats(&mut self, got: usize) {
-        let (spots, decode_channels, channels, scp) = self.skimmer_snapshot();
         let dropped = self.conn.as_ref().map(|c| c.device.dropped_samples()).unwrap_or(0);
         let rssi = self.conn.as_ref().and_then(|c| c.device.rssi_dbm());
         let (sample_rate, _, is_kiwi) = self.link_meta();
@@ -663,8 +613,6 @@ impl Engine {
         let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
         let hw_rf_gain = self.hw_rf_gain();
         if let Ok(mut guard) = self.shared.lock() {
-            guard.spots = spots;
-            guard.skimmer_decode_channels = decode_channels;
             let mut stats = EngineStats {
                 sample_rate: self
                     .conn
@@ -681,13 +629,11 @@ impl Engine {
                 audio_rate,
                 slow,
                 is_kiwi,
-                skimmer_channels: channels,
                 spectrum_rate: self.spectrum_rate,
                 spectrum_fft: self.fft_size,
                 spectrum_decim: self.spectrum_decim,
                 spectrum_zoomed: self.spectrum_decim > 1,
                 spectrum_rows_per_pump: self.last_spectrum_rows,
-                scp,
                 iq_recording,
                 iq_playback,
                 iq_capture_samples,

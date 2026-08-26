@@ -20,9 +20,6 @@ mod radio {
     mod sync;
 }
 mod settings;
-mod spots {
-    mod logic;
-}
 mod tuning;
 mod ui {
     mod connection {
@@ -39,7 +36,6 @@ mod ui {
     }
     mod console;
     mod display;
-    mod history;
     mod layout;
     mod left {
         mod cards;
@@ -51,11 +47,6 @@ mod ui {
         mod audio;
         mod cw_demod;
         mod performance;
-    }
-    mod spots {
-        mod display;
-        mod scp;
-        mod skimmer;
     }
     mod status;
 }

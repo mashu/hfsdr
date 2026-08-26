@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA};
 
-use crate::skimmer::SkimmerHandle;
 
 use crate::engine::audio::{AudioScopeRing, AudioWaveformRing};
 use super::Engine;
@@ -29,7 +28,6 @@ impl Engine {
             cmd_rx,
             shared,
             params,
-            skimmer: SkimmerHandle::spawn("rx".into()),
             conn: None,
             request: None,
             audio: None,

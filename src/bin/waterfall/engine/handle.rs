@@ -100,8 +100,6 @@ impl EngineHandle {
         Some(EnginePoll {
             state: guard.state.clone(),
             stats: guard.stats.clone(),
-            spots: guard.spots.clone(),
-            decode_channels: guard.skimmer_decode_channels.clone(),
             rows,
             latest: guard.latest.clone(),
             last_error: guard.last_error.clone(),
@@ -136,8 +134,6 @@ mod tests {
         EnginePoll {
             state,
             stats: EngineStats::default(),
-            spots: Vec::new(),
-            decode_channels: Vec::new(),
             rows: Vec::new(),
             latest: vec![-90.0; FFT_SIZE],
             last_error: None,
