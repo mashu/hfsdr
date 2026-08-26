@@ -11,11 +11,13 @@ use super::freq_axis::draw_freq_vertical_grid;
 use super::waterfall_mesh::build_waterfall_ring_mesh;
 use super::PlotParams;
 
-pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: PlotFreqMapping, p: &PlotParams) {
+pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: PlotFreqMapping, p: &mut PlotParams) {
     let view_span = freq_map.view_span_hz;
     let pan = freq_map.pan_offset_hz;
 
-    if let Some(tex) = p.waterfall_display {
+    if let Some(cb) = p.waterfall_gpu.take() {
+        super::waterfall_gpu::paint(painter, rect, cb);
+    } else if let Some(tex) = p.waterfall_display {
         let mesh = build_waterfall_ring_mesh(rect, p.waterfall_row_head, WATERFALL_ROWS, tex.id());
         painter.add(Shape::mesh(mesh));
     } else {

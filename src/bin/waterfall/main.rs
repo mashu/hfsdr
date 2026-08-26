@@ -95,7 +95,17 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             crate::theme::apply(&cc.egui_ctx);
-            Ok(Box::new(WaterfallApp::new(autoconnect)))
+            // GPU waterfall needs resources in egui's wgpu renderer; when the
+            // backend is not wgpu this returns false and the CPU path is used.
+            let gpu = crate::widgets::install_waterfall_gpu(cc);
+            log::info(if gpu {
+                "waterfall: GPU shader path"
+            } else {
+                "waterfall: CPU path (no wgpu render state)"
+            });
+            let mut app = WaterfallApp::new(autoconnect);
+            app.set_waterfall_gpu_available(gpu);
+            Ok(Box::new(app))
         }),
     )
 }

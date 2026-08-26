@@ -103,6 +103,13 @@ impl WaterfallApp {
         if self.plot.rows.is_empty() {
             return;
         }
+        if self.waterfall_gpu_active() {
+            // The shader samples raw dB directly: no compose, stretch, colourise
+            // or texture upload on this path, and pan/zoom cost nothing.
+            self.plot.waterfall.pending_viewport_row_appends = 0;
+            self.plot.waterfall.trace_refresh = true;
+            return;
+        }
         let view = self.spectrum_view();
         let dst_w = plot_width.max(1);
         let h = WATERFALL_ROWS;

@@ -2,6 +2,83 @@ use crate::app::WaterfallApp;
 use crate::app::prelude::*;
 
 impl WaterfallApp {
+    pub(crate) fn set_waterfall_gpu_available(&mut self, available: bool) {
+        self.plot.waterfall.gpu_available = available;
+    }
+
+    /// True when the shader path should paint this frame.
+    pub(crate) fn waterfall_gpu_active(&self) -> bool {
+        self.plot.waterfall.gpu_available && self.display.waterfall_gpu
+    }
+
+    /// Build this frame's shader payload, or `None` when the CPU path is active.
+    ///
+    /// The visible window becomes texture coordinates via `offset_hz_to_storage_u`,
+    /// so pan and zoom are two floats rather than a 360-row recompose.
+    pub(crate) fn build_waterfall_gpu_callback(
+        &mut self,
+        storage_span_hz: f32,
+        plot_px: f32,
+    ) -> Option<crate::widgets::WaterfallCallback> {
+        if !self.waterfall_gpu_active() {
+            return None;
+        }
+        let width = self.plot.waterfall.gpu_row_width;
+        if width == 0 {
+            return None;
+        }
+        let view = self.spectrum_view();
+        let half = f64::from(view.view_span_hz) / 2.0;
+        let u0 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz - half, storage_span_hz);
+        let u1 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz + half, storage_span_hz);
+        let uniforms = crate::widgets::waterfall_gpu_uniforms(
+            u0,
+            u1,
+            self.plot.waterfall.gpu_row_head,
+            width,
+            plot_px,
+            self.display.ref_db,
+            self.display.range_db,
+        );
+        Some(crate::widgets::WaterfallCallback {
+            uniforms,
+            new_rows: std::mem::take(&mut self.plot.waterfall.gpu_pending),
+            row_width: width,
+        })
+    }
+
+    /// Queue `count` newly arrived dB rows for upload to the ring texture.
+    ///
+    /// Rows go up raw and full-span: the shader does the view window, so pan and
+    /// zoom never touch this path.
+    pub(crate) fn queue_waterfall_gpu_rows(&mut self, count: usize) {
+        if !self.waterfall_gpu_active() || count == 0 {
+            return;
+        }
+        let width = self.plot.rows.front().map(|r| r.len()).unwrap_or(0);
+        if width == 0 {
+            return;
+        }
+        if self.plot.waterfall.gpu_row_width != width {
+            // Width change reallocates the texture; the old ring is stale.
+            self.plot.waterfall.gpu_row_width = width;
+            self.plot.waterfall.gpu_pending.clear();
+            self.plot.waterfall.gpu_row_head = 0;
+        }
+        // `plot.rows` is newest-first; upload oldest of the new batch first so
+        // ring order matches arrival order.
+        let take = count.min(self.plot.rows.len());
+        for i in (0..take).rev() {
+            let Some(row) = self.plot.rows.get(i) else { continue };
+            if row.len() != width {
+                continue;
+            }
+            let slot = self.plot.waterfall.gpu_row_head;
+            self.plot.waterfall.gpu_pending.push((slot, row.clone()));
+            self.plot.waterfall.gpu_row_head = (slot + 1) % WATERFALL_ROWS;
+        }
+    }
+
     /// Index into `plot.rows` for the FFT row aligned with the waterfall top line.
     pub(crate) fn waterfall_trace_row_index(&self) -> usize {
         self.plot

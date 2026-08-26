@@ -33,6 +33,14 @@ pub struct WaterfallTextureCache {
     pub compose_scratch: RowComposeScratch,
     /// dB -> colour lookup, rebuilt only when reference level or range changes.
     pub palette: hfsdr::WaterfallPalette,
+    /// True when the wgpu shader path is available (registered at startup).
+    pub gpu_available: bool,
+    /// Ring slot the next dB row uploads into.
+    pub gpu_row_head: usize,
+    /// dB rows appended since the last paint, with their ring slots.
+    pub gpu_pending: Vec<(usize, Vec<f32>)>,
+    /// Row width of the dB ring texture; a change reallocates it.
+    pub gpu_row_width: usize,
     pub perf: WaterfallPerf,
 }
 
@@ -70,6 +78,10 @@ impl Default for WaterfallTextureCache {
             trace_refresh: false,
             compose_scratch: RowComposeScratch::default(),
             palette: hfsdr::WaterfallPalette::default(),
+            gpu_available: false,
+            gpu_row_head: 0,
+            gpu_pending: Vec::new(),
+            gpu_row_width: 0,
             perf: WaterfallPerf::default(),
         }
     }

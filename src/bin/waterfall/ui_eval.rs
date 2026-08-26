@@ -167,3 +167,93 @@ fn capture_ui_screenshot_states() {
     min_harness.run_steps(4);
     save_render(&mut min_harness, "06_minimum_window").expect("write minimum-window screenshot");
 }
+
+/// End-to-end check of the shader waterfall inside the real app.
+///
+/// The unit tests in `widgets::waterfall_gpu` prove the shader is correct in
+/// isolation; this proves the app actually reaches it — renderer installed,
+/// rows queued, callback painted — which the other UI tests do not, since they
+/// never set `gpu_available` and so always exercise the CPU path.
+#[test]
+fn gpu_waterfall_paints_in_the_real_app() {
+    audio::set_test_output_devices(Some(
+        TEST_AUDIO_DEVICES.iter().map(|s| (*s).to_string()).collect(),
+    ));
+    let mut installed = false;
+    let mut harness = Harness::builder()
+        .with_size(WINDOW_SIZE)
+        .with_max_steps(128)
+        .with_wait_for_pending_images(false)
+        // The default test renderer leaves cc.wgpu_render_state empty, which
+        // would silently skip this whole test.
+        .wgpu()
+        .build_eframe(|cc| {
+            theme::apply(&cc.egui_ctx);
+            installed = crate::widgets::install_waterfall_gpu(cc);
+            let mut app = WaterfallApp::new_for_test(None);
+            app.set_waterfall_gpu_available(installed);
+            app
+        });
+
+    if !installed {
+        eprintln!("skipping GPU waterfall check: no wgpu render state");
+        return;
+    }
+    harness.run_steps(1);
+
+    // Feed rows with a strong carrier so the result cannot be uniform noise.
+    for _ in 0..8 {
+        let mut row = vec![-110.0f32; FFT_SIZE];
+        row[FFT_SIZE / 2] = -15.0;
+        harness.state().inject_engine_poll(EnginePoll {
+            state: ConnState::Streaming,
+            stats: streaming_stats(),
+            spots: Vec::new(),
+            decode_channels: Vec::new(),
+            rows: vec![row.clone()],
+            latest: row,
+            last_error: None,
+            audio_scope: Vec::new(),
+            audio_waveform: Vec::new(),
+        });
+        harness.run_steps(2);
+    }
+
+    let image = match catch_unwind(AssertUnwindSafe(|| harness.render())) {
+        Ok(Ok(img)) => img,
+        _ => {
+            eprintln!("skipping GPU waterfall check: no wgpu adapter");
+            return;
+        }
+    };
+    let path = screenshot_dir().join("07_gpu_waterfall.png");
+    let _ = image.save(&path);
+
+    // The waterfall occupies the lower half of the plot area. The injected rows
+    // are a -110 dB floor with one -15 dB carrier, so against ref -20 / range 80
+    // the row must be mostly DARK with a single bright column. Checking only for
+    // "several distinct colours" would pass on a solid white texture, which is
+    // exactly what an uncleared R32Float ring produces.
+    let (w, h) = (image.width(), image.height());
+    let band_y = (h as f32 * 0.70) as u32;
+    let y = band_y.min(h - 1);
+    let mut sums: Vec<u32> = Vec::with_capacity(w as usize);
+    for x in 0..w {
+        let p = image.get_pixel(x, y);
+        sums.push(p[0] as u32 + p[1] as u32 + p[2] as u32);
+    }
+    let brightest = sums.iter().copied().max().unwrap_or(0);
+    let mut sorted = sums.clone();
+    sorted.sort_unstable();
+    let median = sorted[sorted.len() / 2];
+
+    assert!(
+        median < 220,
+        "waterfall row is mostly bright (median channel sum {median}) — the dB ring \
+         is probably uncleared, which reads as 0 dB = full scale"
+    );
+    assert!(
+        brightest > median + 100,
+        "no carrier stands out of the noise floor (max {brightest}, median {median})"
+    );
+}

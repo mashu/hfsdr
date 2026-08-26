@@ -183,6 +183,7 @@ impl WaterfallApp {
                 full_drain_spectrum: false,
                 perf_trace: false,
                 waterfall_rows_per_frame: 1,
+                waterfall_gpu: true,
             },
             audio: AudioUiState {
                 audio_devices,

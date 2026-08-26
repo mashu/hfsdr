@@ -253,6 +253,9 @@ impl WaterfallApp {
                 self.plot.rows.push_front(stored);
             }
             self.display.waterfall_rows = self.plot.rows.len();
+            // Raw dB rows go straight to the shader's ring; the CPU compose path
+            // below only runs when the GPU path is unavailable or disabled.
+            self.queue_waterfall_gpu_rows(n_new);
             self.plot.waterfall.pending_viewport_row_appends += n_new;
             let cap = waterfall_pending_cap(
                 self.effective_target_fps(),

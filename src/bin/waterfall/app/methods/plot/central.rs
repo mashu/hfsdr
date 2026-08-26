@@ -97,7 +97,8 @@ impl WaterfallApp {
             view.pan_offset_hz,
             storage_span,
         );
-        let params = crate::widgets::PlotParams {
+        let gpu_callback = self.build_waterfall_gpu_callback(storage_span, plot_width as f32);
+        let mut params = crate::widgets::PlotParams {
             view_bandwidth_hz: plot_full_span,
             max_zoom,
             center_freq_hz: self.radio.center_khz * 1000.0,
@@ -126,6 +127,7 @@ impl WaterfallApp {
             plot_width: plot_width as f32,
             waterfall_display: self.plot.waterfall.viewport_texture.as_ref(),
             waterfall_row_head: self.plot.waterfall.viewport_row_head,
+            waterfall_gpu: gpu_callback,
         };
 
         let plot_actions = self.plot.panadapter_plot.show(
@@ -133,7 +135,7 @@ impl WaterfallApp {
             &mut self.plot.plot_interaction,
             &mut self.plot.plot_view,
             freq_map,
-            &params,
+            &mut params,
             &mut self.plot.hover_offset_hz,
             &mut self.plot.last_plot_interaction_rect,
         );

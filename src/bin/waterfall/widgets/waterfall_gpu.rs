@@ -196,6 +196,8 @@ pub struct WaterfallRenderer {
     texture: Option<wgpu::Texture>,
     view: Option<wgpu::TextureView>,
     row_width: usize,
+    /// Set when a newly allocated ring still needs filling with the noise floor.
+    pending_clear: bool,
 }
 
 impl WaterfallRenderer {
@@ -295,6 +297,7 @@ impl WaterfallRenderer {
             texture: None,
             view: None,
             row_width: 0,
+            pending_clear: false,
         }
     }
 
@@ -323,6 +326,9 @@ impl WaterfallRenderer {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // A fresh R32Float texture reads as 0.0, and 0 dB is full scale — an
+        // uncleared ring paints solid white until 360 rows have arrived.
+        self.pending_clear = true;
         self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hfsdr waterfall bind group"),
             layout: &self.bind_group_layout,
@@ -344,6 +350,18 @@ impl WaterfallRenderer {
         self.texture = Some(texture);
         self.view = Some(view);
         self.row_width = width;
+    }
+
+    /// Fill the whole ring with the noise floor so unwritten rows read dark.
+    fn clear_to_floor(&mut self, queue: &wgpu::Queue) {
+        if !self.pending_clear || self.row_width == 0 {
+            return;
+        }
+        let floor_row = vec![DB_FLOOR; self.row_width];
+        for row in 0..RING_ROWS {
+            self.write_row(queue, row, &floor_row);
+        }
+        self.pending_clear = false;
     }
 
     /// Upload one dB row into ring slot `row`.
@@ -405,6 +423,7 @@ impl egui_wgpu::CallbackTrait for WaterfallCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(r) = resources.get_mut::<WaterfallRenderer>() {
             r.ensure_texture(device, self.row_width);
+            r.clear_to_floor(queue);
             for (slot, row) in &self.new_rows {
                 r.write_row(queue, *slot, row);
             }
@@ -429,6 +448,24 @@ impl egui_wgpu::CallbackTrait for WaterfallCallback {
         pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+
+/// Register the renderer in egui's callback resources.
+///
+/// Returns false when the app is not running on the wgpu backend, in which case
+/// the caller keeps the CPU waterfall path.
+pub fn install(cc: &eframe::CreationContext<'_>) -> bool {
+    let Some(state) = cc.wgpu_render_state.as_ref() else {
+        return false;
+    };
+    let renderer = WaterfallRenderer::new(&state.device, state.target_format);
+    state
+        .renderer
+        .write()
+        .callback_resources
+        .insert(renderer);
+    true
 }
 
 /// Paint the GPU waterfall into `rect`.
