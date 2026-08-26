@@ -52,22 +52,10 @@ impl EngineHandle {
     ///
     /// Browser builds cannot spawn threads, and the headless UI harness does not
     /// want one. Polls are supplied by the caller via [`Self::inject_poll`]
-    /// instead of coming from a running pipeline.
+    /// instead of coming from a running pipeline, so the UI runs against real
+    /// [`EnginePoll`] data with nothing behind it.
     #[cfg(any(test, not(feature = "gui-core")))]
     pub fn spawn_detached() -> Self {
-        Self {
-            cmd_tx: None,
-            shared: Arc::new(Mutex::new(EngineShared::default())),
-            params: Arc::new(Mutex::new(EngineParams::default())),
-            connect_cancel: Arc::new(AtomicBool::new(false)),
-            join: None,
-            test_polls: Some(Arc::new(Mutex::new(VecDeque::new()))),
-        }
-    }
-
-    /// Headless UI harness: no engine thread; push [`EnginePoll`] snapshots via [`Self::inject_poll`].
-    #[cfg(test)]
-    pub fn spawn_for_test() -> Self {
         Self {
             cmd_tx: None,
             shared: Arc::new(Mutex::new(EngineShared::default())),
@@ -161,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_handle_inject_and_drain() {
-        let handle = EngineHandle::spawn_for_test();
+        let handle = EngineHandle::spawn_detached();
         handle.inject_poll(sample_poll(ConnState::Streaming));
         let poll = handle.try_poll().expect("queued poll");
         assert!(matches!(poll.state, ConnState::Streaming));
@@ -179,7 +167,7 @@ mod tests {
 
     #[test]
     fn set_params_roundtrip() {
-        let handle = EngineHandle::spawn_for_test();
+        let handle = EngineHandle::spawn_detached();
         let mut params = EngineParams::default();
         params.volume = 0.42;
         params.rf_gain_db = 6.0;
@@ -191,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_handle_fifo_order() {
-        let handle = EngineHandle::spawn_for_test();
+        let handle = EngineHandle::spawn_detached();
         handle.inject_poll(sample_poll(ConnState::Connecting {
             label: "a".into(),
         }));
@@ -205,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_handle_send_is_noop() {
-        let handle = EngineHandle::spawn_for_test();
+        let handle = EngineHandle::spawn_detached();
         handle.send(EngineCommand::Disconnect);
         assert!(handle.try_poll().is_none());
     }

@@ -88,7 +88,7 @@ impl WaterfallApp {
     /// Headless UI tests: no engine thread; feed [`EnginePoll`] via [`Self::inject_engine_poll`].
     #[cfg(test)]
     pub fn new_for_test(autoconnect: Option<ConnectRequest>) -> Self {
-        let mut app = Self::build(autoconnect, EngineHandle::spawn_for_test());
+        let mut app = Self::build(autoconnect, EngineHandle::spawn_detached());
         // Deterministic defaults — do not inherit the developer's on-disk settings.
         app.apply_settings(&AppSettings::default());
         app.connection.form.kind = SourceKind::Kiwi;

@@ -803,6 +803,101 @@ mod tests {
             .collect()
     }
 
+    /// The profiling instrumentation must not change the DSP result.
+    ///
+    /// `process_inner` runs each stage from one of two arms depending on whether
+    /// `metrics` is `Some`, so every stage's work is written twice in the
+    /// source. Nothing but this test stops the two arms drifting apart — and
+    /// only `process_profiled` reaches the instrumented arm, which no other test
+    /// calls.
+    #[test]
+    fn profiled_path_matches_plain_path_bit_for_bit() {
+        let rate = 12_000.0;
+        let iq = tone_iq(rate, 100.0, rate as usize * 2);
+
+        // Each combination selects a different arm of the branchy ingress:
+        // no-NB/NCO, NB/NCO, no-NB/bypass, NB/bypass.
+        for (nb_on, bypass_nco) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut settings = CwChannelSettings {
+                listen_offset_hz: ChannelOffsetHz::new(100.0),
+                bfo_hz: 650.0,
+                passband_hz: 200.0,
+                ..CwChannelSettings::default()
+            };
+            settings.noise_blanker.enabled = nb_on;
+            settings.diagnostic = DiagnosticBypassSettings {
+                listen_nco: bypass_nco,
+                ..DiagnosticBypassSettings::default()
+            };
+            let origin = ListenOrigin::from_settings(settings.listen_offset_hz);
+
+            let mut plain_audio = Vec::new();
+            CwChannel::new(rate).process(&iq, rate, &settings, origin, &mut plain_audio);
+
+            let mut profiled_audio = Vec::new();
+            let mut metrics = CwStageMetrics::default();
+            CwChannel::new(rate).process_profiled(
+                &iq,
+                rate,
+                &settings,
+                origin,
+                &mut profiled_audio,
+                &mut metrics,
+            );
+
+            assert_eq!(
+                profiled_audio, plain_audio,
+                "profiled audio differs (nb={nb_on}, bypass_nco={bypass_nco})"
+            );
+            assert!(!plain_audio.is_empty(), "no audio produced");
+
+            assert_eq!(metrics.iq_samples, iq.len());
+            assert_eq!(metrics.audio_samples, plain_audio.len());
+            // Two seconds of IQ through a FIR chain cannot measure as zero on
+            // any clock this code runs on.
+            assert!(
+                metrics.total_ns() > 0,
+                "no stage timings recorded (nb={nb_on}, bypass_nco={bypass_nco})"
+            );
+            assert_eq!(
+                metrics.noise_blanker_ns > 0,
+                nb_on,
+                "noise blanker timed only when enabled"
+            );
+            assert_eq!(
+                metrics.nco_ns > 0,
+                !bypass_nco,
+                "listen NCO timed only when not bypassed"
+            );
+            assert!(metrics.decim_ns > 0, "decimation always runs");
+            assert!(metrics.audio_chain_ns > 0, "audio chain always runs");
+        }
+    }
+
+    /// `process_profiled` clears the caller's metrics rather than accumulating.
+    #[test]
+    fn profiled_metrics_are_reset_per_call() {
+        let rate = 12_000.0;
+        let iq = tone_iq(rate, 100.0, 4096);
+        let settings = CwChannelSettings::default();
+        let origin = ListenOrigin::from_settings(settings.listen_offset_hz);
+
+        let mut channel = CwChannel::new(rate);
+        let mut audio = Vec::new();
+        let mut metrics = CwStageMetrics {
+            iq_samples: 999_999,
+            noise_blanker_ns: 999_999,
+            ..CwStageMetrics::default()
+        };
+        channel.process_profiled(&iq, rate, &settings, origin, &mut audio, &mut metrics);
+
+        assert_eq!(metrics.iq_samples, iq.len());
+        assert_eq!(
+            metrics.noise_blanker_ns, 0,
+            "stale timing from a previous call survived"
+        );
+    }
+
     #[test]
     fn channel_produces_bfo_tone() {
         let rate = 12_000.0;
