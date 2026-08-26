@@ -27,14 +27,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The CLI must match the wasm-bindgen crate exactly or the generated
-      # glue rejects the module at load time, so take the version from the lock
-      # file rather than pinning it here and letting the two drift.
-      - name: Install wasm-bindgen-cli
+      # The CLI must match the wasm-bindgen crate exactly or the generated glue
+      # rejects the module at load time, so take the version from the lock file
+      # rather than pinning it here and letting the two drift.
+      - name: Resolve wasm-bindgen version
+        id: wb
         run: |
           version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | cut -d'"' -f2)
           echo "wasm-bindgen crate version: $version"
-          cargo install wasm-bindgen-cli --version "$version" --locked
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Prebuilt binary rather than `cargo install`, which builds the CLI from
+      # source on every run and took ~25 minutes when this workflow first ran.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
 
       - name: Build
         run: ./scripts/build-web.sh
