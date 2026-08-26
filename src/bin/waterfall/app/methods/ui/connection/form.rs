@@ -5,6 +5,22 @@ impl WaterfallApp {
 
     pub(crate) fn connection_form_section(&mut self, ui: &mut egui::Ui) {
         popup_section(ui, "Connect", None, |ui| {
+            // Every source needs either a dlopen'd driver or a TcpStream, and a
+            // browser tab has neither. Say so where the button is, rather than
+            // leaving a live-looking control that silently does nothing.
+            #[cfg(not(feature = "gui-core"))]
+            {
+                ui.label(
+                    egui::RichText::new(
+                        "Browser build: live sources are unavailable — native drivers need \
+                         dlopen and KiwiSDR needs a TCP socket. The waterfall below is a \
+                         synthetic band so the receiver UI can be explored.",
+                    )
+                    .small()
+                    .color(crate::theme::WARN),
+                );
+                ui.add_space(6.0);
+            }
             self.connection.form.kind = sanitize_source_kind(self.connection.form.kind);
             let labels = source_kind_labels();
             let selected = source_kind_index(self.connection.form.kind);
