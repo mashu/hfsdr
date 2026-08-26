@@ -3,7 +3,7 @@ name = "hfsdr"
 version = "0.9.7"
 edition = "2021"
 description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR, QMX)"
-license = "MIT"
+license = "AGPL-3.0-only"
 authors = ["Mateusz Kaduk (SO5KM)"]
 
 [package.metadata.docs.rs]
