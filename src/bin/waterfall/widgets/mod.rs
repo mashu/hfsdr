@@ -7,6 +7,7 @@ mod smooth;
 mod spot_labels;
 mod trace;
 mod waterfall;
+mod waterfall_gpu;
 mod waterfall_mesh;
 
 use eframe::egui::{Painter, Rect, Sense, Ui, Vec2};

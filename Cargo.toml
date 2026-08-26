@@ -82,3 +82,4 @@ lto = "thin"
 
 [dev-dependencies]
 egui_kittest = { version = "0.34", features = ["eframe", "wgpu"] }
+pollster = "0.4"

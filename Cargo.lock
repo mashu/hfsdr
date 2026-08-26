@@ -1724,6 +1724,7 @@ dependencies = [
  "libloading",
  "num-complex",
  "pkg-config",
+ "pollster",
  "rayon",
  "rfd",
  "rtrb",
