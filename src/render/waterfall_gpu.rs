@@ -613,7 +613,7 @@ mod tests {
             return;
         };
         for (i, &db) in levels.iter().enumerate() {
-            let cpu = hfsdr::db_to_rgba(db, -20.0, 80.0);
+            let cpu = crate::db_to_rgba(db, -20.0, 80.0);
             let gpu = px[i];
             for c in 0..3 {
                 let d = (cpu[c] as i32 - gpu[c] as i32).abs();

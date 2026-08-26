@@ -136,6 +136,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCmd>, done_tx: SyncSender<WorkerDone>) {
 // unavailable on single-threaded wasm targets.
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
     use std::sync::Arc;
 
@@ -172,13 +174,32 @@ mod tests {
         worker.finish();
     }
 
+    /// `try_take` must not block, and the job's output must not be lost whether
+    /// or not the worker happened to finish first.
+    ///
+    /// The previous version asserted `try_take().is_none()` immediately after
+    /// `start`, which is a statement about thread scheduling rather than about
+    /// the contract: on a loaded or emulated CPU the worker can finish first,
+    /// and the test then failed for a reason that was never a defect.
     #[test]
-    fn try_take_before_finish_is_empty() {
+    fn try_take_is_non_blocking_and_never_loses_the_job() {
         let worker = IngressWorker::spawn();
         let raw = Arc::new(vec![Complex32::new(1.0, 0.0); 32]);
         assert!(worker.start(raw, 48_000.0, 2, DecimFilterKind::LinearFir, Vec::new()));
-        assert!(worker.try_take().is_none());
-        assert!(worker.finish().is_some());
+
+        let t0 = Instant::now();
+        let early = worker.try_take();
+        assert!(
+            t0.elapsed() < Duration::from_millis(200),
+            "try_take must not block on the worker"
+        );
+
+        // Either it was ready and we have it, or finish() must still deliver it.
+        let decimated = match early {
+            Some(d) => d,
+            None => worker.finish().expect("worker must deliver the started job"),
+        };
+        assert!(!decimated.is_empty(), "decimation produced no output");
     }
 
     #[test]

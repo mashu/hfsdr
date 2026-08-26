@@ -37,6 +37,9 @@ libc = "0.2"
 # wasm32 needs an explicit getrandom backend (transitively via tungstenite).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Document", "Window", "Element", "HtmlCanvasElement", "console"] }
 
 [features]
 default = ["airspy"]
@@ -51,11 +54,20 @@ soapy = []
 # GUI without librtlsdr / SoapySDR (Kiwi/QMX-only builds).
 gui-core = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd", "qmx"]
 gui = ["gui-core", "rtlsdr", "soapy"]
+# Browser build: eframe only. No serialport (qmx), no ureq (needs real sockets),
+# no native drivers. KiwiSDR over the browser WebSocket API is the only source.
+gui-wasm = ["dep:eframe", "dep:egui_extras", "dep:serde", "dep:serde_json",
+            "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [[bin]]
 name = "hfsdr"
 path = "src/bin/waterfall/main.rs"
 required-features = ["gui-core"]
+
+[[bin]]
+name = "hfsdr-wasm"
+path = "src/bin/wasm_app/main.rs"
+required-features = ["gui-wasm"]
 
 [[bin]]
 name = "airspy-probe"

@@ -16,7 +16,7 @@ pub(crate) fn draw_waterfall_layer(painter: &Painter, rect: Rect, freq_map: Plot
     let pan = freq_map.pan_offset_hz;
 
     if let Some(cb) = p.waterfall_gpu.take() {
-        super::waterfall_gpu::paint(painter, rect, cb);
+        hfsdr::render::waterfall_gpu::paint(painter, rect, cb);
     } else if let Some(tex) = p.waterfall_display {
         let mesh = build_waterfall_ring_mesh(rect, p.waterfall_row_head, WATERFALL_ROWS, tex.id());
         painter.add(Shape::mesh(mesh));

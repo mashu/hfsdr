@@ -4,6 +4,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use eframe::egui::Vec2;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use egui_kittest::{Harness, kittest::Queryable as _};
 
 use crate::app::WaterfallApp;
@@ -130,23 +132,33 @@ fn gpu_waterfall_paints_in_the_real_app() {
     audio::set_test_output_devices(Some(
         TEST_AUDIO_DEVICES.iter().map(|s| (*s).to_string()).collect(),
     ));
-    let mut installed = false;
-    let mut harness = Harness::builder()
-        .with_size(WINDOW_SIZE)
-        .with_max_steps(128)
-        .with_wait_for_pending_images(false)
-        // The default test renderer leaves cc.wgpu_render_state empty, which
-        // would silently skip this whole test.
-        .wgpu()
-        .build_eframe(|cc| {
-            theme::apply(&cc.egui_ctx);
-            installed = crate::widgets::install_waterfall_gpu(cc);
-            let mut app = WaterfallApp::new_for_test(None);
-            app.set_waterfall_gpu_available(installed);
-            app
-        });
+    // `.wgpu()` builds a real device and PANICS when the runner has no adapter,
+    // so the guard has to cover construction, not just render() — a headless
+    // runner without a software rasterizer dies here otherwise.
+    let installed = AtomicBool::new(false);
+    let built = catch_unwind(AssertUnwindSafe(|| {
+        Harness::builder()
+            .with_size(WINDOW_SIZE)
+            .with_max_steps(128)
+            .with_wait_for_pending_images(false)
+            // The default test renderer leaves cc.wgpu_render_state empty, which
+            // would silently skip this whole test.
+            .wgpu()
+            .build_eframe(|cc| {
+                theme::apply(&cc.egui_ctx);
+                let ok = crate::widgets::install_waterfall_gpu(cc);
+                installed.store(ok, Ordering::Relaxed);
+                let mut app = WaterfallApp::new_for_test(None);
+                app.set_waterfall_gpu_available(ok);
+                app
+            })
+    }));
 
-    if !installed {
+    let Ok(mut harness) = built else {
+        eprintln!("skipping GPU waterfall check: wgpu adapter unavailable (headless runner)");
+        return;
+    };
+    if !installed.load(Ordering::Relaxed) {
         eprintln!("skipping GPU waterfall check: no wgpu render state");
         return;
     }

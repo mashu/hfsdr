@@ -7,8 +7,9 @@ mod smooth;
 mod spot_labels;
 mod trace;
 mod waterfall;
-mod waterfall_gpu;
-pub(crate) use waterfall_gpu::{install as install_waterfall_gpu, uniforms_for as waterfall_gpu_uniforms, WaterfallCallback};
+pub(crate) use hfsdr::render::waterfall_gpu::{
+    install as install_waterfall_gpu, uniforms_for as waterfall_gpu_uniforms, WaterfallCallback,
+};
 mod waterfall_mesh;
 
 use eframe::egui::{Painter, Rect, Sense, Ui, Vec2};

@@ -1,2 +1,4 @@
 /target
 /docs/book
+# Browser build output (produced by scripts/build-web.sh in CI)
+web/pkg/

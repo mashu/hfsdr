@@ -36,6 +36,9 @@ pub mod rtlsdr;
 pub mod qmx;
 pub mod cty;
 pub mod dsp;
+/// egui/wgpu rendering shared by the desktop and browser frontends.
+#[cfg(any(feature = "gui-core", feature = "gui-wasm"))]
+pub mod render;
 pub mod dsp_pool;
 pub mod history;
 pub mod iq_record;

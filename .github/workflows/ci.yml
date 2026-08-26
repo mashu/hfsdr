@@ -27,6 +27,7 @@ jobs:
                 librtlsdr-dev \
                 libsoapysdr-dev \
                 libasound2-dev \
+                mesa-vulkan-drivers \
                 libxkbcommon-dev \
                 libwayland-dev \
                 libxcb-render0-dev \
@@ -78,6 +79,7 @@ jobs:
             librtlsdr-dev \
             libsoapysdr-dev \
             libasound2-dev \
+            mesa-vulkan-drivers \
             libxkbcommon-dev \
             libwayland-dev \
             libxcb-render0-dev \
@@ -115,6 +117,7 @@ jobs:
                 librtlsdr-dev \
                 libsoapysdr-dev \
                 libasound2-dev \
+                mesa-vulkan-drivers \
                 libxkbcommon-dev \
                 libwayland-dev \
                 libxcb-render0-dev \
@@ -170,6 +173,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libasound2-dev \
+            mesa-vulkan-drivers \
             libxkbcommon-dev \
             libwayland-dev \
             libxcb-render0-dev \
@@ -207,6 +211,7 @@ jobs:
             libsoapysdr-dev \
             soapysdr-module-all \
             libasound2-dev \
+            mesa-vulkan-drivers \
             libxkbcommon-dev \
             libwayland-dev \
             libxcb-render0-dev \
@@ -230,44 +235,28 @@ jobs:
           name: hfsdr-appimage
           path: hfsdr-*-x86_64.AppImage
 
-  docs:
-    name: Documentation
+  wasm:
+    name: Browser app (wasm32)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install mdBook
-        run: cargo install mdbook --locked --version 0.4.40
+      # Library first: this is the part a CLI or browser frontend shares, and it
+      # must keep building for wasm even if the app above changes.
+      - name: Check library on wasm32
+        run: cargo check --lib --no-default-features --target wasm32-unknown-unknown
+        env:
+          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
 
-      - name: Install native dependencies
+      - name: Check browser app on wasm32
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libairspyhf-dev \
-            librtlsdr-dev \
-            libsoapysdr-dev \
-            libasound2-dev \
-            libxkbcommon-dev \
-            libwayland-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev
-
-      - name: Build documentation
-        run: ./scripts/build-docs.sh
-
-      - name: Upload book artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: hfsdr-book
-          path: docs/book/
-
-      - name: Upload API docs artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: hfsdr-api-docs
-          path: target/doc/
+          cargo check --bin hfsdr-wasm --no-default-features \
+            --features gui-wasm --target wasm32-unknown-unknown
+        env:
+          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
