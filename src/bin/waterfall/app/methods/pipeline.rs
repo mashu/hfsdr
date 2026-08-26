@@ -40,7 +40,6 @@ impl WaterfallApp {
             PipelineStage::Squelch => {
                 self.radio.cw.squelch.enabled = !self.radio.cw.squelch.enabled;
             }
-            PipelineStage::Skimmer => self.skimmer_ui.skimmer_enabled = !self.skimmer_ui.skimmer_enabled,
             PipelineStage::AudioOutput => self.audio.audio_enabled = !self.audio.audio_enabled,
         }
         let on = match stage {
@@ -58,7 +57,6 @@ impl WaterfallApp {
             PipelineStage::AutoNotch => self.radio.cw.auto_notch.enabled,
             PipelineStage::NoiseReduction => self.radio.cw.noise_reduction.enabled,
             PipelineStage::Squelch => self.radio.cw.squelch.enabled,
-            PipelineStage::Skimmer => self.skimmer_ui.skimmer_enabled,
             PipelineStage::AudioOutput => self.audio.audio_enabled,
         };
         let tag = if stage.is_diagnostic() { "diag" } else { "pipeline" };

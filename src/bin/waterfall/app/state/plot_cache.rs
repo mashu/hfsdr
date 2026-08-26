@@ -28,7 +28,33 @@ pub struct WaterfallTextureCache {
     pub scroll_pacing_pass: u64,
     /// Set when new waterfall rows were painted — trace must follow the displayed row, not `latest`.
     pub trace_refresh: bool,
+    /// Reusable row-composition buffers. Composing runs once per row per frame,
+    /// times the averaging depth, so these must not come from the allocator.
+    pub compose_scratch: RowComposeScratch,
+    /// dB -> colour lookup, rebuilt only when reference level or range changes.
+    pub palette: hfsdr::WaterfallPalette,
+    /// True when the wgpu shader path is available (registered at startup).
+    pub gpu_available: bool,
+    /// Ring slot the next dB row uploads into.
+    pub gpu_row_head: usize,
+    /// dB rows appended since the last paint, with their ring slots.
+    pub gpu_pending: Vec<(usize, Vec<f32>)>,
+    /// Row width of the dB ring texture; a change reallocates it.
+    pub gpu_row_width: usize,
     pub perf: WaterfallPerf,
+}
+
+/// Scratch buffers for one waterfall row composition.
+#[derive(Default)]
+pub struct RowComposeScratch {
+    /// Accumulator for averaged rows.
+    pub acc: Vec<f32>,
+    /// Output of `compose_panadapter_row_into`.
+    pub composed: Vec<f32>,
+    /// Working space for the padded band-overview path.
+    pub compose_work: Vec<f32>,
+    /// Output of `stretch_row_to_width_into`.
+    pub stretched: Vec<f32>,
 }
 
 impl Default for WaterfallTextureCache {
@@ -50,6 +76,12 @@ impl Default for WaterfallTextureCache {
             scroll_pacing_last: None,
             scroll_pacing_pass: u64::MAX,
             trace_refresh: false,
+            compose_scratch: RowComposeScratch::default(),
+            palette: hfsdr::WaterfallPalette::default(),
+            gpu_available: false,
+            gpu_row_head: 0,
+            gpu_pending: Vec::new(),
+            gpu_row_width: 0,
             perf: WaterfallPerf::default(),
         }
     }

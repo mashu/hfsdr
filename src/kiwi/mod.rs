@@ -487,7 +487,9 @@ impl Drop for KiwiSource {
     }
 }
 
-#[cfg(test)]
+// The Kiwi client uses TcpStream and a reader thread: native-only.
+// A wasm frontend would drive the same protocol over the browser WebSocket API.
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
     use crate::source::controls::KiwiControls;

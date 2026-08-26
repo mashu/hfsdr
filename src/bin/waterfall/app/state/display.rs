@@ -27,4 +27,6 @@ pub struct DisplayState {
     pub perf_trace: bool,
     /// Max FFT rows applied to the waterfall texture per UI frame (1 = smoothest scroll).
     pub waterfall_rows_per_frame: u32,
+    /// Use the wgpu shader waterfall when the backend supports it.
+    pub waterfall_gpu: bool,
 }

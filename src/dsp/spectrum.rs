@@ -1,5 +1,11 @@
 //! Windowed, overlapping complex FFT that turns baseband IQ into fftshifted
-//! power spectral density rows (dB).
+//! **amplitude** spectrum rows (dBFS), not power spectral density.
+//!
+//! Normalisation is coherent: `|X| / sum(window)`. A full-scale complex tone
+//! reads 0 dBFS at any FFT size, which is what carrier levels and the S-meter
+//! depend on. The trade-off is that broadband noise, being spread across bins,
+//! falls 3 dB per FFT-size doubling — see `noise_floor_falls_3db_per_doubling`.
+//! Skimmer thresholds are SNR-relative (peak vs. floor) and so are unaffected.
 
 use crate::source::Complex32;
 
@@ -9,13 +15,22 @@ use super::cw::DEFAULT_KAISER_BETA;
 use rustfft::Fft;
 use std::sync::Arc;
 
+/// Frames of backlog retained when a caller's row cap stops emission mid-batch.
+/// Bounds how far the analyzer can lag live IQ before it starts dropping.
+const MAX_PENDING_FRAMES: usize = 8;
+
 /// Fixed-capacity ring for sliding-window FFT input. Avoids O(n) `Vec::drain`
 /// on every hop when sample rates are high.
+///
+/// Capacity is one FFT frame plus [`MAX_PENDING_FRAMES`] hops of backlog, so a
+/// row-capped call can retain its unemitted frames for the next call. Input
+/// beyond that bound overwrites the oldest sample and is counted in `dropped`.
 struct SampleRing {
     data: Vec<Complex32>,
     head: usize,
     count: usize,
     capacity: usize,
+    dropped: u64,
 }
 
 impl SampleRing {
@@ -25,6 +40,7 @@ impl SampleRing {
             head: 0,
             count: 0,
             capacity,
+            dropped: 0,
         }
     }
 
@@ -34,8 +50,10 @@ impl SampleRing {
             self.data[tail] = sample;
             self.count += 1;
         } else {
+            // Backlog bound reached: overwrite the oldest sample and count it.
             self.data[self.head] = sample;
             self.head = (self.head + 1) % self.capacity;
+            self.dropped += 1;
         }
     }
 
@@ -91,7 +109,7 @@ impl SpectrumAnalyzer {
             hop,
             window,
             coherent_gain,
-            acc: SampleRing::new(n),
+            acc: SampleRing::new(n + hop * MAX_PENDING_FRAMES),
             buf: vec![Complex32::new(0.0, 0.0); n],
             scratch,
             row: vec![0.0; n],
@@ -110,9 +128,12 @@ impl SpectrumAnalyzer {
     }
 
     /// Like [`process`](Self::process) but emits at most `max_rows` frames per call.
-    /// All `input` samples are always ingested into the sliding window; emission
-    /// stops once `max_rows` is reached, and remaining frames are produced on later
-    /// calls as more IQ arrives.
+    ///
+    /// Frames left unemitted by the cap are retained and produced on later calls,
+    /// including calls with empty `input` — pass `&[]` to drain the backlog. The
+    /// backlog is bounded at [`MAX_PENDING_FRAMES`] frames; a caller that stays
+    /// below the incoming row rate for longer than that loses the oldest samples,
+    /// counted by [`Self::dropped_samples`].
     pub fn process_limited<F: FnMut(&[f32])>(
         &mut self,
         input: &[Complex32],
@@ -122,36 +143,57 @@ impl SpectrumAnalyzer {
         let mut emitted = 0usize;
         for &sample in input {
             self.acc.push(sample);
-            while self.acc.len() >= self.n {
-                if emitted >= max_rows {
-                    break;
-                }
-                for i in 0..self.n {
-                    let s = self.acc.sample_at(i);
-                    let w = self.window[i];
-                    self.buf[i] = Complex32 {
-                        re: s.re * w,
-                        im: s.im * w,
-                    };
-                }
-                self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
-
-                let half = self.n / 2;
-                let norm = self.n as f32 * self.coherent_gain;
-                for i in 0..self.n {
-                    let src = (i + half) % self.n;
-                    let re = self.buf[src].re;
-                    let im = self.buf[src].im;
-                    let mag = (re * re + im * im).sqrt() / norm;
-                    self.row[i] = 20.0 * (mag + 1e-12).log10();
-                }
-                emit(&self.row);
+            while emitted < max_rows && self.acc.len() >= self.n {
+                self.emit_row(&mut emit);
                 emitted += 1;
-
-                self.acc.advance(self.hop);
             }
         }
+        // Drain frames retained from earlier row-capped calls. This is the only
+        // path taken when `input` is empty, so it must live outside the loop above.
+        while emitted < max_rows && self.acc.len() >= self.n {
+            self.emit_row(&mut emit);
+            emitted += 1;
+        }
         emitted
+    }
+
+    /// Total IQ samples lost to the backlog bound since construction.
+    pub fn dropped_samples(&self) -> u64 {
+        self.acc.dropped
+    }
+
+    /// Frames currently buffered and ready to emit without further input.
+    pub fn pending_rows(&self) -> usize {
+        if self.acc.len() < self.n {
+            return 0;
+        }
+        (self.acc.len() - self.n) / self.hop + 1
+    }
+
+    /// Window, transform and fftshift one frame, then advance by one hop.
+    fn emit_row<F: FnMut(&[f32])>(&mut self, emit: &mut F) {
+        for i in 0..self.n {
+            let s = self.acc.sample_at(i);
+            let w = self.window[i];
+            self.buf[i] = Complex32 {
+                re: s.re * w,
+                im: s.im * w,
+            };
+        }
+        self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
+
+        let half = self.n / 2;
+        // Coherent normalisation: a full-scale tone reads 0 dBFS at any FFT size.
+        let norm = self.n as f32 * self.coherent_gain;
+        for i in 0..self.n {
+            let src = (i + half) % self.n;
+            let re = self.buf[src].re;
+            let im = self.buf[src].im;
+            let mag = (re * re + im * im).sqrt() / norm;
+            self.row[i] = 20.0 * (mag + 1e-12).log10();
+        }
+        emit(&self.row);
+        self.acc.advance(self.hop);
     }
 }
 
@@ -232,16 +274,102 @@ mod tests {
         assert!(rows >= 2);
     }
 
+    /// The row cap must defer frames, not discard them. Draining with EMPTY input
+    /// is the only form of this test that can fail if samples are dropped — feeding
+    /// fresh input on the second call would pass either way.
     #[test]
-    fn process_limited_keeps_ingesting_after_row_cap() {
+    fn process_limited_defers_frames_instead_of_dropping_them() {
         let n = 64;
         let hop = n;
         let mut sa = SpectrumAnalyzer::new(n, hop);
-        let input = vec![Complex32::new(0.5, 0.0); n * 3];
-        let mut rows = 0usize;
-        sa.process_limited(&input, 1, |_| rows += 1);
-        assert_eq!(rows, 1);
-        sa.process_limited(&input, 1, |_| rows += 1);
-        assert_eq!(rows, 2);
+        let frames = 6;
+        let input = vec![Complex32::new(0.5, 0.0); n * frames];
+
+        let mut first = 0usize;
+        sa.process_limited(&input, 2, |_| first += 1);
+        assert_eq!(first, 2, "cap honoured on the first call");
+        assert_eq!(sa.pending_rows(), frames - 2, "remainder retained");
+
+        let mut drained = 0usize;
+        for _ in 0..frames {
+            sa.process_limited(&[], 2, |_| drained += 1);
+        }
+        assert_eq!(drained, frames - 2, "every deferred frame emitted on empty input");
+        assert_eq!(sa.dropped_samples(), 0, "nothing dropped within the backlog bound");
+    }
+
+    /// Past the backlog bound, dropping is explicit and counted rather than silent.
+    #[test]
+    fn backlog_bound_drops_are_counted() {
+        let n = 64;
+        let hop = n;
+        let mut sa = SpectrumAnalyzer::new(n, hop);
+        let input = vec![Complex32::new(0.5, 0.0); n * (MAX_PENDING_FRAMES + 6)];
+        sa.process_limited(&input, 1, |_| {});
+        assert!(sa.dropped_samples() > 0, "overflow past the bound is reported");
+        assert!(
+            sa.pending_rows() <= MAX_PENDING_FRAMES + 1,
+            "backlog stays bounded, so latency cannot grow without limit"
+        );
+    }
+
+    /// Phase-3 invariant A: coherent normalisation keeps tone level FFT-size independent.
+    #[test]
+    fn tone_level_is_independent_of_fft_size() {
+        use std::f32::consts::TAU;
+        let sr = 48_000.0;
+        let freq = 3_000.0;
+        let mut levels = Vec::new();
+        for &n in &[1024usize, 2048, 4096] {
+            let mut sa = SpectrumAnalyzer::new(n, n);
+            let samples: Vec<Complex32> = (0..n * 4)
+                .map(|t| {
+                    let p = TAU * freq * t as f32 / sr;
+                    Complex32::new(p.cos(), p.sin())
+                })
+                .collect();
+            let mut peak = -200.0f32;
+            sa.process(&samples, |row| {
+                peak = peak.max(row.iter().copied().fold(-200.0f32, f32::max));
+            });
+            levels.push(peak);
+        }
+        for w in levels.windows(2) {
+            assert!(
+                (w[0] - w[1]).abs() < 0.5,
+                "full-scale tone must read ~0 dBFS at every FFT size, got {levels:?}"
+            );
+        }
+        assert!((levels[0]).abs() < 0.5, "full-scale tone reads ~0 dBFS");
+    }
+
+    /// Phase-3 invariant B: the documented consequence — the noise floor is NOT
+    /// FFT-size independent. Asserted so the trade-off stays deliberate.
+    #[test]
+    fn noise_floor_falls_3db_per_doubling() {
+        let mut state = 0x12345678u32;
+        let mut rng = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as f32 / 8388608.0 - 1.0
+        };
+        let samples: Vec<Complex32> = (0..1 << 16)
+            .map(|_| Complex32::new(rng() * 0.1, rng() * 0.1))
+            .collect();
+
+        let mut floors = Vec::new();
+        for &n in &[2048usize, 4096] {
+            let mut sa = SpectrumAnalyzer::new(n, n);
+            let (mut sum, mut cnt) = (0.0f64, 0usize);
+            sa.process(&samples, |row| {
+                sum += row.iter().map(|&v| v as f64).sum::<f64>() / row.len() as f64;
+                cnt += 1;
+            });
+            floors.push(sum / cnt.max(1) as f64);
+        }
+        let delta = floors[0] - floors[1];
+        assert!(
+            (delta - 3.01).abs() < 0.4,
+            "expected ~3.01 dB drop per doubling (amplitude spectrum), got {delta:.2}"
+        );
     }
 }

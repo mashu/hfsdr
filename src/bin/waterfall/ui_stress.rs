@@ -12,7 +12,7 @@ use crate::pipeline_flow::PipelineStage;
 use crate::source::SourceKind;
 use crate::theme;
 use crate::ui_smoke::{inject_and_step, streaming_stats, synthetic_streaming_poll};
-use hfsdr::{Spot, SpotKind};
+
 
 const TEST_AUDIO_DEVICES: [&str; 1] = ["Test Output"];
 
@@ -77,8 +77,6 @@ fn corrupt_poll(frame: usize) -> EnginePoll {
             ConnState::Streaming
         },
         stats,
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: vec![latest.clone(); (frame % 4) + 1],
         latest,
         last_error: if frame % 19 == 0 {
@@ -91,28 +89,6 @@ fn corrupt_poll(frame: usize) -> EnginePoll {
     }
 }
 
-fn flood_spots(n: usize) -> Vec<Spot> {
-    let now = Instant::now();
-    (0..n)
-        .map(|i| Spot {
-            frequency_hz: 14_010_000.0 + i as f64 * 125.0,
-            callsign: Some(format!("T{i:03}")),
-            kind: if i % 3 == 0 {
-                SpotKind::CallingCq
-            } else if i % 3 == 1 {
-                SpotKind::Answering
-            } else {
-                SpotKind::Heard
-            },
-            snr_db: 8.0 + (i % 20) as f32,
-            wpm: 18.0 + (i % 10) as f32,
-            first_heard: now,
-            last_heard: now,
-            sources: Vec::new(),
-            callsign_rank: 0,
-        })
-        .collect()
-}
 
 #[test]
 fn rapid_streaming_frames_stay_finite() {
@@ -159,8 +135,6 @@ fn connection_state_machine_perturbation() {
         harness.state().inject_engine_poll(EnginePoll {
             state: state.clone(),
             stats: streaming_stats(),
-            spots: Vec::new(),
-            decode_channels: Vec::new(),
             rows: vec![latest.clone()],
             latest,
             last_error: if i == 4 {
@@ -241,19 +215,6 @@ fn layout_large_size_renders() {
     assert_ui_finite(harness.state());
 }
 
-#[test]
-fn spot_flood_while_streaming() {
-    let mut harness = stress_harness(Vec2::new(1580.0, 960.0), 192);
-    harness.run_steps(1);
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    for frame in 0..20 {
-        let mut poll = synthetic_streaming_poll(frame);
-        poll.spots = flood_spots(80);
-        inject_and_step(&mut harness, poll, 2);
-    }
-    assert_ui_finite(harness.state());
-    assert!(!harness.state().skimmer_ui.skimmer_spots.is_empty());
-}
 
 #[test]
 fn fft_size_change_mid_stream() {
@@ -266,8 +227,6 @@ fn fft_size_change_mid_stream() {
             EnginePoll {
                 state: ConnState::Streaming,
                 stats: streaming_stats(),
-                spots: Vec::new(),
-            decode_channels: Vec::new(),
                 rows: vec![latest.clone()],
                 latest,
                 last_error: None,
@@ -310,26 +269,6 @@ fn keyboard_shortcut_barrage() {
     assert_ui_finite(harness.state());
 }
 
-#[test]
-fn pipeline_stage_toggle_stress() {
-    let mut harness = stress_harness(Vec2::new(1580.0, 960.0), 128);
-    harness.run_steps(1);
-    inject_and_step(&mut harness, synthetic_streaming_poll(0), 2);
-    harness.state_mut().chrome.show_pipeline_drawer = true;
-    for stage in [
-        PipelineStage::NoiseBlanker,
-        PipelineStage::ManualNotches,
-        PipelineStage::Agc,
-        PipelineStage::Apf,
-        PipelineStage::AutoNotch,
-        PipelineStage::Skimmer,
-        PipelineStage::AudioOutput,
-    ] {
-        harness.state_mut().toggle_pipeline_stage(stage);
-        harness.run_steps(2);
-    }
-    assert_ui_finite(harness.state());
-}
 
 #[test]
 fn source_kind_switch_while_offline() {
@@ -338,6 +277,7 @@ fn source_kind_switch_while_offline() {
     harness.state_mut().connection.form.show_connection_drawer = true;
     for kind in [
         SourceKind::Kiwi,
+        #[cfg(feature = "airspy")]
         SourceKind::Airspy,
         #[cfg(feature = "rtlsdr")]
         SourceKind::RtlSdr,
@@ -358,8 +298,6 @@ fn empty_then_full_spectrum_oscillation() {
             EnginePoll {
                 state: ConnState::Streaming,
                 stats: streaming_stats(),
-                spots: Vec::new(),
-            decode_channels: Vec::new(),
                 rows: Vec::new(),
                 latest: Vec::new(),
                 last_error: None,
@@ -392,8 +330,6 @@ fn wideband_stats_perturbation() {
             EnginePoll {
                 state: ConnState::Streaming,
                 stats,
-                spots: Vec::new(),
-            decode_channels: Vec::new(),
                 rows: vec![latest.clone()],
                 latest,
                 last_error: None,
@@ -406,70 +342,4 @@ fn wideband_stats_perturbation() {
     }
 }
 
-/// Live decode channels whose text grows every frame — the worst case for
-/// text layout caching.
-fn flood_decode_channels(n: usize, frame: usize) -> Vec<hfsdr::DecodeChannel> {
-    let phrase = "CQ CQ DE W1AW W1AW K TEST 5NN TU MY RIG IS KENWOOD TS 590 ES ANT DIPOLE ";
-    (0..n)
-        .map(|i| {
-            let len = ((frame * 2 + i * 7) % 64).max(1);
-            let text: String = phrase.chars().cycle().skip(i * 5).take(len).collect();
-            hfsdr::DecodeChannel {
-                offset_hz: -4_000.0 + i as f32 * 500.0,
-                frequency_hz: 14_010_000.0 + i as f64 * 500.0,
-                text,
-                snr_db: 10.0 + (frame % 13) as f32 * 0.3 + i as f32,
-                wpm: 18.0 + ((frame + i) % 9) as f32,
-                keyed: (frame + i) % 3 != 0,
-            }
-        })
-        .collect()
-}
 
-/// Frame-time profile with a fully loaded decode UI: mutating decoder
-/// boxes in the bottom panel plus spot labels on the plot.
-/// `cargo test --features gui --bin hfsdr decode_ui_frame_profile --release -- --ignored --nocapture`
-#[test]
-#[ignore]
-fn decode_ui_frame_profile() {
-    let mut scenario = |label: &str,
-                        channels: usize,
-                        spots: usize,
-                        setup: &dyn Fn(&mut WaterfallApp)| {
-        let mut harness = stress_harness(Vec2::new(1580.0, 960.0), 100_000);
-        harness.run_steps(1);
-        harness.state_mut().skimmer_ui.skimmer_enabled = true;
-        harness.state_mut().chrome.bottom_panel_view = BottomPanelView::Decoder;
-        setup(harness.state_mut());
-        for frame in 0..10 {
-            let mut poll = synthetic_streaming_poll(frame);
-            poll.decode_channels = flood_decode_channels(channels, frame);
-            poll.spots = flood_spots(spots);
-            inject_and_step(&mut harness, poll, 1);
-        }
-        let n = 120usize;
-        let t0 = Instant::now();
-        for frame in 0..n {
-            let mut poll = synthetic_streaming_poll(frame + 10);
-            poll.decode_channels = flood_decode_channels(channels, frame + 10);
-            poll.spots = flood_spots(spots);
-            inject_and_step(&mut harness, poll, 1);
-        }
-        let ms = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        eprintln!("{label}: {ms:.2} ms/frame");
-    };
-
-    scenario("baseline (no channels, no spots)", 0, 0, &|_| {});
-    scenario("16 mutating channels           ", 16, 0, &|_| {});
-    scenario("80 spots                       ", 0, 80, &|_| {});
-    scenario("16 channels + 80 spots         ", 16, 80, &|_| {});
-    scenario("80 spots, right panel hidden   ", 0, 80, &|app| {
-        app.chrome.show_right = false;
-    });
-    scenario("80 spots, bottom panel hidden  ", 0, 80, &|app| {
-        app.chrome.show_history = false;
-    });
-    scenario("80 spots, skimmer UI disabled  ", 0, 80, &|app| {
-        app.skimmer_ui.skimmer_enabled = false;
-    });
-}

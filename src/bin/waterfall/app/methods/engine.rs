@@ -69,35 +69,10 @@ impl WaterfallApp {
 
 
 
-    /// Skimmer peak/decoders need a manageable spectrum span (≤96 kHz on Airspy).
-    pub(crate) fn skimmer_spectrum_ok(&self) -> bool {
-        self.radio.is_kiwi || self.plot_full_span_hz() <= 96_000.0
-    }
-
-
-
-    pub(crate) fn skimmer_runtime_enabled(&self) -> bool {
-        if !self.skimmer_ui.skimmer_enabled {
-            return false;
-        }
-        let live = matches!(self.engine_ui.conn_state, ConnState::Streaming);
-        if self.engine_ui.stats.iq_playback {
-            return true;
-        }
-        if !live {
-            return false;
-        }
-        self.skimmer_spectrum_ok()
-    }
-
-
-
     /// Cap repaint rate on wideband to leave CPU for FFT + texture work.
     pub(crate) fn effective_target_fps(&self) -> u32 {
         if self.is_wideband() {
             self.display.target_fps.min(15)
-        } else if self.skimmer_ui.skimmer_enabled && self.radio.sample_rate > 24_000.0 {
-            self.display.target_fps.min(30)
         } else {
             self.display.target_fps
         }
@@ -105,36 +80,6 @@ impl WaterfallApp {
 
 
 
-    /// Scale skimmer decoder count with available bandwidth.
-    pub(crate) fn effective_skimmer(&self) -> SkimmerConfig {
-        let mut cfg = self.skimmer_ui.skimmer.clone().clamped();
-        // Decode focus follows the tuned (listen) frequency.
-        cfg.focus_center_hz = self.listen_offset_hz() as f32;
-        if matches!(self.engine_ui.conn_state, ConnState::Streaming) {
-            cfg.source_label = self.connection_alias();
-        }
-        if self.radio.is_kiwi {
-            // Kiwi band noise creates many false peaks — require stronger SNR and keying.
-            cfg.min_snr_db = cfg.min_snr_db.max(12.0);
-            cfg.min_decode_snr_db = cfg.min_decode_snr_db.max(cfg.min_snr_db + 2.0);
-            cfg.decode_gate_ms = cfg.decode_gate_ms.max(60.0);
-            cfg.decoder_params.envelope.thr_low =
-                cfg.decoder_params.envelope.thr_low.max(0.35);
-            cfg.decoder_params.envelope.thr_high =
-                cfg.decoder_params.envelope.thr_high.max(0.50);
-            cfg.decoder_params.envelope.min_span_fraction = cfg
-                .decoder_params
-                .envelope
-                .min_span_fraction
-                .max(0.10);
-        }
-        if self.is_wideband() {
-            cfg.max_channels = cfg.max_channels.min(8);
-        } else if self.radio.sample_rate > 24_000.0 {
-            cfg.max_channels = cfg.max_channels.min(12);
-        }
-        cfg
-    }
 
 
 
@@ -147,8 +92,6 @@ impl WaterfallApp {
             cw: self.radio.cw.clone(),
             audio_enabled: self.audio.audio_enabled,
             volume: self.audio.volume,
-            skimmer_enabled: self.skimmer_runtime_enabled(),
-            skimmer: self.effective_skimmer(),
             fft_size: self.display.fft_size,
             fft_auto: self.display.fft_auto,
             spectrum_window: self.display.spectrum_window,
@@ -166,39 +109,14 @@ impl WaterfallApp {
         if poll.stats.slow && !self.engine_ui.stats.slow {
             log::warn("link slow or unstable");
         }
-        let disconnected = matches!(&poll.state, ConnState::Disconnected);
         self.engine_ui.conn_state = poll.state;
         self.engine_ui.stats = poll.stats;
-        if disconnected {
-            self.skimmer_ui.skimmer_spots.clear();
-            self.skimmer_ui.skimmer_decode_channels.clear();
-            self.skimmer_ui.skimmer_channels = 0;
-            self.skimmer_ui.frame_visible_spots.clear();
-        }
-        if self.skimmer_ui.scp_reload_pending {
-            if self.engine_ui.stats.scp.loaded {
-                let n = self.engine_ui.stats.scp.calls;
-                self.skimmer_ui.scp_notice = Some(format!("MASTER.SCP loaded ({n} calls)"));
-                self.skimmer_ui.scp_reload_pending = false;
-                self.skimmer_ui.scp_reload_deadline = None;
-            } else if self.skimmer_ui.scp_reload_deadline.is_some_and(|t| Instant::now() >= t) {
-                self.skimmer_ui.scp_notice = Some(
-                    "MASTER.SCP reload failed — file missing or empty (try Download)".into(),
-                );
-                self.skimmer_ui.scp_reload_pending = false;
-                self.skimmer_ui.scp_reload_deadline = None;
-            }
-        }
-        self.skimmer_ui.last_scp_loaded = self.engine_ui.stats.scp.loaded;
         if poll.last_error.as_deref() != self.engine_ui.last_error.as_deref() {
             if let Some(ref err) = poll.last_error {
                 log::error(err);
             }
         }
         self.engine_ui.last_error = poll.last_error;
-        self.skimmer_ui.skimmer_spots = poll.spots;
-        self.skimmer_ui.spots_dirty = true;
-        self.skimmer_ui.skimmer_decode_channels = poll.decode_channels;
         self.audio.audio_scope = poll.audio_scope;
         self.audio.audio_waveform = poll.audio_waveform;
         let latest = poll.latest;
@@ -228,7 +146,6 @@ impl WaterfallApp {
             self.apply_kiwi_rf_attn_settings();
         }
         self.radio.last_snr_db = self.engine_ui.stats.snr_db;
-        self.skimmer_ui.skimmer_channels = self.engine_ui.stats.skimmer_channels;
         if self.display.fft_auto {
             self.display.fft_size = self.engine_ui.stats.spectrum_fft.max(1024);
         }
@@ -253,6 +170,9 @@ impl WaterfallApp {
                 self.plot.rows.push_front(stored);
             }
             self.display.waterfall_rows = self.plot.rows.len();
+            // Raw dB rows go straight to the shader's ring; the CPU compose path
+            // below only runs when the GPU path is unavailable or disabled.
+            self.queue_waterfall_gpu_rows(n_new);
             self.plot.waterfall.pending_viewport_row_appends += n_new;
             let cap = waterfall_pending_cap(
                 self.effective_target_fps(),
@@ -273,9 +193,6 @@ impl WaterfallApp {
         }
 
         self.apply_pitch_lock();
-        if self.skimmer_ui.skimmer_enabled {
-            self.annotate_new_spots(self.radio.center_khz * 1000.0);
-        }
     }
 
 

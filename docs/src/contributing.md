@@ -76,6 +76,6 @@ Adjacent rejection was insufficient at 150 Hz with Gaussian-only scaling.
 
 ## License
 
-Contributions are under the project MIT license. Author metadata: Mateusz Kaduk (SO5KM).
+Contributions are under the project AGPL-3.0-only license. Author metadata: Mateusz Kaduk (SO5KM).
 
 Questions: GitHub issues on [github.com/mashu/hfsdr](https://github.com/mashu/hfsdr).

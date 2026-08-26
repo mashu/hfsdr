@@ -18,7 +18,7 @@ pub(crate) use prelude::*;
 pub(crate) use state::{
     AudioUiState, BottomPanelView, ChromeState, ConnectionFormState, ConnectionState, DisplayState,
     EngineUiState, KiwiDirectoryState, MeterDisplayState, FilterOverlayCache, PlotState,
-    RadioState, SkimmerUiState, WaterfallTextureCache,
+    RadioState, WaterfallTextureCache,
 };
 
 pub(crate) use constants::*;
@@ -31,12 +31,8 @@ pub struct WaterfallApp {
     pub(crate) plot: PlotState,
     pub(crate) display: DisplayState,
     pub(crate) audio: AudioUiState,
-    pub(crate) skimmer_ui: SkimmerUiState,
     pub(crate) chrome: ChromeState,
     pub(crate) meter_display: MeterDisplayState,
-    resolver: ContinentResolver,
-    annotated: HashSet<String>,
-    slow: SlowWaterfall,
     last_settings_snapshot: Option<AppSettings>,
     settings_dirty_at: Option<std::time::Instant>,
 }
@@ -64,15 +60,7 @@ impl WaterfallApp {
         self.engine.inject_poll(poll);
     }
 
-    #[cfg(test)]
-    pub fn history_labels(&self) -> Vec<String> {
-        self.slow
-            .annotations()
-            .iter()
-            .map(|a| a.label.clone())
-            .collect()
-    }
-
+    
     fn build(autoconnect: Option<ConnectRequest>, engine: EngineHandle) -> Self {
         let saved = AppSettings::load();
         let audio_devices = AudioOutput::list_output_devices();
@@ -183,6 +171,7 @@ impl WaterfallApp {
                 full_drain_spectrum: false,
                 perf_trace: false,
                 waterfall_rows_per_frame: 1,
+                waterfall_gpu: true,
             },
             audio: AudioUiState {
                 audio_devices,
@@ -192,34 +181,6 @@ impl WaterfallApp {
                 volume: 1.0,
                 audio_scope: Vec::new(),
                 audio_waveform: Vec::new(),
-            },
-            skimmer_ui: SkimmerUiState {
-                skimmer_enabled: true,
-                skimmer: SkimmerConfig::default(),
-                skimmer_channels: 0,
-                skimmer_spots: Vec::new(),
-                spot_sort: SpotSort::SnrDesc,
-                continent_filter: false,
-                show_continents: [true; 7],
-                min_spot_snr: 8.0,
-                spot_cq_only: false,
-                spot_hide_heard_labels: false,
-                spot_max_age_secs: 180.0,
-                spot_callsign_filter: String::new(),
-                spot_label_limit: 40,
-                scp_notice: None,
-                scp_download_rx: None,
-                scp_reload_pending: false,
-                scp_reload_deadline: None,
-                last_scp_loaded: false,
-                frame_visible_spots: Vec::new(),
-                spots_dirty: true,
-                last_spot_filter: None,
-                last_spot_refresh: None,
-                callsign_log_cache: Vec::new(),
-                spot_label_cache: Vec::new(),
-                last_label_center_hz: 0.0,
-                skimmer_decode_channels: Vec::new(),
             },
             chrome: ChromeState {
                 show_console: false,
@@ -242,9 +203,6 @@ impl WaterfallApp {
                 themed: false,
             },
             meter_display: MeterDisplayState::default(),
-            resolver: ContinentResolver::new(),
-            annotated: HashSet::new(),
-            slow: SlowWaterfall::new(2.0, 600.0, RowFold::Peak),
             last_settings_snapshot: None,
             settings_dirty_at: None,
         };
@@ -320,11 +278,9 @@ impl eframe::App for WaterfallApp {
             self.engine.send(EngineCommand::Connect(Box::new(req)));
         }
 
-        self.poll_scp_download();
         self.poll_kiwi_directory();
         self.handle_shortcuts(&ctx);
         self.pump_engine();
-        self.refresh_visible_spots();
 
         let meter_dt = ui.input(|i| i.stable_dt);
         self.tick_meter_display(meter_dt);
@@ -363,15 +319,6 @@ impl eframe::App for WaterfallApp {
                 .size_range(BOTTOM_PANEL_MIN_H..=BOTTOM_PANEL_MAX_H)
                 .default_size(160.0)
                 .show_inside(ui, |ui| self.console_panel(ui));
-        }
-
-        if self.chrome.show_history {
-            egui::Panel::bottom("history")
-                .resizable(true)
-                .frame(bottom_panel_frame())
-                .size_range(BOTTOM_PANEL_MIN_H..=BOTTOM_PANEL_MAX_H)
-                .default_size(150.0)
-                .show_inside(ui, |ui| self.history_panel(ui));
         }
 
         egui::CentralPanel::default()

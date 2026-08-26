@@ -265,19 +265,19 @@ fn fft_size_for_taps(taps_len: usize) -> usize {
 fn fir_dot_delay(delay: &[f32], taps: &[f32], pos: usize, n: usize) -> f32 {
     if n >= 32 {
         const CHUNK: usize = 32;
-        let mut ti = [0.0f32; CHUNK];
+        // Only the delay line needs gathering — it is a ring read in reverse.
+        // The taps are already contiguous, so they are borrowed, not copied.
         let mut di = [0.0f32; CHUNK];
         let mut acc = 0.0f32;
         let mut tap_idx = 0usize;
         let mut idx = pos;
         while tap_idx < n {
             let chunk = (n - tap_idx).min(CHUNK);
-            for k in 0..chunk {
-                ti[k] = taps[tap_idx + k];
-                di[k] = delay[idx];
+            for slot in di.iter_mut().take(chunk) {
+                *slot = delay[idx];
                 idx = if idx == 0 { n - 1 } else { idx - 1 };
             }
-            acc += dot_f32(&di[..chunk], &ti[..chunk]);
+            acc += dot_f32(&di[..chunk], &taps[tap_idx..tap_idx + chunk]);
             tap_idx += chunk;
         }
         acc

@@ -142,23 +142,20 @@ impl AudioOutput {
         &self.device_name
     }
 
-    /// Push mono samples at `source_rate`; resamples linearly when rates differ.
+    /// Push mono samples at `source_rate`; resamples linearly onto the output clock.
     ///
     /// The interpolation phase carries across calls, so block boundaries stay
     /// continuous, and a slow servo (±0.3 %) on the resample ratio keeps the ring
     /// near half full so source/sink clock mismatch never accumulates into an
     /// overflow drop or an underrun gap.
+    ///
+    /// Equal nominal rates are deliberately NOT special-cased. Equal rates do not
+    /// mean equal clocks: the sound card and the SDR differ by tens of ppm, so a
+    /// raw copy would drift the ring into an overflow drop (a click) or an
+    /// underrun. At a step of 1.0 the resampler is sample-accurate anyway, so the
+    /// general path costs one lerp and keeps the servo guarantee on every source.
     pub fn push(&mut self, mono: &[f32], source_rate: u32, volume: f32) {
         if mono.is_empty() || volume <= 0.0 {
-            return;
-        }
-        if source_rate == self.output_rate {
-            for &s in mono {
-                if self.producer.is_full() {
-                    break;
-                }
-                let _ = self.producer.push(s * volume);
-            }
             return;
         }
 
@@ -339,6 +336,41 @@ mod tests {
         fill_output(&mut data, 1, &mut cons, &skip);
         assert_eq!(data[0], 0.0);
         assert_eq!(skip.load(Ordering::Relaxed), 2);
+    }
+
+    /// Equal nominal rates go through the resampler (no fast path), and at a step
+    /// of 1.0 that must be sample-accurate — one output per input in steady state.
+    #[test]
+    fn equal_rates_resample_sample_accurately() {
+        let (mut prod, cons) = RingBuffer::<f32>::new(4096);
+        let block: Vec<f32> = (0..256).map(|i| (i as f32 * 0.01).sin()).collect();
+        let (mut pos, mut last) = (0.0f64, 0.0f32);
+        let blocks = 8;
+        for _ in 0..blocks {
+            let (p, l) = resample_push(&mut prod, &block, 1.0, pos, last, 1.0);
+            pos = p;
+            last = l;
+        }
+        let produced = cons.slots();
+        let pushed = block.len() * blocks;
+        // Only the first block's leading edge is absorbed by phase startup.
+        assert!(
+            produced.abs_diff(pushed) <= 1,
+            "equal-rate resampling must not systematically gain or lose samples: \
+             pushed {pushed}, produced {produced}"
+        );
+    }
+
+    /// The servo must pull the resample step away from nominal when the ring is
+    /// off its half-full target — this is what absorbs source/sink clock drift.
+    #[test]
+    fn servo_trims_step_toward_half_full_ring() {
+        // Mirrors the trim computation in `push`.
+        let trim_for = |fill_avg: f32| ((fill_avg - 0.5) * 0.01).clamp(-0.003, 0.003);
+        assert!(trim_for(0.5).abs() < 1e-9, "on target: no correction");
+        assert!(trim_for(1.0) > 0.0, "ring too full: read source faster");
+        assert!(trim_for(0.0) < 0.0, "ring too empty: read source slower");
+        assert!(trim_for(1.0) <= 0.003 && trim_for(0.0) >= -0.003, "bounded at ±0.3 %");
     }
 
     #[test]

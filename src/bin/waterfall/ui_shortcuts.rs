@@ -8,7 +8,7 @@ use crate::audio;
 use crate::theme;
 use crate::ui_smoke::{inject_and_step, synthetic_streaming_poll};
 use crate::engine::FFT_SIZE;
-use hfsdr::skimmer::peaks::offset_hz_to_bin;
+use hfsdr::offset_hz_to_bin;
 
 const TEST_AUDIO_DEVICES: [&str; 1] = ["Test Output"];
 

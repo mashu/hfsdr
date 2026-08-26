@@ -17,6 +17,8 @@ mod spectrum_front;
 mod spectrum_plan;
 mod preprocess;
 mod simd;
+pub mod colormap;
+pub mod peaks;
 mod view;
 mod wideband_cw;
 
@@ -54,10 +56,17 @@ pub use spectrum_plan::{
 pub use preprocess::{FirDecimator, IngressWorker, IqRotator, IqShiftDecim};
 pub use freq_offset::{BasebandOffsetHz, ChannelOffsetHz, ListenOrigin};
 pub use wideband_cw::{demod_wideband, WidebandCwIngress, WIDEBAND_IQ_THRESHOLD as AUDIO_WIDEBAND_THRESHOLD};
+pub use colormap::{db_to_rgba, WaterfallPalette, LUT_LEN};
+pub use peaks::{
+    bin_to_offset_hz, detect_peaks, detect_peaks_with_floor, noise_floor_db, noise_floor_db_into,
+    offset_hz_to_bin, strongest_offset_hz, strongest_offset_hz_with_floor, Peak,
+};
 pub use view::{
-    compose_panadapter_row, downsample_row_peak, extract_passband_view, extract_view_window,
+    compose_panadapter_row, compose_panadapter_row_into, downsample_row_peak,
+    downsample_row_peak_into, extract_passband_view, extract_view_window,
     fit_panadapter_row_width, panadapter_output_bins, spectrum_view_mapping,
     waterfall_storage_mapping, waterfall_storage_span_hz, waterfall_texture_u_range,
     view_t_to_offset_hz, offset_hz_to_view_t, offset_hz_to_storage_u, stretch_row_to_width,
+    stretch_row_to_width_into,
     MAX_PANADAPTER_BINS, WIDE_PANADAPTER_BINS, SpectrumViewMapping,
 };

@@ -1,4 +1,4 @@
-//! Grouped `WaterfallApp` state (connection form, plot, skimmer UI, …).
+//! Grouped `WaterfallApp` state (connection form, plot, display, …).
 
 mod audio;
 mod chrome;
@@ -9,7 +9,6 @@ mod meter;
 mod plot;
 mod plot_cache;
 mod radio;
-mod skimmer;
 
 pub use audio::AudioUiState;
 pub use chrome::{BottomPanelView, ChromeState};
@@ -18,6 +17,5 @@ pub use display::DisplayState;
 pub use engine_ui::EngineUiState;
 pub use meter::MeterDisplayState;
 pub use plot::{FilterOverlayCache, PlotState};
-pub use plot_cache::WaterfallTextureCache;
+pub use plot_cache::{RowComposeScratch, WaterfallTextureCache};
 pub use radio::RadioState;
-pub use skimmer::SkimmerUiState;

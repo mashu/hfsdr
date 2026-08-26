@@ -1,8 +1,8 @@
 //! Settings serialization helpers and small shared utilities.
 
 use hfsdr::{
-    AgcMode, ChannelFilterKind, CwDetectorMode, CwSideband, FftWindowKind, IirFilterKind, SkimmerConfig, SpotSort,
-    SidetoneEnvelopeShape, WindowKind, DecoderParams, EnvelopeSettings,
+    AgcMode, ChannelFilterKind, CwDetectorMode, CwSideband, FftWindowKind, IirFilterKind,
+    SidetoneEnvelopeShape, WindowKind,
 };
 
 use crate::settings::AppSettings;
@@ -185,62 +185,8 @@ pub(crate) fn af_scope_accuracy_from_u8(v: u8) -> crate::meters::AfScopeAccuracy
     }
 }
 
-pub(crate) fn spot_sort_to_u8(s: SpotSort) -> u8 {
-    match s {
-        SpotSort::SnrDesc => 0,
-        SpotSort::Frequency => 1,
-        SpotSort::LastHeard => 2,
-        SpotSort::Callsign => 3,
-    }
-}
 
-pub(crate) fn spot_sort_from_u8(v: u8) -> SpotSort {
-    match v {
-        1 => SpotSort::Frequency,
-        2 => SpotSort::LastHeard,
-        3 => SpotSort::Callsign,
-        _ => SpotSort::SnrDesc,
-    }
-}
 
-/// Map a persisted value equal to a pre-rework default onto the new default.
-fn migrate_default(v: f32, old_default: f32, new_default: f32) -> f32 {
-    if (v - old_default).abs() < 1e-3 {
-        new_default
-    } else {
-        v
-    }
-}
-
-pub(crate) fn skimmer_config_from_settings(s: &AppSettings) -> SkimmerConfig {
-    use hfsdr::{DecoderParams, EnvelopeSettings};
-    SkimmerConfig {
-        bucket_hz: s.skimmer_bucket_hz,
-        min_snr_db: s.skimmer_min_snr_db,
-        min_decode_snr_db: s.skimmer_min_decode_snr_db,
-        min_separation_bins: s.skimmer_min_separation_bins,
-        max_channels: s.skimmer_max_channels.max(1),
-        channel_timeout_secs: s.skimmer_channel_timeout_secs,
-        spot_store_max_age_secs: s.skimmer_store_max_age_secs,
-        source_label: "rx".to_string(),
-        require_scp: s.scp_require,
-        lpf_cutoff_hz: migrate_default(s.skimmer_lpf_cutoff_hz, 120.0, 50.0),
-        decode_gate_ms: s.skimmer_decode_gate_ms,
-        focus_span_hz: s.skimmer_focus_span_hz,
-        focus_center_hz: 0.0,
-        decoder_params: DecoderParams {
-            initial_wpm: s.skimmer_initial_wpm,
-            beam_width: s.skimmer_beam_width.max(1),
-            envelope: EnvelopeSettings {
-                thr_low: migrate_default(s.skimmer_thr_low, 0.55, 0.38),
-                thr_high: migrate_default(s.skimmer_thr_high, 0.72, 0.55),
-                min_span_fraction: EnvelopeSettings::default().min_span_fraction,
-            },
-            max_text_chars: s.skimmer_max_decode_chars.max(16),
-        },
-    }
-    .clamped()
-}
 
 pub(crate) fn normalize_waterfall_avg(value: u8) -> u8 {
     match value {
@@ -256,7 +202,7 @@ mod tests {
     use crate::interaction::PlotAction;
     use crate::settings::AppSettings;
     use hfsdr::{
-        AgcMode, ChannelFilterKind, FftWindowKind, IirFilterKind, SpotSort, WindowKind,
+        AgcMode, ChannelFilterKind, FftWindowKind, IirFilterKind, WindowKind,
     };
 
     #[test]
@@ -341,19 +287,6 @@ mod tests {
     }
 
     #[test]
-    fn spot_sort_codec_roundtrip() {
-        for s in [
-            SpotSort::SnrDesc,
-            SpotSort::Frequency,
-            SpotSort::LastHeard,
-            SpotSort::Callsign,
-        ] {
-            assert_eq!(spot_sort_from_u8(spot_sort_to_u8(s)), s);
-        }
-        assert_eq!(spot_sort_from_u8(9), SpotSort::SnrDesc);
-    }
-
-    #[test]
     fn normalize_waterfall_avg_only_allows_one_two_four() {
         assert_eq!(normalize_waterfall_avg(1), 1);
         assert_eq!(normalize_waterfall_avg(2), 2);
@@ -374,12 +307,4 @@ mod tests {
         assert!(!plot_action_changes_view(&PlotAction::TuneDeltaHz(50.0)));
     }
 
-    #[test]
-    fn skimmer_config_from_settings_clamps_channels() {
-        let mut s = AppSettings::default();
-        s.skimmer_max_channels = 0;
-        let cfg = skimmer_config_from_settings(&s);
-        assert!(cfg.max_channels >= 1);
-        assert_eq!(cfg.decoder_params.max_text_chars, s.skimmer_max_decode_chars.max(16));
-    }
 }

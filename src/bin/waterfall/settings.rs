@@ -241,32 +241,6 @@ pub struct AppSettings {
     pub volume: f32,
 
     // Skimmer / panels.
-    pub skimmer_enabled: bool,
-    pub skimmer_min_snr_db: f32,
-    pub skimmer_min_decode_snr_db: f32,
-    pub skimmer_decode_gate_ms: f32,
-    pub skimmer_max_channels: usize,
-    pub skimmer_bucket_hz: f32,
-    pub skimmer_min_separation_bins: usize,
-    pub skimmer_beam_width: usize,
-    pub skimmer_lpf_cutoff_hz: f32,
-    pub skimmer_focus_span_hz: f32,
-    pub skimmer_initial_wpm: f32,
-    pub skimmer_thr_low: f32,
-    pub skimmer_thr_high: f32,
-    pub skimmer_channel_timeout_secs: f32,
-    pub skimmer_store_max_age_secs: f32,
-    pub skimmer_max_decode_chars: usize,
-    pub min_spot_snr: f32,
-    pub spot_cq_only: bool,
-    pub spot_hide_heard_labels: bool,
-    pub spot_max_age_secs: f32,
-    pub spot_callsign_filter: String,
-    pub spot_label_limit: usize,
-    pub scp_require: bool,
-    pub spot_sort: u8,
-    pub continent_filter: bool,
-    pub show_continents: [bool; 7],
     pub show_console: bool,
     pub filter_wide: bool,
     pub show_history: bool,
@@ -283,7 +257,7 @@ pub struct AppSettings {
     /// AF scope accuracy: 0 = coarse, 1 = medium, 2 = fine.
     #[serde(default)]
     pub af_scope_accuracy: u8,
-    /// Essential CW layout: BFO, BW, AGC only; hides skimmer/IQ/performance chrome.
+    /// Essential CW layout: BFO, BW, AGC only; hides IQ/performance chrome.
     #[serde(default)]
     pub cw_simple_ui: bool,
     /// S-meter + IF/AF level bars above Operator on the left.
@@ -391,32 +365,6 @@ impl Default for AppSettings {
             perf_trace: false,
             audio_enabled: true,
             volume: 1.0,
-            skimmer_enabled: true,
-            skimmer_min_snr_db: 10.0,
-            skimmer_min_decode_snr_db: 8.0,
-            skimmer_decode_gate_ms: 45.0,
-            skimmer_max_channels: 16,
-            skimmer_bucket_hz: 80.0,
-            skimmer_min_separation_bins: 8,
-            skimmer_beam_width: 12,
-            skimmer_lpf_cutoff_hz: 50.0,
-            skimmer_focus_span_hz: 3_000.0,
-            skimmer_initial_wpm: 22.0,
-            skimmer_thr_low: 0.38,
-            skimmer_thr_high: 0.55,
-            skimmer_channel_timeout_secs: 30.0,
-            skimmer_store_max_age_secs: 300.0,
-            skimmer_max_decode_chars: 64,
-            min_spot_snr: 8.0,
-            spot_cq_only: false,
-            spot_hide_heard_labels: false,
-            spot_max_age_secs: 180.0,
-            spot_callsign_filter: String::new(),
-            spot_label_limit: 40,
-            scp_require: false,
-            spot_sort: 0,
-            continent_filter: false,
-            show_continents: [true; 7],
             show_console: false,
             filter_wide: false,
             show_history: false,
@@ -484,35 +432,10 @@ impl AppSettings {
             s.airspy.hf_lna = true;
             s.settings_format = 1;
         }
-        if s.settings_format < 2 {
-            if s.scp_require {
-                s.scp_require = false;
-            }
-            if s.skimmer_thr_low > 0.38 {
-                s.skimmer_thr_low = 0.30;
-            }
-            if s.skimmer_thr_high > 0.50 {
-                s.skimmer_thr_high = 0.46;
-            }
-            if s.min_spot_snr > 10.0 {
-                s.min_spot_snr = 8.0;
-            }
-            s.settings_format = 2;
-        }
-        if s.settings_format < 3 {
-            if s.skimmer_min_snr_db < 12.0 {
-                s.skimmer_min_snr_db = 12.0;
-            }
-            if s.skimmer_min_decode_snr_db < s.skimmer_min_snr_db + 2.0 {
-                s.skimmer_min_decode_snr_db = s.skimmer_min_snr_db + 2.0;
-            }
-            if s.skimmer_thr_low < 0.35 {
-                s.skimmer_thr_low = 0.35;
-            }
-            if s.skimmer_thr_high < 0.50 {
-                s.skimmer_thr_high = 0.50;
-            }
-            s.settings_format = 3;
+        if s.settings_format < 4 {
+            // Formats 2 and 3 only retuned skimmer thresholds; the skimmer has
+            // been removed, so those migrations no longer apply.
+            s.settings_format = 4;
         }
         s
     }
@@ -540,9 +463,6 @@ mod tests {
         let s = AppSettings::default();
         let json = serde_json::to_string(&s).expect("serialize");
         let back: AppSettings = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.spot_sort, s.spot_sort);
-        assert_eq!(back.continent_filter, s.continent_filter);
-        assert_eq!(back.show_continents, s.show_continents);
         assert!(!back.show_console);
     }
 
@@ -558,9 +478,8 @@ mod tests {
     }
 
     #[test]
-    fn default_skimmer_and_audio_flags() {
+    fn default_audio_flags() {
         let s = AppSettings::default();
-        assert!(s.skimmer_enabled);
         assert!(s.audio_enabled);
         assert!(s.lock_ham_bands);
     }
@@ -569,7 +488,6 @@ mod tests {
     fn deserialize_minimal_json_uses_defaults() {
         let back: AppSettings = serde_json::from_str("{}").expect("deserialize");
         assert_eq!(back.bfo_hz, AppSettings::default().bfo_hz);
-        assert!(back.skimmer_enabled);
     }
 
     #[test]

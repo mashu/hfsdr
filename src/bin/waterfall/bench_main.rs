@@ -16,7 +16,6 @@
 mod audio;
 mod engine;
 mod log;
-mod skimmer;
 mod source;
 
 use std::f32::consts::TAU;

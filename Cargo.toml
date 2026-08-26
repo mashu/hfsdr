@@ -3,7 +3,7 @@ name = "hfsdr"
 version = "0.9.7"
 edition = "2021"
 description = "HF SDR client core: source-agnostic IQ pipeline (Airspy HF+, RTL-SDR, KiwiSDR, QMX)"
-license = "MIT"
+license = "AGPL-3.0-only"
 authors = ["Mateusz Kaduk (SO5KM)"]
 
 [package.metadata.docs.rs]
@@ -34,6 +34,13 @@ ureq = { version = "2.12", optional = true, default-features = false, features =
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# wasm32 needs an explicit getrandom backend (transitively via tungstenite).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Document", "Window", "Element", "HtmlCanvasElement", "console"] }
+
 [features]
 default = ["airspy"]
 # Runtime-loaded libairspyhf on Windows, Linux, and macOS.
@@ -47,11 +54,20 @@ soapy = []
 # GUI without librtlsdr / SoapySDR (Kiwi/QMX-only builds).
 gui-core = ["dep:eframe", "dep:cpal", "dep:egui_extras", "dep:serde", "dep:serde_json", "dep:ureq", "dep:rfd", "qmx"]
 gui = ["gui-core", "rtlsdr", "soapy"]
+# Browser build: eframe only. No serialport (qmx), no ureq (needs real sockets),
+# no native drivers. KiwiSDR over the browser WebSocket API is the only source.
+gui-wasm = ["dep:eframe", "dep:egui_extras", "dep:serde", "dep:serde_json",
+            "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [[bin]]
 name = "hfsdr"
 path = "src/bin/waterfall/main.rs"
 required-features = ["gui-core"]
+
+[[bin]]
+name = "hfsdr-wasm"
+path = "src/bin/wasm_app/main.rs"
+required-features = ["gui-wasm"]
 
 [[bin]]
 name = "airspy-probe"
@@ -64,14 +80,6 @@ path = "src/bin/pipeline_bench.rs"
 required-features = ["airspy"]
 
 [[bin]]
-name = "skimmer-bench"
-path = "src/bin/skimmer_bench.rs"
-
-[[bin]]
-name = "kiwi-pipeline-bench"
-path = "src/bin/kiwi_pipeline_bench.rs"
-
-[[bin]]
 name = "engine-bench"
 path = "src/bin/waterfall/bench_main.rs"
 required-features = ["gui-core"]
@@ -82,3 +90,4 @@ lto = "thin"
 
 [dev-dependencies]
 egui_kittest = { version = "0.34", features = ["eframe", "wgpu"] }
+pollster = "0.4"

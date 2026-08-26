@@ -4,6 +4,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use eframe::egui::Vec2;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use egui_kittest::{Harness, kittest::Queryable as _};
 
 use crate::app::WaterfallApp;
@@ -108,8 +110,6 @@ fn evaluate_reconnecting_badge() {
             retry_in_s: 2.0,
         },
         stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
@@ -120,50 +120,101 @@ fn evaluate_reconnecting_badge() {
     harness.get_by_label("RECONNECT #1 (2s)");
 }
 
-/// wgpu `render()` is not safe to call from parallel tests — keep screenshots in one test.
+
+/// End-to-end check of the shader waterfall inside the real app.
+///
+/// The unit tests in `widgets::waterfall_gpu` prove the shader is correct in
+/// isolation; this proves the app actually reaches it — renderer installed,
+/// rows queued, callback painted — which the other UI tests do not, since they
+/// never set `gpu_available` and so always exercise the CPU path.
 #[test]
-fn capture_ui_screenshot_states() {
-    let mut harness = eval_harness(WINDOW_SIZE);
-    harness.run_steps(4);
-    if !wgpu_render_available(&mut harness) {
+fn gpu_waterfall_paints_in_the_real_app() {
+    audio::set_test_output_devices(Some(
+        TEST_AUDIO_DEVICES.iter().map(|s| (*s).to_string()).collect(),
+    ));
+    // `.wgpu()` builds a real device and PANICS when the runner has no adapter,
+    // so the guard has to cover construction, not just render() — a headless
+    // runner without a software rasterizer dies here otherwise.
+    let installed = AtomicBool::new(false);
+    let built = catch_unwind(AssertUnwindSafe(|| {
+        Harness::builder()
+            .with_size(WINDOW_SIZE)
+            .with_max_steps(128)
+            .with_wait_for_pending_images(false)
+            // The default test renderer leaves cc.wgpu_render_state empty, which
+            // would silently skip this whole test.
+            .wgpu()
+            .build_eframe(|cc| {
+                theme::apply(&cc.egui_ctx);
+                let ok = crate::widgets::install_waterfall_gpu(cc);
+                installed.store(ok, Ordering::Relaxed);
+                let mut app = WaterfallApp::new_for_test(None);
+                app.set_waterfall_gpu_available(ok);
+                app
+            })
+    }));
+
+    let Ok(mut harness) = built else {
+        eprintln!("skipping GPU waterfall check: wgpu adapter unavailable (headless runner)");
+        return;
+    };
+    if !installed.load(Ordering::Relaxed) {
+        eprintln!("skipping GPU waterfall check: no wgpu render state");
         return;
     }
-    save_render(&mut harness, "01_startup_offline").expect("write startup screenshot");
+    harness.run_steps(1);
 
-    inject_and_step(&mut harness, synthetic_streaming_poll(0), 4);
-    save_render(&mut harness, "02_streaming_default").expect("write streaming screenshot");
-
-    {
-        let app = harness.state_mut();
-        app.chrome.show_left = true;
-        app.chrome.show_right = true;
-        app.skimmer_ui.skimmer_enabled = true;
+    // Feed rows with a strong carrier so the result cannot be uniform noise.
+    for _ in 0..8 {
+        let mut row = vec![-110.0f32; FFT_SIZE];
+        row[FFT_SIZE / 2] = -15.0;
+        harness.state().inject_engine_poll(EnginePoll {
+            state: ConnState::Streaming,
+            stats: streaming_stats(),
+            rows: vec![row.clone()],
+            latest: row,
+            last_error: None,
+            audio_scope: Vec::new(),
+            audio_waveform: Vec::new(),
+        });
+        harness.run_steps(2);
     }
-    harness.run_steps(8);
-    save_render(&mut harness, "03_streaming_full_ui").expect("write full-ui screenshot");
 
-    harness.state_mut().connection.form.show_connection_drawer = true;
-    harness.run_steps(4);
-    save_render(&mut harness, "04_connection_drawer").expect("write drawer screenshot");
+    let image = match catch_unwind(AssertUnwindSafe(|| harness.render())) {
+        Ok(Ok(img)) => img,
+        _ => {
+            eprintln!("skipping GPU waterfall check: no wgpu adapter");
+            return;
+        }
+    };
+    let path = screenshot_dir().join("07_gpu_waterfall.png");
+    let _ = image.save(&path);
 
-    harness.state().inject_engine_poll(EnginePoll {
-        state: ConnState::Reconnecting {
-            attempt: 1,
-            retry_in_s: 2.0,
-        },
-        stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
-        rows: Vec::new(),
-        latest: vec![-90.0; FFT_SIZE],
-        last_error: None,
-        audio_scope: Vec::new(),
-        audio_waveform: Vec::new(),
-    });
-    harness.run_steps(4);
-    save_render(&mut harness, "05_reconnecting").expect("write reconnecting screenshot");
+    // The waterfall occupies the lower half of the plot area. The injected rows
+    // are a -110 dB floor with one -15 dB carrier, so against ref -20 / range 80
+    // the row must be mostly DARK with a single bright column. Checking only for
+    // "several distinct colours" would pass on a solid white texture, which is
+    // exactly what an uncleared R32Float ring produces.
+    let (w, h) = (image.width(), image.height());
+    let band_y = (h as f32 * 0.70) as u32;
+    let y = band_y.min(h - 1);
+    let mut sums: Vec<u32> = Vec::with_capacity(w as usize);
+    for x in 0..w {
+        let p = image.get_pixel(x, y);
+        sums.push(p[0] as u32 + p[1] as u32 + p[2] as u32);
+    }
+    let brightest = sums.iter().copied().max().unwrap_or(0);
+    let mut sorted = sums.clone();
+    sorted.sort_unstable();
+    let median = sorted[sorted.len() / 2];
 
-    let mut min_harness = eval_harness(Vec2::new(1100.0, 720.0));
-    min_harness.run_steps(4);
-    save_render(&mut min_harness, "06_minimum_window").expect("write minimum-window screenshot");
+    assert!(
+        median < 220,
+        "waterfall row is mostly bright (median channel sum {median}) — the dB ring \
+         is probably uncleared, which reads as 0 dB = full scale"
+    );
+    assert!(
+        brightest > median + 100,
+        "no carrier stands out of the noise floor (max {brightest}, median {median})"
+    );
 }

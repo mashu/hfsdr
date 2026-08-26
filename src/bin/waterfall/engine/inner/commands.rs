@@ -143,18 +143,6 @@ pub(super) fn handle_command(&mut self, cmd: EngineCommand) {
                 self.audio_device = name;
                 self.reopen_audio();
             }
-            EngineCommand::ClearSkimmerSpots => {
-                self.skimmer.clear();
-                self.reset_skimmer_peak_hold(self.fft_size);
-            }
-            EngineCommand::ReloadScp => {
-                self.skimmer.reload_scp();
-                self.publish_stats(0);
-            }
-            EngineCommand::ReloadScpFrom(path) => {
-                self.skimmer.reload_scp_from(path);
-                self.publish_stats(0);
-            }
             EngineCommand::StartIqRecord(path) => {
                 if self.recorder.is_some() {
                     return;

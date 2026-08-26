@@ -52,8 +52,6 @@ pub(crate) fn synthetic_streaming_poll(frame: usize) -> EnginePoll {
     EnginePoll {
         state: ConnState::Streaming,
         stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: vec![latest.clone()],
         latest,
         last_error: None,
@@ -66,8 +64,6 @@ fn poll_with_latest(latest: Vec<f32>, rows: Vec<Vec<f32>>) -> EnginePoll {
     EnginePoll {
         state: ConnState::Streaming,
         stats: streaming_stats(),
-        spots: Vec::new(),
-        decode_channels: Vec::new(),
         rows,
         latest,
         last_error: None,
@@ -81,8 +77,6 @@ fn poll_with_stats(stats: EngineStats) -> EnginePoll {
     EnginePoll {
         state: ConnState::Streaming,
         stats,
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: vec![latest.clone()],
         latest,
         last_error: None,
@@ -283,8 +277,6 @@ fn reconnecting_shows_retry_label() {
             retry_in_s: 2.0,
         },
         stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
@@ -305,8 +297,6 @@ fn connecting_shows_connecting_badge() {
             label: "rx.test:8073".into(),
         },
         stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; FFT_SIZE],
         last_error: None,
@@ -333,8 +323,6 @@ fn disconnected_after_error_poll_stays_finite() {
     harness.state().inject_engine_poll(EnginePoll {
         state: ConnState::Disconnected,
         stats: streaming_stats(),
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: Vec::new(),
         latest: vec![-90.0; FFT_SIZE],
         last_error: Some("connection stalled (no data)".into()),

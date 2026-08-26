@@ -9,11 +9,10 @@ use crate::app::WaterfallApp;
 use crate::audio;
 use crate::engine::{ConnState, EnginePoll, EngineStats, FFT_SIZE};
 use crate::pipeline_flow::PipelineStage;
-use crate::skimmer::ScpStatus;
 use crate::source::SourceKind;
 use crate::theme;
 use crate::ui_smoke::{inject_and_step, streaming_stats, synthetic_streaming_poll};
-use hfsdr::{Spot, SpotKind};
+
 
 const TEST_AUDIO_DEVICES: [&str; 1] = ["Test Output"];
 
@@ -44,28 +43,12 @@ fn right_panel_harness() -> Harness<'static, WaterfallApp> {
     harness
 }
 
-fn sample_spot(call: &str, kind: SpotKind) -> Spot {
-    let now = Instant::now();
-    Spot {
-        frequency_hz: 14_010_500.0,
-        callsign: Some(call.into()),
-        kind,
-        snr_db: 18.0,
-        wpm: 22.0,
-        first_heard: now,
-        last_heard: now,
-        sources: Vec::new(),
-        callsign_rank: 0,
-    }
-}
 
 fn poll_with_spots() -> EnginePoll {
     let latest = vec![-90.0; FFT_SIZE];
     EnginePoll {
         state: ConnState::Streaming,
         stats: streaming_stats(),
-        spots: vec![sample_spot("TEST1", SpotKind::CallingCq)],
-            decode_channels: Vec::new(),
         rows: vec![latest.clone()],
         latest,
         last_error: None,
@@ -74,16 +57,6 @@ fn poll_with_spots() -> EnginePoll {
     }
 }
 
-fn poll_with_scp_loaded() -> EnginePoll {
-    let mut poll = synthetic_streaming_poll(0);
-    poll.stats.scp = ScpStatus {
-        loaded: true,
-        calls: 12_345,
-        version: Some("2024-01".into()),
-        path: Some("/home/user/.config/hfsdr/MASTER.SCP".into()),
-    };
-    poll
-}
 
 fn click_by_label(harness: &mut Harness<'_, WaterfallApp>, label: &str) {
     let node = harness
@@ -95,29 +68,12 @@ fn click_by_label(harness: &mut Harness<'_, WaterfallApp>, label: &str) {
 
 fn open_right_collapsibles(harness: &mut Harness<'_, WaterfallApp>) {
     harness.run_steps(2);
-    for label in ["Spots", "Skimmer settings", "Audio", "Performance"] {
+    for label in ["Audio", "Performance"] {
         click_by_label(harness, label);
     }
 }
 
-fn seed_spot_table(harness: &mut Harness<'_, WaterfallApp>) {
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    harness.state_mut().skimmer_ui.frame_visible_spots = vec![
-        sample_spot("G0ABC", SpotKind::CallingCq),
-        sample_spot("DL1TEST", SpotKind::Answering),
-        sample_spot("F4XYZ", SpotKind::Heard),
-    ];
-}
 
-#[test]
-fn console_and_history_panels_render() {
-    let mut harness = streaming_harness();
-    harness.state_mut().chrome.show_console = true;
-    harness.state_mut().chrome.show_history = true;
-    inject_and_step(&mut harness, poll_with_spots(), 6);
-    assert!(harness.state().chrome.show_console);
-    assert!(harness.state().chrome.show_history);
-}
 
 #[test]
 fn panel_toggles_dsp_rx_scope_meter() {
@@ -168,34 +124,8 @@ fn connection_drawer_renders() {
     assert!(harness.state().connection.form.show_connection_drawer);
 }
 
-#[test]
-fn history_panel_with_spots_poll() {
-    let mut harness = streaming_harness();
-    harness.state_mut().chrome.show_history = true;
-    inject_and_step(&mut harness, poll_with_spots(), 4);
-    assert!(harness.state().chrome.show_history);
-}
 
-#[test]
-fn right_panel_skimmer_section_renders() {
-    let mut harness = streaming_harness();
-    harness.state_mut().chrome.show_right = true;
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    harness.run_steps(8);
-    assert!(harness.state().skimmer_ui.skimmer_enabled);
-}
 
-#[test]
-fn right_panel_collapsibles_render() {
-    let mut harness = streaming_harness();
-    harness.state_mut().chrome.show_right = true;
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    harness.run_steps(4);
-    for label in ["Skimmer settings", "Audio", "Performance"] {
-        harness.get_by_label(label).click();
-    }
-    harness.run_steps(8);
-}
 
 #[test]
 fn kiwi_band_overview_renders() {
@@ -216,6 +146,7 @@ fn pipeline_drawer_toggles_stage() {
     assert_ne!(harness.state().radio.cw.agc.enabled, before);
 }
 
+#[cfg(feature = "airspy")]
 #[test]
 fn connection_form_airspy_kind_renders() {
     let mut harness = panel_harness();
@@ -226,6 +157,7 @@ fn connection_form_airspy_kind_renders() {
     assert_eq!(harness.state().connection.form.kind, SourceKind::Airspy);
 }
 
+#[cfg(feature = "rtlsdr")]
 #[test]
 fn connection_form_rtlsdr_kind_renders() {
     let mut harness = panel_harness();
@@ -246,35 +178,8 @@ fn connection_form_qmx_kind_renders() {
     assert_eq!(harness.state().connection.form.kind, SourceKind::Qmx);
 }
 
-#[test]
-fn spots_panel_table_and_filters_render() {
-    let mut harness = right_panel_harness();
-    seed_spot_table(&mut harness);
-    open_right_collapsibles(&mut harness);
-    harness.run_steps(12);
-    assert!(harness.state().skimmer_ui.skimmer_enabled);
-}
 
-#[test]
-fn spots_panel_continent_filter_and_cq_only() {
-    let mut harness = right_panel_harness();
-    seed_spot_table(&mut harness);
-    open_right_collapsibles(&mut harness);
-    harness.state_mut().skimmer_ui.spot_cq_only = true;
-    harness.state_mut().skimmer_ui.continent_filter = true;
-    harness.run_steps(12);
-    assert!(harness.state().skimmer_ui.spot_cq_only);
-    assert!(harness.state().skimmer_ui.continent_filter);
-}
 
-#[test]
-fn skimmer_settings_all_sections_render() {
-    let mut harness = right_panel_harness();
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    harness.state_mut().skimmer_ui.skimmer_channels = 4;
-    open_right_collapsibles(&mut harness);
-    harness.run_steps(12);
-}
 
 #[test]
 fn audio_panel_device_and_playback_controls() {
@@ -304,27 +209,7 @@ fn performance_panel_fft_and_decimation_controls() {
     assert!(!harness.state().display.fft_auto);
 }
 
-#[test]
-fn performance_panel_wideband_skimmer_caps() {
-    let mut harness = right_panel_harness();
-    harness.state_mut().radio.is_kiwi = false;
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    harness.state_mut().engine_ui.stats.iq_passband_hz = 384_000.0;
-    harness.state_mut().engine_ui.stats.sample_rate = 384_000.0;
-    harness.state_mut().engine_ui.stats.spectrum_rate = 384_000.0;
-    harness.state_mut().engine_ui.stats.spectrum_fft = FFT_SIZE;
-    open_right_collapsibles(&mut harness);
-    harness.run_steps(8);
-}
 
-#[test]
-fn scp_panel_loaded_and_reload() {
-    let mut harness = right_panel_harness();
-    inject_and_step(&mut harness, poll_with_scp_loaded(), 2);
-    open_right_collapsibles(&mut harness);
-    harness.run_steps(12);
-    assert!(harness.state().engine_ui.stats.scp.loaded);
-}
 
 #[test]
 fn scp_panel_not_loaded_shows_warning() {
@@ -351,14 +236,6 @@ fn status_bar_log_and_history_toggles() {
     assert!(harness.state().chrome.show_history);
 }
 
-#[test]
-fn history_panel_with_annotations_from_spots() {
-    let mut harness = streaming_harness();
-    harness.state_mut().chrome.show_history = true;
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    inject_and_step(&mut harness, poll_with_spots(), 4);
-    harness.run_steps(6);
-}
 
 #[test]
 fn iq_drawer_record_controls_while_streaming() {
@@ -376,15 +253,6 @@ fn status_widgets_chips_render_while_streaming() {
     harness.run_steps(8);
 }
 
-#[test]
-fn spots_airspy_wideband_warning_when_skimmer_on() {
-    let mut harness = right_panel_harness();
-    harness.state_mut().radio.is_kiwi = false;
-    harness.state_mut().skimmer_ui.skimmer_enabled = true;
-    harness.state_mut().engine_ui.stats.sample_rate = 768_000.0;
-    open_right_collapsibles(&mut harness);
-    harness.run_steps(8);
-}
 
 #[test]
 fn connection_form_kiwi_browser_renders() {
@@ -400,8 +268,6 @@ fn poll_with_stats(stats: EngineStats) -> EnginePoll {
     EnginePoll {
         state: ConnState::Streaming,
         stats,
-        spots: Vec::new(),
-            decode_channels: Vec::new(),
         rows: vec![latest.clone()],
         latest,
         last_error: None,

@@ -1520,9 +1520,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1720,10 +1722,12 @@ dependencies = [
  "egui_extras",
  "egui_kittest",
  "flate2",
+ "getrandom 0.3.4",
  "libc",
  "libloading",
  "num-complex",
  "pkg-config",
+ "pollster",
  "rayon",
  "rfd",
  "rtrb",
@@ -1733,6 +1737,9 @@ dependencies = [
  "serialport",
  "tungstenite",
  "ureq",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

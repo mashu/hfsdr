@@ -7,6 +7,9 @@ mod smooth;
 mod spot_labels;
 mod trace;
 mod waterfall;
+pub(crate) use hfsdr::render::waterfall_gpu::{
+    install as install_waterfall_gpu, uniforms_for as waterfall_gpu_uniforms, WaterfallCallback,
+};
 mod waterfall_mesh;
 
 use eframe::egui::{Painter, Rect, Sense, Ui, Vec2};
@@ -62,6 +65,9 @@ pub struct PlotParams<'a> {
     pub plot_width: f32,
     /// Viewport waterfall texture (same frequency mapping as the scope trace).
     pub waterfall_display: Option<&'a eframe::egui::TextureHandle>,
+    /// Shader-path payload. When present the GPU waterfall paints and
+    /// `waterfall_display` is ignored.
+    pub waterfall_gpu: Option<WaterfallCallback>,
     /// Ring-buffer write head (`next` row index); draw uses fixed screen UV mapping.
     pub waterfall_row_head: usize,
 }
@@ -81,7 +87,7 @@ impl PanadapterPlot {
         interaction: &mut PlotInteraction,
         view: &mut PlotViewState,
         freq_map: PlotFreqMapping,
-        p: &PlotParams,
+        p: &mut PlotParams,
         hover_out: &mut Option<f64>,
         plot_rect_out: &mut Option<Rect>,
     ) -> Vec<PlotAction> {

@@ -173,32 +173,10 @@ impl WaterfallApp {
                     .small()
                     .color(MUTED),
                 );
-                if self.is_wideband() && self.skimmer_ui.skimmer_enabled {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Repaint capped at {} FPS while wideband + skimmer",
-                            self.effective_target_fps()
-                        ))
-                        .small()
-                        .color(MUTED),
-                    );
-                }
-                let eff_sk = self.effective_skimmer();
-                if eff_sk.max_channels < self.skimmer_ui.skimmer.max_channels {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Skimmer channels capped at {} on wideband",
-                            eff_sk.max_channels
-                        ))
-                        .small()
-                        .color(MUTED),
-                    );
-                }
             });
 
             popup_section(ui, "Runtime", None, |ui| {
                 stat_row(ui, "IQ / pump", stats.last_drain.to_string());
-                stat_row(ui, "Decoders", self.skimmer_ui.skimmer_channels.to_string());
                 if stats.pipeline.dual_ring {
                     stat_row(ui, "IQ path", "dual ring (raw + decim)");
                 }
