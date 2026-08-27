@@ -8,7 +8,8 @@ use std::sync::Mutex;
 use std::thread;
 
 use super::inner::Engine;
-use super::types::{EngineCommand, EngineParams, EnginePoll, EngineShared};
+use super::link::{engine_link, UiLink};
+use super::types::{EngineCommand, EngineParams, EnginePoll};
 
 #[cfg(target_arch = "wasm32")]
 use super::inner::IdlePacing;
@@ -24,24 +25,6 @@ use std::rc::Rc;
 /// repaint interval — that independence is the point.
 #[cfg(target_arch = "wasm32")]
 const PUMP_INTERVAL_MS: i32 = 8;
-
-/// UI-side handle to the engine thread.
-pub struct EngineHandle {
-    cmd_tx: Option<Sender<EngineCommand>>,
-    shared: Arc<Mutex<EngineShared>>,
-    params: Arc<Mutex<EngineParams>>,
-    connect_cancel: Arc<AtomicBool>,
-    join: Option<thread::JoinHandle<()>>,
-    /// Headless UI tests inject polls here instead of running the engine thread.
-    test_polls: Option<Arc<Mutex<VecDeque<EnginePoll>>>>,
-    /// Browser builds own the engine outright: a tab has no thread to run it
-    /// on. It is stepped by [`PumpTimer`], not by the renderer.
-    #[cfg(target_arch = "wasm32")]
-    engine: Option<Rc<RefCell<Engine>>>,
-    /// Drops the interval when the handle goes away.
-    #[cfg(target_arch = "wasm32")]
-    _pump: Option<PumpTimer>,
-}
 
 /// A `setInterval` that pumps the engine, cancelled on drop.
 ///
@@ -65,29 +48,38 @@ impl Drop for PumpTimer {
     }
 }
 
+/// UI-side handle to the engine.
+///
+/// Every method here is wait-free. That is the contract: the renderer calls
+/// these from inside a frame, so any one of them that could block on the engine
+/// would eventually cost a frame. See [`super::link`] for how.
+pub struct EngineHandle {
+    link: Option<UiLink>,
+    join: Option<thread::JoinHandle<()>>,
+    /// Headless UI tests inject polls here instead of running an engine.
+    #[cfg(test)]
+    test_polls: Option<Arc<Mutex<VecDeque<EnginePoll>>>>,
+    /// Browser builds own the engine outright: a tab has no thread to run it
+    /// on. It is stepped by [`PumpTimer`], not by the renderer.
+    #[cfg(target_arch = "wasm32")]
+    engine: Option<Rc<RefCell<Engine>>>,
+    /// Drops the interval when the handle goes away.
+    #[cfg(target_arch = "wasm32")]
+    _pump: Option<PumpTimer>,
+}
+
 impl EngineHandle {
     pub fn spawn() -> Self {
-        let (cmd_tx, cmd_rx) = channel::<EngineCommand>();
-        let shared = Arc::new(Mutex::new(EngineShared::default()));
-        let params = Arc::new(Mutex::new(EngineParams::default()));
-        let connect_cancel = Arc::new(AtomicBool::new(false));
-        let shared_thread = Arc::clone(&shared);
-        let params_thread = Arc::clone(&params);
-        let connect_cancel_thread = Arc::clone(&connect_cancel);
-
+        let (engine_side, ui_side) = engine_link();
         let join = thread::Builder::new()
             .name("engine".into())
-            .spawn(move || {
-                Engine::new(cmd_rx, shared_thread, params_thread, connect_cancel_thread).run();
-            })
+            .spawn(move || Engine::new(engine_side).run())
             .expect("spawn engine thread");
 
         Self {
-            cmd_tx: Some(cmd_tx),
-            shared,
-            params,
-            connect_cancel,
+            link: Some(ui_side),
             join: Some(join),
+            #[cfg(test)]
             test_polls: None,
             #[cfg(target_arch = "wasm32")]
             engine: None,
@@ -96,19 +88,14 @@ impl EngineHandle {
         }
     }
 
-    /// Engine handle with no worker thread.
+    /// Handle with no engine behind it.
     ///
-    /// Browser builds cannot spawn threads, and the headless UI harness does not
-    /// want one. Polls are supplied by the caller via [`Self::inject_poll`]
-    /// instead of coming from a running pipeline, so the UI runs against real
-    /// [`EnginePoll`] data with nothing behind it.
-    #[cfg(any(test, not(feature = "gui-core")))]
+    /// The headless UI harness drives the app from injected [`EnginePoll`]s
+    /// rather than a running pipeline.
+    #[cfg(test)]
     pub fn spawn_detached() -> Self {
         Self {
-            cmd_tx: None,
-            shared: Arc::new(Mutex::new(EngineShared::default())),
-            params: Arc::new(Mutex::new(EngineParams::default())),
-            connect_cancel: Arc::new(AtomicBool::new(false)),
+            link: None,
             join: None,
             test_polls: Some(Arc::new(Mutex::new(VecDeque::new()))),
             #[cfg(target_arch = "wasm32")]
@@ -121,9 +108,8 @@ impl EngineHandle {
     /// Engine running in-process on its own timer.
     ///
     /// The browser has no thread to give the engine, so it lives here and a
-    /// `setInterval` pumps it. Everything else — the command channel, the
-    /// shared snapshot, `try_poll` — is identical to the threaded handle,
-    /// because the engine does not know which driver is turning it.
+    /// `setInterval` pumps it. The boundary is the same one the threaded handle
+    /// uses, because the engine does not know which driver is turning it.
     ///
     /// The renderer deliberately does not turn it. Stepping from the frame
     /// callback made the DSP's rate a function of the display's, so a skipped
@@ -132,16 +118,8 @@ impl EngineHandle {
     pub fn spawn_in_process() -> Self {
         use wasm_bindgen::JsCast as _;
 
-        let (cmd_tx, cmd_rx) = channel::<EngineCommand>();
-        let shared = Arc::new(Mutex::new(EngineShared::default()));
-        let params = Arc::new(Mutex::new(EngineParams::default()));
-        let connect_cancel = Arc::new(AtomicBool::new(false));
-        let engine = Rc::new(RefCell::new(Engine::new(
-            cmd_rx,
-            Arc::clone(&shared),
-            Arc::clone(&params),
-            Arc::clone(&connect_cancel),
-        )));
+        let (engine_side, ui_side) = engine_link();
+        let engine = Rc::new(RefCell::new(Engine::new(engine_side)));
 
         let engine_cb = Rc::clone(&engine);
         let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
@@ -166,11 +144,9 @@ impl EngineHandle {
         }
 
         Self {
-            cmd_tx: Some(cmd_tx),
-            shared,
-            params,
-            connect_cancel,
+            link: Some(ui_side),
             join: None,
+            #[cfg(test)]
             test_polls: None,
             engine: Some(engine),
             _pump: pump,
@@ -178,7 +154,7 @@ impl EngineHandle {
     }
 
     /// Queue a synthetic engine poll (detached handles only).
-    #[cfg(any(test, not(feature = "gui-core")))]
+    #[cfg(test)]
     pub fn inject_poll(&self, poll: EnginePoll) {
         let Some(q) = &self.test_polls else {
             return;
@@ -188,40 +164,68 @@ impl EngineHandle {
         }
     }
 
+    /// Send a discrete command. Unbounded channel, so this never blocks.
     pub fn send(&self, cmd: EngineCommand) {
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(cmd);
+        if let Some(link) = &self.link {
+            let _ = link.cmd_tx.send(cmd);
         }
     }
 
     /// Abort a blocking `connect()` from the UI thread (must run before or with Disconnect).
     pub fn abort_connect(&self) {
-        self.connect_cancel.store(true, Ordering::Relaxed);
-    }
-
-    /// Overwrite the engine's view of UI settings (called once per UI frame).
-    pub fn set_params(&self, params: EngineParams) {
-        if let Ok(mut guard) = self.params.lock() {
-            *guard = params;
+        if let Some(link) = &self.link {
+            link.connect_cancel.store(true, Ordering::Relaxed);
         }
     }
 
-    pub fn try_poll(&self) -> Option<EnginePoll> {
+    /// Overwrite the engine's view of UI settings (called once per UI frame).
+    ///
+    /// Wait-free: writes into a slot this side owns, then one atomic swap.
+    pub fn set_params(&mut self, params: EngineParams) {
+        if let Some(link) = &mut self.link {
+            *link.params.slot() = params;
+            link.params.publish();
+        }
+    }
+
+    /// Take the latest engine state and any rows that arrived since the last
+    /// call. Wait-free — never waits on the engine, whatever it is doing.
+    ///
+    /// Returns `None` only when there is no engine at all.
+    pub fn try_poll(&mut self) -> Option<EnginePoll> {
+        #[cfg(test)]
         if let Some(q) = &self.test_polls {
             let mut guard = q.lock().ok()?;
             return guard.pop_front();
         }
-        let mut guard = self.shared.try_lock().ok()?;
-        let rows: Vec<Vec<f32>> = guard.new_rows.drain(..).collect();
+        let link = self.link.as_mut()?;
+        link.snapshot.fetch();
+        let snap = link.snapshot.slot();
+
+        let mut rows = Vec::new();
+        while let Ok(row) = link.rows_rx.pop() {
+            rows.push(row);
+        }
+
         Some(EnginePoll {
-            state: guard.state.clone(),
-            stats: guard.stats.clone(),
+            state: snap.state.clone(),
+            stats: snap.stats.clone(),
             rows,
-            latest: guard.latest.clone(),
-            last_error: guard.last_error.clone(),
-            audio_scope: guard.audio_scope.clone(),
-            audio_waveform: guard.audio_waveform.clone(),
+            latest: snap.latest.clone(),
+            last_error: snap.last_error.clone(),
+            audio_scope: snap.audio_scope.clone(),
+            audio_waveform: snap.audio_waveform.clone(),
         })
+    }
+
+    /// Hand a finished row buffer back to the engine to refill.
+    ///
+    /// Optional: dropping the buffer instead simply costs an allocation on the
+    /// engine's next row.
+    pub fn recycle_row(&mut self, row: Vec<f32>) {
+        if let Some(link) = &mut self.link {
+            let _ = link.spent_rows.push(row);
+        }
     }
 
     /// Signal shutdown and detach the worker thread — never blocks the UI thread.
@@ -232,6 +236,9 @@ impl EngineHandle {
             // Dropping JoinHandle without join() detaches the thread.
             drop(h);
         }
+        // Dropping the UI half closes the command channel, which is how a
+        // detached engine notices it should stop.
+        self.link = None;
     }
 }
 
@@ -260,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_handle_inject_and_drain() {
-        let handle = EngineHandle::spawn_detached();
+        let mut handle = EngineHandle::spawn_detached();
         handle.inject_poll(sample_poll(ConnState::Streaming));
         let poll = handle.try_poll().expect("queued poll");
         assert!(matches!(poll.state, ConnState::Streaming));
@@ -276,21 +283,31 @@ mod tests {
         handle.shutdown_now();
     }
 
+    /// Params must actually reach the engine's side of the boundary.
     #[test]
-    fn set_params_roundtrip() {
-        let handle = EngineHandle::spawn_detached();
-        let mut params = EngineParams::default();
-        params.volume = 0.42;
-        params.rf_gain_db = 6.0;
-        handle.set_params(params.clone());
-        let guard = handle.params.lock().expect("params lock");
-        assert!((guard.volume - 0.42).abs() < f32::EPSILON);
-        assert!((guard.rf_gain_db - 6.0).abs() < f32::EPSILON);
+    fn set_params_reaches_the_engine() {
+        let (mut engine_side, ui_side) = crate::engine::link::engine_link();
+        let mut handle = EngineHandle {
+            link: Some(ui_side),
+            join: None,
+            test_polls: None,
+        };
+        let params = EngineParams {
+            volume: 0.42,
+            rf_gain_db: 6.0,
+            ..EngineParams::default()
+        };
+        handle.set_params(params);
+
+        assert!(engine_side.params.fetch(), "engine saw no params update");
+        let seen = engine_side.params.slot();
+        assert!((seen.volume - 0.42).abs() < f32::EPSILON);
+        assert!((seen.rf_gain_db - 6.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn test_handle_fifo_order() {
-        let handle = EngineHandle::spawn_detached();
+        let mut handle = EngineHandle::spawn_detached();
         handle.inject_poll(sample_poll(ConnState::Connecting {
             label: "a".into(),
         }));
@@ -304,8 +321,208 @@ mod tests {
 
     #[test]
     fn test_handle_send_is_noop() {
-        let handle = EngineHandle::spawn_detached();
+        let mut handle = EngineHandle::spawn_detached();
         handle.send(EngineCommand::Disconnect);
         assert!(handle.try_poll().is_none());
+    }
+}
+
+/// The claim this boundary exists to make: the UI never waits for the engine.
+///
+/// Worth being precise about what a mutex actually costs here, because it is
+/// not what it first looks like. Measured against this same load, a contended
+/// `Mutex` blocks the reader for about 50 us — real, but not the problem. The
+/// problem is what the old boundary did to avoid that wait: `try_lock`, which
+/// under the same contention **missed 4428 of 5000 updates**. The UI was
+/// discarding ~89% of the engine's snapshots and rendering whatever it managed
+/// to catch, which is where bursty row delivery and stale readings came from.
+///
+/// So the timing tests below are only catastrophe guards, and their budget is
+/// loose on purpose. The test that actually discriminates between a mutex and
+/// this boundary is [`never_blocks::try_poll_never_misses_an_update`].
+#[cfg(test)]
+mod never_blocks {
+    use super::*;
+    use crate::engine::link::engine_link;
+    use crate::engine::{ConnState, EngineStats, FFT_SIZE};
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    /// A UI-side handle wired to an engine side we drive by hand.
+    fn wired() -> (EngineHandle, crate::engine::link::EngineLink) {
+        let (engine_side, ui_side) = engine_link();
+        (
+            EngineHandle {
+                link: Some(ui_side),
+                join: None,
+                test_polls: None,
+            },
+            engine_side,
+        )
+    }
+
+    /// Publish as fast as possible from another thread, timing the UI's worst
+    /// single call to `f`.
+    fn worst_under_load<F>(mut f: F) -> Duration
+    where
+        F: FnMut(&mut EngineHandle),
+    {
+        let (mut handle, mut engine_side) = wired();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_w = Arc::clone(&stop);
+
+        let writer = thread::spawn(move || {
+            let mut n = 0u64;
+            while !stop_w.load(Ordering::Relaxed) {
+                n += 1;
+                {
+                    let slot = engine_side.snapshot.slot();
+                    slot.state = ConnState::Streaming;
+                    slot.stats = EngineStats::default();
+                    slot.stats.dropped = n;
+                    slot.latest.resize(FFT_SIZE, -120.0);
+                    slot.latest.fill(-(n as f32 % 100.0));
+                }
+                engine_side.snapshot.publish();
+                if !engine_side.rows_tx.is_full() {
+                    let _ = engine_side.rows_tx.push(vec![-90.0; FFT_SIZE]);
+                }
+                while engine_side.spent_rows.pop().is_ok() {}
+            }
+        });
+
+        let mut worst = Duration::ZERO;
+        for _ in 0..5_000 {
+            let t0 = Instant::now();
+            f(&mut handle);
+            worst = worst.max(t0.elapsed());
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().expect("engine side panicked");
+        worst
+    }
+
+    /// A catastrophe guard, not a discriminator: a contended mutex measures
+    /// ~50 us here, so this budget would not catch one. It catches a boundary
+    /// that has started waiting on something unbounded.
+    const BUDGET: Duration = Duration::from_millis(20);
+
+    #[test]
+    fn try_poll_never_waits_for_a_busy_engine() {
+        let worst = worst_under_load(|h| {
+            let _ = h.try_poll();
+        });
+        assert!(
+            worst < BUDGET,
+            "worst try_poll took {worst:?} while the engine was publishing"
+        );
+    }
+
+    #[test]
+    fn set_params_never_waits_for_a_busy_engine() {
+        let worst = worst_under_load(|h| h.set_params(EngineParams::default()));
+        assert!(
+            worst < BUDGET,
+            "worst set_params took {worst:?} while the engine was publishing"
+        );
+    }
+
+    #[test]
+    fn send_never_waits_for_a_busy_engine() {
+        let worst = worst_under_load(|h| h.send(EngineCommand::Disconnect));
+        assert!(
+            worst < BUDGET,
+            "worst send took {worst:?} while the engine was publishing"
+        );
+    }
+
+    /// The discriminating test: a reader polling a busy writer must obtain a
+    /// snapshot every single time and never see one go backwards.
+    ///
+    /// `try_lock` on a mutex fails ~89% of the time under this exact load. A
+    /// wait-free reader has no failure mode to have.
+    #[test]
+    fn try_poll_never_misses_an_update() {
+        let (mut handle, mut engine_side) = wired();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_w = Arc::clone(&stop);
+        // Proves the writer actually ran, without assuming *when* it ran: on a
+        // busy runner it may get no CPU at all during a fixed polling window,
+        // and asserting otherwise would test the scheduler, not the boundary.
+        let published = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let published_w = Arc::clone(&published);
+
+        let writer = thread::spawn(move || {
+            let mut n = 0u64;
+            while !stop_w.load(Ordering::Relaxed) {
+                n += 1;
+                let slot = engine_side.snapshot.slot();
+                slot.stats.dropped = n;
+                slot.latest.resize(FFT_SIZE, -120.0);
+                slot.latest.fill(-(n as f32 % 100.0));
+                engine_side.snapshot.publish();
+                published_w.store(n, Ordering::Relaxed);
+            }
+        });
+
+        // Wait for the writer to be genuinely running before measuring.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while published.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
+        assert!(
+            published.load(Ordering::Relaxed) > 0,
+            "the writer thread never ran; this test observed no concurrency"
+        );
+
+        // The discriminating assertion: under a live writer every poll returns
+        // a snapshot. `try_lock` fails ~89% of them under this load.
+        let mut previous = 0u64;
+        for i in 0..5_000 {
+            let poll = handle
+                .try_poll()
+                .unwrap_or_else(|| panic!("poll {i} returned nothing while the engine was live"));
+            assert!(
+                poll.stats.dropped >= previous,
+                "snapshot went backwards at poll {i}: {} after {previous}",
+                poll.stats.dropped
+            );
+            previous = poll.stats.dropped;
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().expect("engine side panicked");
+    }
+
+    /// Rows are a stream, so none may be silently coalesced the way a
+    /// latest-value slot would coalesce them.
+    #[test]
+    fn every_row_reaches_the_ui_in_order() {
+        let (mut handle, mut engine_side) = wired();
+        for i in 0..64u32 {
+            let _ = engine_side.rows_tx.push(vec![i as f32; 4]);
+        }
+        engine_side.snapshot.publish();
+
+        let poll = handle.try_poll().expect("poll");
+        assert_eq!(poll.rows.len(), 64, "rows were coalesced or lost");
+        for (i, row) in poll.rows.iter().enumerate() {
+            assert_eq!(row[0], i as f32, "rows arrived out of order at {i}");
+        }
+    }
+
+    /// A UI that falls behind must see the newest state, not a queue of old
+    /// ones — otherwise the display lags further behind the longer it stutters.
+    #[test]
+    fn snapshot_skips_to_the_newest_state() {
+        let (mut handle, mut engine_side) = wired();
+        for n in 1..=50u64 {
+            engine_side.snapshot.slot().stats.dropped = n;
+            engine_side.snapshot.publish();
+        }
+        let poll = handle.try_poll().expect("poll");
+        assert_eq!(
+            poll.stats.dropped, 50,
+            "UI got a backlogged snapshot instead of the newest"
+        );
     }
 }

@@ -1,13 +1,11 @@
 //! Engine types shared with the UI thread.
 
-use std::collections::VecDeque;
-
 use hfsdr::{CwChannelSettings, FftWindowKind, PipelineMetrics, DEFAULT_KAISER_BETA, DEFAULT_FFT_WINDOW};
 
 use crate::source::ConnectRequest;
 
 use crate::engine::policy::MIN_SPECTRUM_ROWS_WIDEBAND;
-use super::{FFT_SIZE, WATERFALL_ROWS};
+use super::FFT_SIZE;
 
 
 /// Connection lifecycle, surfaced to the UI.
@@ -153,29 +151,28 @@ impl Default for EngineParams {
     }
 }
 
-/// Data the engine publishes for the UI to render.
-pub struct EngineShared {
+/// Everything the UI reads from the engine that has latest-value semantics.
+///
+/// Not the spectrum rows: those are a stream, and a dropped row is a gap in the
+/// waterfall. They travel on their own queue — see [`super::link`].
+pub struct EngineSnapshot {
     pub latest: Vec<f32>,
-    pub new_rows: VecDeque<Vec<f32>>,
     pub state: ConnState,
     pub stats: EngineStats,
     pub last_error: Option<String>,
-    pub rows_seq: u64,
     /// Recent demod audio envelope slots for the AF scope (oldest first).
     pub audio_scope: Vec<f32>,
     /// Recent raw demod audio for waveform / phosphor view (oldest first).
     pub audio_waveform: Vec<f32>,
 }
 
-impl Default for EngineShared {
+impl Default for EngineSnapshot {
     fn default() -> Self {
         Self {
             latest: vec![-120.0; FFT_SIZE],
-            new_rows: VecDeque::with_capacity(WATERFALL_ROWS),
             state: ConnState::Disconnected,
             stats: EngineStats::default(),
             last_error: None,
-            rows_seq: 0,
             audio_scope: Vec::new(),
             audio_waveform: Vec::new(),
         }

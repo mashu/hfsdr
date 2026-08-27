@@ -21,7 +21,8 @@ use hfsdr::IngressWorker;
 use crate::engine::audio::{AudioScopeRing, AudioWaveformRing};
 use super::Engine;
 use crate::engine::policy::{catchup_pumps_max, MAX_DRAIN_WIDEBAND};
-use crate::engine::types::{EngineCommand, EngineParams, EngineShared};
+use crate::engine::link::EngineLink;
+use crate::engine::types::{EngineCommand, EngineParams};
 use crate::engine::policy::MIN_SPECTRUM_ROWS_WIDEBAND;
 use crate::engine::{FFT_HOP, FFT_SIZE};
 
@@ -81,16 +82,26 @@ impl IdlePacing {
 }
 
 impl Engine {
-    pub(crate) fn new(
-        cmd_rx: Receiver<EngineCommand>,
-        shared: Arc<Mutex<EngineShared>>,
-        params: Arc<Mutex<EngineParams>>,
-        connect_cancel: Arc<AtomicBool>,
-    ) -> Self {
+    pub(crate) fn new(link: EngineLink) -> Self {
+        let EngineLink {
+            cmd_rx,
+            snapshot,
+            rows_tx,
+            spent_rows,
+            params,
+            connect_cancel,
+        } = link;
         Self {
             cmd_rx,
-            shared,
+            snapshot,
+            rows_tx,
+            spent_rows,
             params,
+            rows_dropped: 0,
+            state: crate::engine::types::ConnState::Disconnected,
+            last_error: None,
+            last_slow: false,
+            last_snr: 0.0,
             conn: None,
             request: None,
             audio: None,
@@ -189,11 +200,7 @@ impl Engine {
                 self.poll_handshake();
                 let (ring_fill, _) = self.measure_iq_buffer();
                 let iq_recording = self.recorder.is_some();
-                let full_drain = self
-                    .params
-                    .lock()
-                    .map(|p| p.full_drain_spectrum)
-                    .unwrap_or(false);
+                let full_drain = self.params.slot().full_drain_spectrum;
                 let max_pumps = catchup_pumps_max(ring_fill, iq_recording, full_drain);
                 let mut pumps = 0usize;
                 loop {

@@ -28,13 +28,30 @@ use crate::audio::AudioOutput;
 use crate::source::{Connection, ConnectRequest};
 
 use super::audio::{AudioScopeRing, AudioWaveformRing};
-use super::types::{EngineCommand, EngineParams, EngineShared};
+use super::link::EngineLink;
+use super::types::{ConnState, EngineCommand, EngineParams, EngineSnapshot};
 
 /// Owned entirely by the engine thread.
 pub(crate) struct Engine {
     cmd_rx: Receiver<EngineCommand>,
-    shared: Arc<Mutex<EngineShared>>,
-    params: Arc<Mutex<EngineParams>>,
+    /// Wait-free publish side of the UI boundary; see [`super::link`].
+    snapshot: hfsdr::sync::LatestWriter<EngineSnapshot>,
+    rows_tx: rtrb::Producer<Vec<f32>>,
+    spent_rows: rtrb::Consumer<Vec<f32>>,
+    params: hfsdr::sync::LatestReader<EngineParams>,
+    /// Rows dropped because the UI fell a whole waterfall behind.
+    rows_dropped: u64,
+    /// Authoritative connection state and error.
+    ///
+    /// A latest-value slot cannot be updated field by field — the writer's slot
+    /// is an older generation — so the engine owns these and every publish
+    /// copies the whole picture across.
+    state: ConnState,
+    last_error: Option<String>,
+    last_slow: bool,
+    /// Last published SNR; previously read back out of the shared struct,
+    /// which a latest-value slot cannot offer.
+    last_snr: f32,
 
     pub(crate) conn: Option<Connection>,
     request: Option<ConnectRequest>,

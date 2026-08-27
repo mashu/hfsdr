@@ -61,6 +61,28 @@ jobs:
           fi
         shell: bash
 
+  miri:
+    name: Miri (lock-free boundary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # The UI/engine boundary is wait-free and therefore contains unsafe:
+      # three slots handed between two threads by atomic swap. Nothing about
+      # that is checkable by running it on x86 — a relaxed-ordering bug there
+      # behaves identically to a correct one, because x86 does not reorder the
+      # way the model allows. Miri does, and catches it as a data race.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Miri on hfsdr::sync
+        run: "cargo miri test --lib sync::"
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

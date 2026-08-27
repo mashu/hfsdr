@@ -10,10 +10,12 @@
 //! The UI communicates by:
 //! - writing [`EngineParams`] (DSP settings, volume) through a shared mutex,
 //! - sending discrete [`EngineCommand`]s (connect, tune, ...),
-//! - and reading [`EngineShared`] (spectrum rows, status, stats, spots).
+//! - and reading [`EngineSnapshot`] plus a row queue, neither of which can
+//!   ever make the UI wait (see [`link`]).
 
 mod audio;
 mod handle;
+pub(crate) mod link;
 mod inner;
 mod perf;
 mod policy;
@@ -29,7 +31,7 @@ pub use handle::EngineHandle;
 #[allow(unused_imports)] // engine-bench binary
 pub(crate) use inner::Engine;
 #[allow(unused_imports)] // engine-bench binary
-pub(crate) use types::EngineShared;
+pub(crate) use types::EngineSnapshot;
 #[allow(unused_imports)] // engine-bench binary
 pub use types::{
     ConnState, EngineCommand, EngineParams, EnginePoll, EngineStats,

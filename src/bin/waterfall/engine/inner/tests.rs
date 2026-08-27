@@ -12,23 +12,52 @@ use hfsdr::{Complex32, IqRecorder};
 use super::Engine;
 use crate::audio;
 use crate::engine::types::{
-    ConnState, EngineCommand, EngineParams, EngineShared,
+    ConnState, EngineCommand, EngineParams, EngineSnapshot,
 };
 use crate::engine::FFT_SIZE;
 use crate::source::ConnectRequest;
 
-fn test_engine() -> (
-    Engine,
-    Arc<Mutex<EngineShared>>,
-    Arc<Mutex<EngineParams>>,
-) {
+/// Reads what the engine published, the way the UI does.
+///
+/// Keeps the `.lock().expect("lock").field` shape the tests were written
+/// against, so the boundary change stays a boundary change. There is no lock
+/// underneath any more — `lock` fetches the latest snapshot and hands back a
+/// view of it.
+pub(super) struct Published(std::cell::RefCell<crate::engine::link::UiLink>);
+
+impl Published {
+    #[allow(clippy::result_unit_err)]
+    pub(super) fn lock(&self) -> Result<std::cell::Ref<'_, EngineSnapshot>, ()> {
+        self.0.borrow_mut().snapshot.fetch();
+        Ok(std::cell::Ref::map(self.0.borrow(), |l| l.snapshot.slot()))
+    }
+
+    /// Rows published since the last call.
+    pub(super) fn drain_rows(&self) -> Vec<Vec<f32>> {
+        let mut link = self.0.borrow_mut();
+        let mut out = Vec::new();
+        while let Ok(row) = link.rows_rx.pop() {
+            out.push(row);
+        }
+        out
+    }
+
+    pub(super) fn set_params(&self, params: EngineParams) {
+        let mut link = self.0.borrow_mut();
+        *link.params.slot() = params;
+        link.params.publish();
+    }
+}
+
+fn test_engine() -> (Engine, Published, Published) {
     audio::set_test_output_devices(Some(vec!["Test Output".into()]));
-    let (_tx, rx) = channel();
-    let shared = Arc::new(Mutex::new(EngineShared::default()));
-    let params = Arc::new(Mutex::new(EngineParams::default()));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let engine = Engine::new(rx, Arc::clone(&shared), Arc::clone(&params), cancel);
-    (engine, shared, params)
+    let (engine_side, ui_side) = crate::engine::link::engine_link();
+    let engine = Engine::new(engine_side);
+    let published = Published(std::cell::RefCell::new(ui_side));
+    // Both slots of the old tuple are the same object now; the second used to
+    // be the params mutex and is kept so call sites do not all have to change.
+    let dummy = Published(std::cell::RefCell::new(crate::engine::link::engine_link().1));
+    (engine, published, dummy)
 }
 
 fn tone_iq(n: usize, rate: f32, tone_hz: f32, amp: f32) -> Vec<Complex32> {
@@ -359,10 +388,10 @@ fn wideband_mock_ring_pumps() {
     engine.first_iq_received = true;
     engine.set_state(ConnState::Streaming);
     engine.last_data = Instant::now();
-    {
-        let mut p = params.lock().expect("lock");
-        p.full_drain_spectrum = true;
-    }
+    params.set_params(EngineParams {
+        full_drain_spectrum: true,
+        ..EngineParams::default()
+    });
     for _ in 0..40 {
         engine.pump_stream();
     }
@@ -389,14 +418,12 @@ fn engine_run_loop_playback_and_shutdown() {
     use std::sync::mpsc::channel;
     use std::thread;
 
-    let (tx, rx) = channel();
-    let shared = Arc::new(Mutex::new(EngineShared::default()));
-    let params = Arc::new(Mutex::new(EngineParams::default()));
-    let cancel = Arc::new(AtomicBool::new(false));
     audio::set_test_output_devices(Some(vec!["Test Output".into()]));
-    let shared_bg = Arc::clone(&shared);
+    let (engine_side, ui_side) = crate::engine::link::engine_link();
+    let tx = ui_side.cmd_tx.clone();
+    let shared = Published(std::cell::RefCell::new(ui_side));
     let handle = thread::spawn(move || {
-        let mut engine = Engine::new(rx, shared_bg, params, cancel);
+        let mut engine = Engine::new(engine_side);
         engine.run();
     });
     let path = write_capture(&tone_iq(8_192, 12_000.0, 700.0, 0.3), 12_000, 14_010_000.0);
@@ -482,14 +509,12 @@ mod stepped_driver {
     /// `test_engine` drops its sender, which disconnects the channel and stops
     /// the engine on the first step — every idle path then short-circuits and
     /// a test built on it silently checks nothing.
-    fn stepped_engine() -> (Engine, Sender<EngineCommand>, Arc<Mutex<EngineShared>>) {
+    fn stepped_engine() -> (Engine, Sender<EngineCommand>, Published) {
         audio::set_test_output_devices(Some(vec!["Test Output".into()]));
-        let (tx, rx) = channel();
-        let shared = Arc::new(Mutex::new(EngineShared::default()));
-        let params = Arc::new(Mutex::new(EngineParams::default()));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let engine = Engine::new(rx, Arc::clone(&shared), params, cancel);
-        (engine, tx, shared)
+        let (engine_side, ui_side) = crate::engine::link::engine_link();
+        let tx = ui_side.cmd_tx.clone();
+        let engine = Engine::new(engine_side);
+        (engine, tx, Published(std::cell::RefCell::new(ui_side)))
     }
 
     /// `step` must never block: the browser calls it from the frame callback,
@@ -517,26 +542,36 @@ mod stepped_driver {
         drop(tx);
     }
 
-    /// An idle engine still publishes stats every step, so the UI keeps
-    /// updating instead of freezing on whatever it last saw.
+    /// An idle engine still publishes every step, so the UI keeps updating
+    /// instead of freezing on whatever it last saw.
     ///
-    /// Asserting the state is `Disconnected` would prove nothing —
-    /// `EngineShared::default()` already is. The check has to be on a field the
-    /// step must overwrite.
+    /// The proof is that the reader sees a *fresh* publish: a latest-value slot
+    /// reports whether anything new arrived since the last fetch, which is
+    /// exactly the question. Asserting on a field's value would pass on a stale
+    /// slot that happened to hold the right number.
     #[test]
-    fn idle_steps_publish_stats() {
-        let (mut engine, tx, shared) = stepped_engine();
+    fn idle_steps_publish_every_time() {
+        let (mut engine, tx, published) = stepped_engine();
         engine.latest = vec![-80.0; FFT_SIZE];
-        if let Ok(mut guard) = shared.lock() {
-            guard.stats.spectrum_fft = 1;
-        }
+
+        // Clear anything published during construction.
+        let _ = published.lock();
 
         engine.step(IdlePacing::Return);
+        {
+            let guard = published.lock().expect("lock");
+            assert_eq!(guard.stats.spectrum_fft, FFT_SIZE);
+        }
 
-        assert_eq!(
-            shared.lock().expect("shared lock").stats.spectrum_fft,
-            FFT_SIZE,
-            "an idle step published no stats"
+        // And again: every idle step must publish, not just the first.
+        assert!(
+            !published.0.borrow_mut().snapshot.fetch(),
+            "nothing should be pending immediately after a fetch"
+        );
+        engine.step(IdlePacing::Return);
+        assert!(
+            published.0.borrow_mut().snapshot.fetch(),
+            "an idle step published nothing"
         );
         drop(tx);
     }
@@ -577,14 +612,25 @@ mod stepped_driver {
 
     /// Dropping the last sender must stop the engine rather than leave the
     /// browser stepping a dead engine forever.
+    ///
+    /// "Last" is the point: the UI half of the link owns a sender too, so both
+    /// have to go. That is also how it happens in the app — the whole handle is
+    /// dropped, taking the link with it.
     #[test]
-    fn step_stops_when_the_command_channel_closes() {
-        let (mut engine, tx, _shared) = stepped_engine();
+    fn step_stops_when_every_sender_is_gone() {
+        let (mut engine, tx, published) = stepped_engine();
         engine.step(IdlePacing::Return);
         assert!(engine.running, "engine stopped while the channel was open");
 
         drop(tx);
         engine.step(IdlePacing::Return);
-        assert!(!engine.running, "a closed channel must end the engine");
+        assert!(
+            engine.running,
+            "the UI half still holds a sender; the engine must keep running"
+        );
+
+        drop(published);
+        engine.step(IdlePacing::Return);
+        assert!(!engine.running, "a fully closed channel must end the engine");
     }
 }

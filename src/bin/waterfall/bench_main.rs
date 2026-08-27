@@ -31,9 +31,10 @@ use hfsdr::{
 use rtrb::RingBuffer;
 
 use engine::{
-    demod_tail_max, wideband_tail_len, ConnState, Engine, EngineParams, EngineShared, EngineStats,
+    demod_tail_max, wideband_tail_len, ConnState, Engine, EngineParams, EngineStats,
     MAX_AUDIO_SAMPLES_NARROW, MAX_AUDIO_SAMPLES_WB,
 };
+use engine::link::engine_link;
 use source::{Connection, DeviceSource};
 
 #[cfg(feature = "airspy")]
@@ -140,8 +141,6 @@ fn run_engine_bench(args: &[String]) {
         }
     }
 
-    let (_tx, rx) = channel();
-    let shared = Arc::new(Mutex::new(EngineShared::default()));
     let mut ep = EngineParams {
         perf_trace: true,
         ..EngineParams::default()
@@ -150,9 +149,11 @@ fn run_engine_bench(args: &[String]) {
         ep.fft_size = fft_size;
         ep.fft_auto = false;
     }
-    let params = Arc::new(Mutex::new(ep));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut engine = Engine::new(rx, Arc::clone(&shared), Arc::clone(&params), cancel);
+    let (engine_side, mut ui) = engine_link();
+    let _tx = ui.cmd_tx.clone();
+    *ui.params.slot() = ep;
+    ui.params.publish();
+    let mut engine = Engine::new(engine_side);
     let mut conn = mock_conn(&[], device_rate, ingress_decim);
     conn.iq = cons;
     engine.conn = Some(conn);
@@ -177,7 +178,8 @@ fn run_engine_bench(args: &[String]) {
         }
     }
 
-    let stats = shared.lock().expect("lock").stats.clone();
+    ui.snapshot.fetch();
+    let stats = ui.snapshot.slot().stats.clone();
     print_engine_report(&stats, start.elapsed(), pumps, device_rate as u32);
 }
 
@@ -404,8 +406,6 @@ fn run_replay(args: &[String]) {
         std::process::exit(1);
     });
     let meta = playback.meta();
-    let (_tx, rx) = channel();
-    let shared = Arc::new(Mutex::new(EngineShared::default()));
     let mut ep = EngineParams {
         perf_trace: true,
         ..EngineParams::default()
@@ -414,9 +414,11 @@ fn run_replay(args: &[String]) {
         ep.fft_size = fft_size;
         ep.fft_auto = false;
     }
-    let params = Arc::new(Mutex::new(ep));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut engine = Engine::new(rx, Arc::clone(&shared), Arc::clone(&params), cancel);
+    let (engine_side, mut ui) = engine_link();
+    let _tx = ui.cmd_tx.clone();
+    *ui.params.slot() = ep;
+    ui.params.publish();
+    let mut engine = Engine::new(engine_side);
     engine.playback = Some(playback);
     engine.first_iq_received = true;
     engine.set_state(ConnState::Streaming);
@@ -435,7 +437,8 @@ fn run_replay(args: &[String]) {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
-    let stats = shared.lock().expect("lock").stats.clone();
+    ui.snapshot.fetch();
+    let stats = ui.snapshot.slot().stats.clone();
     print_engine_report(&stats, start.elapsed(), pumps, meta.sample_rate);
 }
 
@@ -460,14 +463,14 @@ fn run_live_kiwi(args: &[String]) {
             hfsdr::DecimFilterKind::LinearFir,
         );
 
-    let (_tx, rx) = channel();
-    let shared = Arc::new(Mutex::new(EngineShared::default()));
-    let params = Arc::new(Mutex::new(EngineParams {
+    let (engine_side, mut ui) = engine_link();
+    let _tx = ui.cmd_tx.clone();
+    *ui.params.slot() = EngineParams {
         perf_trace: true,
         ..EngineParams::default()
-    }));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut engine = Engine::new(rx, Arc::clone(&shared), Arc::clone(&params), cancel);
+    };
+    ui.params.publish();
+    let mut engine = Engine::new(engine_side);
     engine.conn = Some(Connection {
         device: DeviceSource::Kiwi(src),
         iq,
@@ -495,7 +498,8 @@ fn run_live_kiwi(args: &[String]) {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
-    let stats = shared.lock().expect("lock").stats.clone();
+    ui.snapshot.fetch();
+    let stats = ui.snapshot.slot().stats.clone();
     print_engine_report(&stats, start.elapsed(), pumps, reported);
     if let Some(mut conn) = engine.conn.take() {
         let _ = conn.device.stop();
@@ -523,14 +527,14 @@ fn run_live_airspy(args: &[String]) {
             hfsdr::DecimFilterKind::LinearFir,
         );
 
-    let (_tx, rx) = channel();
-    let shared = Arc::new(Mutex::new(EngineShared::default()));
-    let params = Arc::new(Mutex::new(EngineParams {
+    let (engine_side, mut ui) = engine_link();
+    let _tx = ui.cmd_tx.clone();
+    *ui.params.slot() = EngineParams {
         perf_trace: true,
         ..EngineParams::default()
-    }));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut engine = Engine::new(rx, Arc::clone(&shared), Arc::clone(&params), cancel);
+    };
+    ui.params.publish();
+    let mut engine = Engine::new(engine_side);
     engine.conn = Some(Connection {
         device: DeviceSource::Airspy(radio),
         iq,
@@ -558,7 +562,8 @@ fn run_live_airspy(args: &[String]) {
             std::thread::sleep(Duration::from_micros(500));
         }
     }
-    let stats = shared.lock().expect("lock").stats.clone();
+    ui.snapshot.fetch();
+    let stats = ui.snapshot.slot().stats.clone();
     print_engine_report(&stats, start.elapsed(), pumps, sample_rate);
     if let Some(mut conn) = engine.conn.take() {
         let _ = conn.device.stop();

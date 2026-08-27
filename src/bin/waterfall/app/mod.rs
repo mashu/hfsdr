@@ -88,7 +88,7 @@ impl WaterfallApp {
         app
     }
 
-    #[cfg(any(test, not(feature = "gui-core")))]
+    #[cfg(test)]
     pub fn inject_engine_poll(&self, poll: EnginePoll) {
         self.engine.inject_poll(poll);
     }
