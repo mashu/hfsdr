@@ -10,11 +10,22 @@ use hfsdr::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-const LIST_URL: &str = "http://rx.linkfanel.net/kiwisdr_com.js";
-const GEO_URL: &str = "http://ip-api.com/json/?fields=status,country,countryCode,lat,lon";
+/// Community mirror of the KiwiSDR directory.
+///
+/// https, not http: the browser build is served over TLS on GitHub Pages, and a
+/// plain-http request from an https page is blocked as mixed content before
+/// CORS is even considered. Desktop does not care either way.
+const LIST_URL: &str = "https://rx.linkfanel.net/kiwisdr_com.js";
+/// Coarse geolocation, used only to sort receivers by distance.
+///
+/// Best-effort: when this fails the list is still shown, just unsorted, so it
+/// must never be the reason the directory appears empty.
+const GEO_URL: &str = "https://ipapi.co/json/";
 const CACHE_FILE: &str = "kiwi_directory_v2.json";
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 60);
 const NEARBY_LIMIT: usize = 12;
+/// Kiwi's own default, used when a plain-http URL omits the port.
+const KIWI_DEFAULT_PORT: u16 = 8073;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GeoLocation {
@@ -47,12 +58,31 @@ struct CachedDirectory {
 
 #[derive(Deserialize)]
 struct GeoResponse {
-    status: String,
+    /// ip-api reports "success"/"fail" here; other providers omit it entirely,
+    /// so absence means "no reason to think it failed".
+    status: Option<String>,
+    #[serde(alias = "country_name")]
     country: Option<String>,
-    #[serde(rename = "countryCode")]
+    #[serde(rename = "countryCode", alias = "country_code")]
     country_code: Option<String>,
+    #[serde(alias = "latitude")]
     lat: Option<f64>,
+    #[serde(alias = "longitude")]
     lon: Option<f64>,
+}
+
+impl GeoResponse {
+    fn into_location(self) -> Result<GeoLocation, String> {
+        if self.status.as_deref().is_some_and(|s| s != "success") {
+            return Err("geo lookup unsuccessful".into());
+        }
+        Ok(GeoLocation {
+            country: self.country.unwrap_or_else(|| "Unknown".into()),
+            country_code: self.country_code.unwrap_or_else(|| "??".into()),
+            lat: self.lat.ok_or("geo missing lat")?,
+            lon: self.lon.ok_or("geo missing lon")?,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -91,17 +121,138 @@ pub fn refresh_nearby_receivers() -> Result<(Option<GeoLocation>, Vec<KiwiReceiv
     Ok((geo, receivers))
 }
 
-// Network fetches use ureq, which needs real sockets. A browser build would do
-// this through fetch(), which is async and does not fit this blocking signature;
-// until that exists, say so rather than pretending the lookup failed.
+// The browser fetches through `fetch()`, which is async and cannot be wrapped
+// in this blocking signature — see `web` below, which drives the same parsing
+// from a future. These two exist only so the shared entry points still compile.
 #[cfg(not(feature = "gui-core"))]
 fn fetch_geo() -> Result<GeoLocation, String> {
-    Err("receiver list unavailable in the browser (the directory host blocks cross-origin requests)".into())
+    Err("geo lookup is asynchronous in the browser".into())
 }
 
 #[cfg(not(feature = "gui-core"))]
 fn fetch_list_body() -> Result<String, String> {
-    Err("receiver list unavailable in the browser (the directory host blocks cross-origin requests)".into())
+    Err("the receiver list is fetched asynchronously in the browser".into())
+}
+
+/// Browser directory fetch.
+///
+/// Everything that turns a response into a sorted receiver list is shared with
+/// the desktop path; only getting the bytes differs. Geolocation is best-effort
+/// and never blocks the list: without it receivers are simply unsorted.
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+pub mod web {
+    use super::{
+        parse_receiver_list, rank_by_proximity, GeoLocation, GeoResponse, KiwiReceiver,
+        GEO_URL, LIST_URL, NEARBY_LIMIT,
+    };
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    /// Cached list, so reopening the drawer does not refetch.
+    const CACHE_KEY: &str = "hfsdr.kiwi_directory.v2";
+
+    type Directory = (Option<GeoLocation>, Vec<KiwiReceiver>);
+
+    fn storage() -> Option<web_sys::Storage> {
+        web_sys::window()?.local_storage().ok().flatten()
+    }
+
+    fn read_cache() -> Option<Directory> {
+        let raw = storage()?.get_item(CACHE_KEY).ok().flatten()?;
+        serde_json::from_str::<super::CachedDirectory>(&raw)
+            .ok()
+            .map(|c| (c.geo, c.receivers))
+    }
+
+    fn write_cache(dir: &Directory) {
+        let Some(store) = storage() else { return };
+        let cached = super::CachedDirectory {
+            fetched_at_secs: 0,
+            geo: dir.0.clone(),
+            receivers: dir.1.clone(),
+        };
+        if let Ok(text) = serde_json::to_string(&cached) {
+            let _ = store.set_item(CACHE_KEY, &text);
+        }
+    }
+
+    /// Body of a GET, or a message that says what actually went wrong.
+    async fn get_text(url: &str) -> Result<String, String> {
+        let window = web_sys::window().ok_or("no window")?;
+        let response = JsFuture::from(window.fetch_with_str(url))
+            .await
+            .map_err(|e| describe(url, &e))?
+            .dyn_into::<web_sys::Response>()
+            .map_err(|_| "fetch returned a non-Response".to_string())?;
+        if !response.ok() {
+            return Err(format!("{url}: HTTP {}", response.status()));
+        }
+        let text = JsFuture::from(response.text().map_err(|_| "no response body")?)
+            .await
+            .map_err(|e| describe(url, &e))?;
+        text.as_string().ok_or_else(|| "response was not text".into())
+    }
+
+    /// A rejected `fetch` deliberately says nothing about why, so name the two
+    /// causes the user can act on rather than repeating an empty error.
+    fn describe(url: &str, err: &wasm_bindgen::JsValue) -> String {
+        let detail = err
+            .as_string()
+            .or_else(|| js_sys::Reflect::get(err, &"message".into()).ok()?.as_string())
+            .unwrap_or_default();
+        let hint = if url.starts_with("http://") && super::web_page_is_https() {
+            " — this page is https, so a plain-http request is blocked as mixed content"
+        } else {
+            " — the host may be down, or may not allow cross-origin requests"
+        };
+        format!("could not reach {url}{}{hint}", if detail.is_empty() { String::new() } else { format!(": {detail}") })
+    }
+
+    async fn fetch_directory() -> Result<Directory, String> {
+        // The list is the point; geo only sorts it.
+        let list = get_text(LIST_URL).await?;
+        let mut receivers = parse_receiver_list(&list)?;
+
+        let geo = match get_text(GEO_URL).await {
+            Ok(body) => serde_json::from_str::<GeoResponse>(&body)
+                .ok()
+                .and_then(|g| g.into_location().ok()),
+            Err(e) => {
+                crate::log::warn(format!("kiwi directory: {e}"));
+                None
+            }
+        };
+        if let Some(g) = &geo {
+            rank_by_proximity(&mut receivers, g);
+        }
+        receivers.truncate(NEARBY_LIMIT);
+        Ok((geo, receivers))
+    }
+
+    /// Fetch the directory and deliver it on `tx`, cache first unless forced.
+    pub fn start(tx: std::sync::mpsc::Sender<Result<Directory, String>>, force_refresh: bool) {
+        if !force_refresh {
+            if let Some(cached) = read_cache() {
+                let _ = tx.send(Ok(cached));
+                return;
+            }
+        }
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = fetch_directory().await;
+            if let Ok(dir) = &result {
+                write_cache(dir);
+            }
+            let _ = tx.send(result);
+        });
+    }
+}
+
+/// Whether the document was served over TLS.
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+fn web_page_is_https() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().protocol().ok())
+        .is_some_and(|p| p.eq_ignore_ascii_case("https:"))
 }
 
 #[cfg(feature = "gui-core")]
@@ -122,15 +273,7 @@ fn fetch_geo() -> Result<GeoLocation, String> {
         .map_err(|e| e.to_string())?;
     let parsed: GeoResponse =
         serde_json::from_str(&body).map_err(|e| format!("geo JSON: {e}"))?;
-    if parsed.status != "success" {
-        return Err("geo lookup unsuccessful".into());
-    }
-    Ok(GeoLocation {
-        country: parsed.country.unwrap_or_else(|| "Unknown".into()),
-        country_code: parsed.country_code.unwrap_or_else(|| "??".into()),
-        lat: parsed.lat.ok_or("geo missing lat")?,
-        lon: parsed.lon.ok_or("geo missing lon")?,
-    })
+    parsed.into_location()
 }
 
 #[cfg(feature = "gui-core")]
@@ -270,10 +413,19 @@ fn trim_display_name(name: &str) -> String {
     }
 }
 
+/// Host and port from a directory URL.
+///
+/// The default port follows the scheme, and getting that wrong matters more
+/// than it looks. A receiver listed as `https://…` with no port is on 443 —
+/// that is *why* it has no port — and those TLS receivers are the only ones an
+/// https page can reach at all. Defaulting them to Kiwi's plain-http 8073 aimed
+/// the browser build at a closed port on exactly the receivers that could have
+/// worked.
 fn parse_kiwi_url(url: &str) -> Option<(String, u16)> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))?;
+    let (rest, default_port) = url
+        .strip_prefix("https://")
+        .map(|r| (r, 443u16))
+        .or_else(|| url.strip_prefix("http://").map(|r| (r, KIWI_DEFAULT_PORT)))?;
     let host_port = rest.split('/').next()?;
     if let Some((host, port_s)) = host_port.rsplit_once(':') {
         let port: u16 = port_s.parse().ok()?;
@@ -282,7 +434,7 @@ fn parse_kiwi_url(url: &str) -> Option<(String, u16)> {
         }
         Some((host.to_string(), port))
     } else if !host_port.is_empty() {
-        Some((host_port.to_string(), 8073))
+        Some((host_port.to_string(), default_port))
     } else {
         None
     }
@@ -463,8 +615,19 @@ mod tests {
             parse_kiwi_url("http://g3sdr.com:8073/"),
             Some(("g3sdr.com".into(), 8073))
         );
+        // https with no port means 443, not Kiwi's plain-http default: these
+        // are the TLS receivers, and the only ones an https page can reach.
         assert_eq!(
             parse_kiwi_url("https://rx.test"),
+            Some(("rx.test".into(), 443))
+        );
+        assert_eq!(
+            parse_kiwi_url("https://sk2hg.proxy.kiwisdr.com/"),
+            Some(("sk2hg.proxy.kiwisdr.com".into(), 443))
+        );
+        // An explicit port always wins over the scheme default.
+        assert_eq!(
+            parse_kiwi_url("https://rx.test:8073"),
             Some(("rx.test".into(), 8073))
         );
         assert!(parse_kiwi_url("ftp://bad").is_none());

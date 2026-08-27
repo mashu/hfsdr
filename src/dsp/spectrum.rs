@@ -241,7 +241,7 @@ mod discontinuity_tests {
     fn row_floors(reset_at_gap: bool) -> Vec<f32> {
         let mut analyzer = SpectrumAnalyzer::new(2048, 1024);
         let mut floors = Vec::new();
-        let mut emit = |row: &[f32], floors: &mut Vec<f32>| {
+        let emit = |row: &[f32], floors: &mut Vec<f32>| {
             let mut v: Vec<f32> = row.to_vec();
             v.sort_by(|a, b| a.partial_cmp(b).unwrap());
             floors.push(v[v.len() / 2]);

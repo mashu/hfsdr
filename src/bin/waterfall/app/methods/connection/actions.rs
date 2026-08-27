@@ -77,10 +77,17 @@ impl WaterfallApp {
         };
         let mut kiwi = self.connection.form.kiwi.clone();
         kiwi.rf_agc_on = self.radio.agc_rf_on;
+        // Accept whatever the user pasted: a bare host, `host:port`, or the
+        // full URL the directory shows. The scheme carries the port when the
+        // URL omits it, which is how TLS receivers reach 443.
+        let (host, port) = hfsdr::kiwi::protocol::split_host_port(
+            &self.connection.form.host,
+            self.connection.form.port,
+        );
         let req = ConnectRequest {
             kind: self.connection.form.kind,
-            host: self.connection.form.host.trim().to_string(),
-            port: self.connection.form.port,
+            host,
+            port,
             center_hz: self.radio.center_khz * 1000.0,
             sample_rate,
             kiwi,

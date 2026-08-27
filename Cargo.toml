@@ -46,6 +46,7 @@ web-sys = { version = "0.3", features = [
     "Document", "Window", "Element", "HtmlCanvasElement", "console",
     "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "ErrorEvent", "Event", "Location",
     "EventTarget", "Blob", "BlobPropertyBag", "Url", "Performance",
+    "Request", "RequestInit", "RequestMode", "Response", "Headers", "Storage",
     "AudioContext", "BaseAudioContext", "AudioContextState", "AudioDestinationNode",
     "AudioNode", "AudioWorklet", "AudioWorkletNode", "MessagePort",
 ] }
