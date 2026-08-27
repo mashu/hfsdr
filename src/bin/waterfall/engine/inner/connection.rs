@@ -12,6 +12,25 @@ use super::Engine;
 use crate::engine::types::ConnState;
 
 
+/// Whether an output that is already open still satisfies what is wanted.
+///
+/// Extracted from [`Engine::audio_device_open`] because the alternative is a
+/// test that needs a real sound card: on a headless runner every attempt to
+/// open one returns `None`, so a test written against the effect passes without
+/// exercising anything. This is the decision that was wrong, so this is what
+/// gets tested.
+///
+/// `wanted == None` means "whatever the system default is", which any open
+/// output satisfies — reopening to discover the same device is what created a
+/// discarded output per connection attempt.
+pub(crate) fn keep_existing_output(open: Option<&str>, wanted: Option<&str>) -> bool {
+    match (open, wanted) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(open), Some(wanted)) => open == wanted,
+    }
+}
+
 impl Engine {
 pub(super) fn start_connect(&mut self, req: &ConnectRequest) {
         self.connect_cancel.store(false, Ordering::Relaxed);
@@ -121,7 +140,29 @@ pub(super) fn start_connect(&mut self, req: &ConnectRequest) {
         }
     }
 
+    /// Open an audio output for the selected device, keeping any usable one.
+    ///
+    /// This runs on every connection attempt, so it must not tear down a
+    /// working output each time. A receiver that refuses the connection is
+    /// retried on a backoff, and reopening per attempt meant a discarded output
+    /// per retry — in a browser, a whole `AudioContext` each, of which a page
+    /// gets only a handful before it can have no audio at all.
     pub(super) fn audio_device_open(&mut self, _iq_rate: u32) {
+        let open = self.audio.as_ref().map(|a| a.device_name());
+        if keep_existing_output(open, self.audio_device.as_deref()) {
+            return;
+        }
+        self.open_audio_device();
+    }
+
+    /// Switch devices: the current output must go before the next one opens, so
+    /// the old device is released rather than held by two streams at once.
+    pub(super) fn reopen_audio(&mut self) {
+        self.audio = None;
+        self.open_audio_device();
+    }
+
+    fn open_audio_device(&mut self) {
         self.audio = match &self.audio_device {
             Some(name) => AudioOutput::try_open_named(name, 0)
                 .or_else(|| AudioOutput::try_open_default(0)),
@@ -130,9 +171,5 @@ pub(super) fn start_connect(&mut self, req: &ConnectRequest) {
         if self.audio.is_none() {
             log::error("audio output unavailable (need PulseAudio/PipeWire/ALSA and F32 output)");
         }
-    }
-
-    pub(super) fn reopen_audio(&mut self) {
-        self.audio_device_open(0);
     }
 }

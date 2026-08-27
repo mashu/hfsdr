@@ -375,6 +375,36 @@ fn set_audio_device_reopens_output() {
     assert_eq!(engine.audio_device.as_deref(), Some("Test Output"));
 }
 
+/// Opening audio for a connection must keep an output that is already usable.
+///
+/// `audio_device_open` runs on every connection attempt, and a receiver that
+/// refuses the connection is retried on a backoff. Replacing the output each
+/// time discarded one per retry — looks harmless natively, but in a browser
+/// each is an `AudioContext` the page cannot get back, and each orphaned one
+/// keeps posting into a freed closure until the tab is unusable.
+///
+/// Tested through the decision rather than its effect: a headless runner has no
+/// sound card, so every open returns `None` and a test written against
+/// `engine.audio` passes without exercising anything. That version of this test
+/// stayed green with the bug reintroduced.
+#[test]
+fn an_open_output_is_kept_across_connection_attempts() {
+    use crate::engine::inner::connection::keep_existing_output;
+
+    // No output yet: must open one.
+    assert!(!keep_existing_output(None, None));
+    assert!(!keep_existing_output(None, Some("Speakers")));
+
+    // Open, and no particular device asked for: keep it. This is the case that
+    // ran on every attempt, and reopening here is what leaked.
+    assert!(keep_existing_output(Some("Speakers"), None));
+
+    // Open on the device that was asked for: keep it.
+    assert!(keep_existing_output(Some("Speakers"), Some("Speakers")));
+
+    // Open on a different device: must reopen.
+    assert!(!keep_existing_output(Some("Speakers"), Some("Headphones")));
+}
 
 #[test]
 fn wideband_mock_ring_pumps() {
