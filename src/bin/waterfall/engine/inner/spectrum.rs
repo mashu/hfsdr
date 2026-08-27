@@ -38,6 +38,16 @@ impl Engine {
         }
     }
 
+    /// The slice of a drained batch the spectrum should transform.
+    ///
+    /// Normally the whole thing. When the batch is larger than the demod's own
+    /// window, only its tail is used, so the waterfall shows what is being
+    /// heard rather than running ahead of it.
+    ///
+    /// Dropping the head is deliberate, but it is a *discontinuity*: the
+    /// analyzer accumulates across calls with overlapping windows, so the
+    /// caller must tell it the stream jumped, or one window will straddle the
+    /// gap and transform a step instead of the signal. `skipped` reports that.
     pub(super) fn spectrum_fft_slice<'a>(
         &self,
         samples: &'a [Complex32],
@@ -45,15 +55,15 @@ impl Engine {
         device_rate: f32,
         ingress_decim: usize,
         full_drain: bool,
-    ) -> &'a [Complex32] {
+    ) -> (&'a [Complex32], bool) {
         if full_drain {
-            return samples;
+            return (samples, false);
         }
         let len = spectrum_aligned_len(device_batch_len, samples.len(), device_rate, ingress_decim);
         if len >= samples.len() {
-            samples
+            (samples, false)
         } else {
-            &samples[samples.len() - len..]
+            (&samples[samples.len() - len..], true)
         }
     }
 

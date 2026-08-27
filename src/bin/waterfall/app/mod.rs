@@ -283,10 +283,6 @@ impl WaterfallApp {
 impl eframe::App for WaterfallApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // The browser engine has no thread of its own: this frame callback is
-        // what turns it. On desktop the engine thread does this itself.
-        #[cfg(target_arch = "wasm32")]
-        self.engine.step();
         if !self.chrome.themed {
             apply(&ctx);
             self.chrome.themed = true;

@@ -12,6 +12,18 @@ use super::types::{EngineCommand, EngineParams, EnginePoll, EngineShared};
 
 #[cfg(target_arch = "wasm32")]
 use super::inner::IdlePacing;
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+
+/// How often the browser pumps the engine, in milliseconds.
+///
+/// Fast enough to keep the IQ ring drained at any rate a Kiwi delivers, slow
+/// enough not to burn a core on an idle receiver. Deliberately unrelated to the
+/// repaint interval — that independence is the point.
+#[cfg(target_arch = "wasm32")]
+const PUMP_INTERVAL_MS: i32 = 8;
 
 /// UI-side handle to the engine thread.
 pub struct EngineHandle {
@@ -22,10 +34,35 @@ pub struct EngineHandle {
     join: Option<thread::JoinHandle<()>>,
     /// Headless UI tests inject polls here instead of running the engine thread.
     test_polls: Option<Arc<Mutex<VecDeque<EnginePoll>>>>,
-    /// Browser builds own the engine outright and step it from the frame
-    /// callback: a tab has no thread to run it on.
+    /// Browser builds own the engine outright: a tab has no thread to run it
+    /// on. It is stepped by [`PumpTimer`], not by the renderer.
     #[cfg(target_arch = "wasm32")]
-    engine: Option<Box<Engine>>,
+    engine: Option<Rc<RefCell<Engine>>>,
+    /// Drops the interval when the handle goes away.
+    #[cfg(target_arch = "wasm32")]
+    _pump: Option<PumpTimer>,
+}
+
+/// A `setInterval` that pumps the engine, cancelled on drop.
+///
+/// The engine used to be stepped from the egui frame callback, which tied the
+/// DSP's cadence to the display's: the pipeline stalled whenever a repaint was
+/// skipped, and a long step showed up as a dropped frame. A timer separates
+/// them as far as a single-threaded tab allows — the two no longer share a
+/// cadence, only a thread.
+#[cfg(target_arch = "wasm32")]
+struct PumpTimer {
+    id: i32,
+    _cb: wasm_bindgen::closure::Closure<dyn FnMut()>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for PumpTimer {
+    fn drop(&mut self) {
+        if let Some(w) = web_sys::window() {
+            w.clear_interval_with_handle(self.id);
+        }
+    }
 }
 
 impl EngineHandle {
@@ -54,6 +91,8 @@ impl EngineHandle {
             test_polls: None,
             #[cfg(target_arch = "wasm32")]
             engine: None,
+            #[cfg(target_arch = "wasm32")]
+            _pump: None,
         }
     }
 
@@ -74,28 +113,58 @@ impl EngineHandle {
             test_polls: Some(Arc::new(Mutex::new(VecDeque::new()))),
             #[cfg(target_arch = "wasm32")]
             engine: None,
+            #[cfg(target_arch = "wasm32")]
+            _pump: None,
         }
     }
 
-    /// Engine running in-process, stepped by the caller.
+    /// Engine running in-process on its own timer.
     ///
-    /// The browser has no thread to give the engine, so it lives here and the
-    /// app drives it with [`Self::step`] once per frame. Everything else — the
-    /// command channel, the shared snapshot, `try_poll` — is identical to the
-    /// threaded handle, because the engine does not know or care which driver
-    /// is turning it.
+    /// The browser has no thread to give the engine, so it lives here and a
+    /// `setInterval` pumps it. Everything else — the command channel, the
+    /// shared snapshot, `try_poll` — is identical to the threaded handle,
+    /// because the engine does not know which driver is turning it.
+    ///
+    /// The renderer deliberately does not turn it. Stepping from the frame
+    /// callback made the DSP's rate a function of the display's, so a skipped
+    /// repaint stalled the pipeline and a long step dropped a frame.
     #[cfg(target_arch = "wasm32")]
     pub fn spawn_in_process() -> Self {
+        use wasm_bindgen::JsCast as _;
+
         let (cmd_tx, cmd_rx) = channel::<EngineCommand>();
         let shared = Arc::new(Mutex::new(EngineShared::default()));
         let params = Arc::new(Mutex::new(EngineParams::default()));
         let connect_cancel = Arc::new(AtomicBool::new(false));
-        let engine = Engine::new(
+        let engine = Rc::new(RefCell::new(Engine::new(
             cmd_rx,
             Arc::clone(&shared),
             Arc::clone(&params),
             Arc::clone(&connect_cancel),
-        );
+        )));
+
+        let engine_cb = Rc::clone(&engine);
+        let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            // Callbacks on one thread cannot interleave, so this only guards
+            // against a future re-entrant caller — but a panicking borrow here
+            // would take the whole app down.
+            if let Ok(mut e) = engine_cb.try_borrow_mut() {
+                e.step(IdlePacing::Return);
+            }
+        });
+        let pump = web_sys::window()
+            .and_then(|w| {
+                w.set_interval_with_callback_and_timeout_and_arguments_0(
+                    cb.as_ref().unchecked_ref(),
+                    PUMP_INTERVAL_MS,
+                )
+                .ok()
+            })
+            .map(|id| PumpTimer { id, _cb: cb });
+        if pump.is_none() {
+            crate::log::error("engine: could not start the pump timer");
+        }
+
         Self {
             cmd_tx: Some(cmd_tx),
             shared,
@@ -103,18 +172,8 @@ impl EngineHandle {
             connect_cancel,
             join: None,
             test_polls: None,
-            engine: Some(Box::new(engine)),
-        }
-    }
-
-    /// Advance an in-process engine by one iteration. No-op for other handles.
-    ///
-    /// Called once per repaint, so it must never block: a blocking wait here
-    /// stalls the whole tab, not just the engine.
-    #[cfg(target_arch = "wasm32")]
-    pub fn step(&mut self) {
-        if let Some(engine) = &mut self.engine {
-            engine.step(IdlePacing::Return);
+            engine: Some(engine),
+            _pump: pump,
         }
     }
 

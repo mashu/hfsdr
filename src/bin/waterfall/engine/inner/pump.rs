@@ -252,13 +252,16 @@ impl Engine {
                 } else {
                     batch.as_slice()
                 };
-                let fft_base = self.spectrum_fft_slice(
+                let (fft_base, skipped) = self.spectrum_fft_slice(
                     ingress_base,
                     batch.len(),
                     device_rate,
                     ingress_decim,
                     params.full_drain_spectrum,
                 );
+                if skipped {
+                    self.analyzer.reset();
+                }
                 let batch_demod = Arc::clone(&batch);
                 let demod_input = self.demod_input(batch_demod.as_slice(), device_rate, cw.full_demod);
                 let (demod, spectrum_front) = (&mut self.demod, &mut self.spectrum_front);
@@ -293,13 +296,17 @@ impl Engine {
         }
 
         let t_spec_front = Instant::now();
-        let fft_base = self.spectrum_fft_slice(
+        let (fft_base, skipped) = self.spectrum_fft_slice(
             ingress_base,
             batch.len(),
             device_rate,
             ingress_decim,
             params.full_drain_spectrum,
         );
+        if skipped {
+            // Samples were discarded to stay live; do not splice across the gap.
+            self.analyzer.reset();
+        }
         if self.spectrum_decim > 1 {
             if !(wideband && self.spectrum_decim > 1) {
                 self.spectrum_front
