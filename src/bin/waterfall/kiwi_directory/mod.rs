@@ -10,11 +10,22 @@ use hfsdr::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-const LIST_URL: &str = "http://rx.linkfanel.net/kiwisdr_com.js";
-const GEO_URL: &str = "http://ip-api.com/json/?fields=status,country,countryCode,lat,lon";
+/// Community mirror of the KiwiSDR directory.
+///
+/// https, not http: the browser build is served over TLS on GitHub Pages, and a
+/// plain-http request from an https page is blocked as mixed content before
+/// CORS is even considered. Desktop does not care either way.
+const LIST_URL: &str = "https://rx.linkfanel.net/kiwisdr_com.js";
+/// Coarse geolocation, used only to sort receivers by distance.
+///
+/// Best-effort: when this fails the list is still shown, just unsorted, so it
+/// must never be the reason the directory appears empty.
+const GEO_URL: &str = "https://ipapi.co/json/";
 const CACHE_FILE: &str = "kiwi_directory_v2.json";
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 60);
 const NEARBY_LIMIT: usize = 12;
+/// Kiwi's own default, used when a plain-http URL omits the port.
+const KIWI_DEFAULT_PORT: u16 = 8073;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GeoLocation {
@@ -47,12 +58,31 @@ struct CachedDirectory {
 
 #[derive(Deserialize)]
 struct GeoResponse {
-    status: String,
+    /// ip-api reports "success"/"fail" here; other providers omit it entirely,
+    /// so absence means "no reason to think it failed".
+    status: Option<String>,
+    #[serde(alias = "country_name")]
     country: Option<String>,
-    #[serde(rename = "countryCode")]
+    #[serde(rename = "countryCode", alias = "country_code")]
     country_code: Option<String>,
+    #[serde(alias = "latitude")]
     lat: Option<f64>,
+    #[serde(alias = "longitude")]
     lon: Option<f64>,
+}
+
+impl GeoResponse {
+    fn into_location(self) -> Result<GeoLocation, String> {
+        if self.status.as_deref().is_some_and(|s| s != "success") {
+            return Err("geo lookup unsuccessful".into());
+        }
+        Ok(GeoLocation {
+            country: self.country.unwrap_or_else(|| "Unknown".into()),
+            country_code: self.country_code.unwrap_or_else(|| "??".into()),
+            lat: self.lat.ok_or("geo missing lat")?,
+            lon: self.lon.ok_or("geo missing lon")?,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -91,17 +121,30 @@ pub fn refresh_nearby_receivers() -> Result<(Option<GeoLocation>, Vec<KiwiReceiv
     Ok((geo, receivers))
 }
 
-// Network fetches use ureq, which needs real sockets. A browser build would do
-// this through fetch(), which is async and does not fit this blocking signature;
-// until that exists, say so rather than pretending the lookup failed.
+// The browser fetches through `fetch()`, which is async and cannot be wrapped
+// in this blocking signature — see `web` below, which drives the same parsing
+// from a future. These two exist only so the shared entry points still compile.
 #[cfg(not(feature = "gui-core"))]
 fn fetch_geo() -> Result<GeoLocation, String> {
-    Err("receiver list unavailable in the browser (the directory host blocks cross-origin requests)".into())
+    Err("geo lookup is asynchronous in the browser".into())
 }
 
 #[cfg(not(feature = "gui-core"))]
 fn fetch_list_body() -> Result<String, String> {
-    Err("receiver list unavailable in the browser (the directory host blocks cross-origin requests)".into())
+    Err("the receiver list is fetched asynchronously in the browser".into())
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+pub mod web;
+
+
+
+/// Whether the document was served over TLS.
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+fn web_page_is_https() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().protocol().ok())
+        .is_some_and(|p| p.eq_ignore_ascii_case("https:"))
 }
 
 #[cfg(feature = "gui-core")]
@@ -122,15 +165,7 @@ fn fetch_geo() -> Result<GeoLocation, String> {
         .map_err(|e| e.to_string())?;
     let parsed: GeoResponse =
         serde_json::from_str(&body).map_err(|e| format!("geo JSON: {e}"))?;
-    if parsed.status != "success" {
-        return Err("geo lookup unsuccessful".into());
-    }
-    Ok(GeoLocation {
-        country: parsed.country.unwrap_or_else(|| "Unknown".into()),
-        country_code: parsed.country_code.unwrap_or_else(|| "??".into()),
-        lat: parsed.lat.ok_or("geo missing lat")?,
-        lon: parsed.lon.ok_or("geo missing lon")?,
-    })
+    parsed.into_location()
 }
 
 #[cfg(feature = "gui-core")]
@@ -270,10 +305,19 @@ fn trim_display_name(name: &str) -> String {
     }
 }
 
+/// Host and port from a directory URL.
+///
+/// The default port follows the scheme, and getting that wrong matters more
+/// than it looks. A receiver listed as `https://…` with no port is on 443 —
+/// that is *why* it has no port — and those TLS receivers are the only ones an
+/// https page can reach at all. Defaulting them to Kiwi's plain-http 8073 aimed
+/// the browser build at a closed port on exactly the receivers that could have
+/// worked.
 fn parse_kiwi_url(url: &str) -> Option<(String, u16)> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))?;
+    let (rest, default_port) = url
+        .strip_prefix("https://")
+        .map(|r| (r, 443u16))
+        .or_else(|| url.strip_prefix("http://").map(|r| (r, KIWI_DEFAULT_PORT)))?;
     let host_port = rest.split('/').next()?;
     if let Some((host, port_s)) = host_port.rsplit_once(':') {
         let port: u16 = port_s.parse().ok()?;
@@ -282,7 +326,7 @@ fn parse_kiwi_url(url: &str) -> Option<(String, u16)> {
         }
         Some((host.to_string(), port))
     } else if !host_port.is_empty() {
-        Some((host_port.to_string(), 8073))
+        Some((host_port.to_string(), default_port))
     } else {
         None
     }
@@ -367,6 +411,76 @@ fn write_cache(geo: &Option<GeoLocation>, receivers: &[KiwiReceiver]) -> Result<
 
 #[cfg(test)]
 mod tests {
+    /// The geo response is parsed from whichever provider answers, and the two
+    /// in use spell every field differently. Getting this wrong does not fail
+    /// loudly — it silently drops the sort order — so pin both shapes.
+    #[test]
+    fn geo_response_accepts_both_provider_shapes() {
+        // ip-api.com: explicit status, camelCase country code.
+        let ip_api: GeoResponse = serde_json::from_str(
+            r#"{"status":"success","country":"Sweden","countryCode":"SE","lat":59.3,"lon":18.1}"#,
+        )
+        .expect("ip-api shape");
+        let loc = ip_api.into_location().expect("location");
+        assert_eq!(loc.country, "Sweden");
+        assert_eq!(loc.country_code, "SE");
+        assert!((loc.lat - 59.3).abs() < 1e-9);
+        assert!((loc.lon - 18.1).abs() < 1e-9);
+
+        // ipapi.co: no status field at all, snake_case names.
+        let ipapi: GeoResponse = serde_json::from_str(
+            r#"{"country_name":"Sweden","country_code":"SE","latitude":59.3,"longitude":18.1}"#,
+        )
+        .expect("ipapi shape");
+        let loc = ipapi.into_location().expect("a missing status is not a failure");
+        assert_eq!(loc.country_code, "SE");
+        assert!((loc.lat - 59.3).abs() < 1e-9);
+    }
+
+    /// An explicit failure status must be honoured even when the response
+    /// otherwise looks complete.
+    ///
+    /// The coordinates here are deliberate: without them the conversion fails
+    /// on the missing latitude no matter what the status says, and the test
+    /// would pass with the status check deleted.
+    #[test]
+    fn geo_response_reports_an_explicit_failure() {
+        let failed: GeoResponse = serde_json::from_str(
+            r#"{"status":"fail","country":"Sweden","countryCode":"SE","lat":59.3,"lon":18.1}"#,
+        )
+        .expect("fail shape");
+        assert!(
+            failed.into_location().is_err(),
+            "a failed lookup was accepted because the rest of the fields parsed"
+        );
+    }
+
+    /// Coordinates are the whole point; without them there is nothing to sort
+    /// by, so a response missing them must not pass as a location.
+    #[test]
+    fn geo_response_without_coordinates_is_an_error() {
+        let no_lat: GeoResponse =
+            serde_json::from_str(r#"{"country_name":"Sweden","longitude":18.1}"#)
+                .expect("partial shape");
+        assert!(no_lat.into_location().is_err());
+
+        let no_lon: GeoResponse =
+            serde_json::from_str(r#"{"country_name":"Sweden","latitude":59.3}"#)
+                .expect("partial shape");
+        assert!(no_lon.into_location().is_err());
+    }
+
+    /// Names are optional and only ever displayed, so a response without them
+    /// still locates the user.
+    #[test]
+    fn geo_response_without_names_still_locates() {
+        let bare: GeoResponse =
+            serde_json::from_str(r#"{"latitude":59.3,"longitude":18.1}"#).expect("bare shape");
+        let loc = bare.into_location().expect("location");
+        assert_eq!(loc.country, "Unknown");
+        assert_eq!(loc.country_code, "??");
+    }
+
     use super::*;
 
     const SAMPLE: &str = r#"var kiwisdr_com =
@@ -463,8 +577,19 @@ mod tests {
             parse_kiwi_url("http://g3sdr.com:8073/"),
             Some(("g3sdr.com".into(), 8073))
         );
+        // https with no port means 443, not Kiwi's plain-http default: these
+        // are the TLS receivers, and the only ones an https page can reach.
         assert_eq!(
             parse_kiwi_url("https://rx.test"),
+            Some(("rx.test".into(), 443))
+        );
+        assert_eq!(
+            parse_kiwi_url("https://sk2hg.proxy.kiwisdr.com/"),
+            Some(("sk2hg.proxy.kiwisdr.com".into(), 443))
+        );
+        // An explicit port always wins over the scheme default.
+        assert_eq!(
+            parse_kiwi_url("https://rx.test:8073"),
             Some(("rx.test".into(), 8073))
         );
         assert!(parse_kiwi_url("ftp://bad").is_none());

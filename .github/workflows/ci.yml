@@ -78,8 +78,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # `+nightly` is required, not stylistic: rust-toolchain.toml pins the
+      # repo to stable, and that pin overrides the toolchain this job just
+      # installed. Without it cargo resolves to stable, which has no miri.
       - name: Miri on hfsdr::sync
-        run: "cargo miri test --lib sync::"
+        run: "cargo +nightly miri test --lib sync::"
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
 

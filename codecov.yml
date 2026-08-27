@@ -1,0 +1,25 @@
+# Coverage is measured by building for x86-64 and running the test suite.
+# Browser-only sources never compile for that target, so llvm-cov cannot
+# instrument a single line of them: they report as 100% uncovered no matter
+# what, and every change to the browser build drags the project number down
+# for a reason no test can address.
+#
+# Excluded here rather than left to erode the signal. Everything these files
+# call into — the KiwiSDR protocol state machine, the directory parsing and
+# ranking, the audio resampler and its drift servo — lives in shared modules
+# that are compiled and tested normally, and is not excluded.
+ignore:
+  - "src/kiwi/web.rs"                          # WebSocket transport (wasm32 only)
+  - "src/bin/waterfall/audio/web.rs"           # WebAudio output (wasm32 only)
+  - "src/bin/waterfall/kiwi_directory/web.rs"  # fetch() directory (wasm32 only)
+
+coverage:
+  status:
+    project:
+      default:
+        # Small, unavoidable drift from refactoring should not gate a PR;
+        # a real regression is larger than this.
+        threshold: 0.5%
+    patch:
+      default:
+        target: 80%

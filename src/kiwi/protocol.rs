@@ -116,6 +116,59 @@ pub fn rf_attn_db(text: &str) -> Option<f32> {
         .map(|db| db.clamp(0.0, KIWI_RF_ATTN_MAX_DB))
 }
 
+/// Split a user-typed receiver address into host and port.
+///
+/// People paste what the directory shows them — `https://rx.example.com/`,
+/// `rx.example.com:8073`, a bare hostname — and all three have to work. Feeding
+/// a scheme straight through produces `wss://https://rx.example.com:8074/…`,
+/// which fails with a browser error that says nothing about the real cause.
+///
+/// The scheme also carries the port when none is written: `https://` means 443,
+/// because that is why the URL has no port. `fallback` is used only when the
+/// input says nothing at all.
+pub fn split_host_port(input: &str, fallback: u16) -> (String, u16) {
+    let trimmed = input.trim();
+    let (rest, scheme_port) = if let Some(r) = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("wss://"))
+    {
+        (r, Some(443u16))
+    } else if let Some(r) = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("ws://"))
+    {
+        (r, Some(8073u16))
+    } else {
+        (trimmed, None)
+    };
+
+    let host_port = rest.split('/').next().unwrap_or(rest);
+
+    // IPv6 literals are bracketed, so a colon inside them is not a port.
+    if let Some(close) = host_port.strip_prefix('[').and_then(|r| r.find(']')) {
+        let host = &host_port[..close + 2];
+        let port = host_port[close + 2..]
+            .strip_prefix(':')
+            .and_then(|p| p.parse().ok())
+            .or(scheme_port)
+            .unwrap_or(fallback);
+        return (host.to_string(), port);
+    }
+
+    match host_port.rsplit_once(':') {
+        Some((host, port_s)) if !host.is_empty() => match port_s.parse::<u16>() {
+            Ok(port) => (host.to_string(), port),
+            // Not a port after all — keep the text whole rather than truncating
+            // the host at a colon that meant something else.
+            Err(_) => (host_port.to_string(), scheme_port.unwrap_or(fallback)),
+        },
+        _ => (
+            host_port.to_string(),
+            scheme_port.unwrap_or(fallback),
+        ),
+    }
+}
+
 /// KiwiSDR stream URL: `<scheme>://host:port/<unix seconds>/SND`.
 ///
 /// The timestamp is what kiwiclient sends; the Kiwi uses it to distinguish
@@ -126,7 +179,15 @@ pub fn rf_attn_db(text: &str) -> Option<f32> {
 /// with no user override — so the scheme has to follow the page's own.
 pub fn stream_url(secure: bool, host: &str, port: u16, timestamp_secs: u64) -> String {
     let scheme = if secure { "wss" } else { "ws" };
-    format!("{scheme}://{host}:{port}/{timestamp_secs}/SND")
+    // Leave the scheme's own default port out. A TLS receiver reached through a
+    // reverse proxy is on 443, and some proxies route on the Host header alone
+    // and never see a request that spells the port out.
+    let default_port = if secure { 443 } else { 80 };
+    if port == default_port {
+        format!("{scheme}://{host}/{timestamp_secs}/SND")
+    } else {
+        format!("{scheme}://{host}:{port}/{timestamp_secs}/SND")
+    }
 }
 
 /// Commands sent after the server reports `sample_rate=…` (kiwiclient handshake).
@@ -232,13 +293,79 @@ mod tests {
 
 #[cfg(test)]
 mod url_tests {
-    use super::stream_url;
+    use super::{split_host_port, stream_url};
 
     #[test]
     fn stream_url_matches_kiwiclient_shape() {
         assert_eq!(
             stream_url(false, "rx.example.com", 8073, 1_700_000_000),
             "ws://rx.example.com:8073/1700000000/SND"
+        );
+    }
+
+    /// A TLS receiver on 443 must not have the port spelled out: some reverse
+    /// proxies route on the Host header and never see it.
+    #[test]
+    fn typed_addresses_split_into_host_and_port() {
+        // A pasted directory URL, which is the case that was broken.
+        assert_eq!(
+            split_host_port("https://sk2hg.proxy.kiwisdr.com/", 8073),
+            ("sk2hg.proxy.kiwisdr.com".to_string(), 443)
+        );
+        assert_eq!(
+            split_host_port("wss://rx.example.com", 8073),
+            ("rx.example.com".to_string(), 443)
+        );
+        // Plain http keeps Kiwi's own default.
+        assert_eq!(
+            split_host_port("http://kphsdr.com", 9999),
+            ("kphsdr.com".to_string(), 8073)
+        );
+        // An explicit port always wins.
+        assert_eq!(
+            split_host_port("https://rx.example.com:8074", 8073),
+            ("rx.example.com".to_string(), 8074)
+        );
+        assert_eq!(
+            split_host_port("rx.example.com:8074", 8073),
+            ("rx.example.com".to_string(), 8074)
+        );
+        // A bare host keeps whatever the port box says.
+        assert_eq!(
+            split_host_port("rx.example.com", 8074),
+            ("rx.example.com".to_string(), 8074)
+        );
+        // A colon that is not a port must not truncate the host: better to
+        // fail resolving a whole name than to silently connect somewhere else.
+        assert_eq!(
+            split_host_port("rx.example.com:notaport", 8073),
+            ("rx.example.com:notaport".to_string(), 8073)
+        );
+        assert_eq!(
+            split_host_port("https://rx.example.com:notaport", 8073),
+            ("rx.example.com:notaport".to_string(), 443)
+        );
+
+        // IPv6 literals: the colons inside are not a port.
+        assert_eq!(
+            split_host_port("[2001:db8::1]:8073", 8074),
+            ("[2001:db8::1]".to_string(), 8073)
+        );
+        assert_eq!(
+            split_host_port("[2001:db8::1]", 8074),
+            ("[2001:db8::1]".to_string(), 8074)
+        );
+    }
+
+    #[test]
+    fn default_ports_are_left_out() {
+        assert_eq!(
+            stream_url(true, "sk2hg.proxy.kiwisdr.com", 443, 1),
+            "wss://sk2hg.proxy.kiwisdr.com/1/SND"
+        );
+        assert_eq!(
+            stream_url(true, "rx.example.com", 8073, 1),
+            "wss://rx.example.com:8073/1/SND"
         );
     }
 

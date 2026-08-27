@@ -10,18 +10,15 @@ impl WaterfallApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.connection.kiwi.fetch_rx = Some(rx);
 
-        // Unlike the Kiwi stream itself, this is a plain cross-origin GET, so
-        // it is subject to CORS — and the directory host sends no CORS headers.
-        // Answer on the spot so the UI says why instead of waiting on a worker
-        // that a tab could not spawn anyway.
-        #[cfg(not(feature = "gui-core"))]
+        // The browser fetches asynchronously rather than on a thread; the UI
+        // polls the same channel either way.
+        #[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+        crate::kiwi_directory::web::start(tx, force_refresh);
+
+        #[cfg(all(not(target_arch = "wasm32"), not(feature = "gui-core")))]
         {
             let _ = force_refresh;
-            let _ = tx.send(Err(
-                "receiver list unavailable in the browser (the directory host blocks \
-                 cross-origin requests) — enter a receiver address directly"
-                    .to_string(),
-            ));
+            let _ = tx.send(Err("no receiver directory in this build".to_string()));
         }
 
         #[cfg(feature = "gui-core")]
