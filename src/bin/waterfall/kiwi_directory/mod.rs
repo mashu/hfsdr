@@ -55,6 +55,86 @@ pub struct KiwiReceiver {
     pub users_max: u8,
     pub snr: u8,
     pub distance_km: f64,
+    /// The directory listed this receiver with an `https://` URL, so it accepts
+    /// TLS. Only these are reachable from a page served over https — see
+    /// [`reachable_from_page`].
+    ///
+    /// Defaulted so a cache written before this field existed still loads;
+    /// those entries are treated as plain http, which is the safe assumption.
+    #[serde(default)]
+    pub tls: bool,
+}
+
+/// Whether a browser on this page can open a socket to `receiver`.
+///
+/// A page served over https may not open a `ws://` connection: browsers class
+/// it as mixed content and block it outright, with no user override. Most
+/// KiwiSDRs serve plain http, so from an https deployment they are simply
+/// unreachable — not slow, not refusing, unreachable. Saying so beforehand is
+/// the only useful thing the app can do about it.
+///
+/// `page_is_https` is false for the desktop build and for a page served over
+/// http, where every receiver is reachable.
+pub fn reachable_from_page(page_is_https: bool, receiver_is_tls: bool) -> bool {
+    !page_is_https || receiver_is_tls
+}
+
+/// Order the browser's receiver list: reachable first, then not full, then
+/// nearest.
+///
+/// A receiver this page cannot reach is worse than one that is merely full —
+/// the full one will free up, the unreachable one never will — so
+/// reachability outranks occupancy.
+pub fn sort_for_display(list: &mut [KiwiReceiver], page_is_https: bool) {
+    list.sort_by(|a, b| {
+        let unreachable = |rx: &KiwiReceiver| !reachable_from_page(page_is_https, rx.tls);
+        let full = |rx: &KiwiReceiver| rx.users >= rx.users_max;
+        unreachable(a)
+            .cmp(&unreachable(b))
+            .then_with(|| full(a).cmp(&full(b)))
+            .then_with(|| {
+                a.distance_km
+                    .partial_cmp(&b.distance_km)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+}
+
+/// The single line shown for a receiver in the browser list.
+///
+/// An unreachable receiver drops the distance and occupancy: neither tells the
+/// user anything they can act on, and the reason it cannot be clicked is the
+/// only thing worth the space.
+pub fn receiver_line(rx: &KiwiReceiver, page_is_https: bool) -> String {
+    if !reachable_from_page(page_is_https, rx.tls) {
+        return format!(
+            "{}:{} · no TLS — unreachable from https · {}",
+            rx.host, rx.port, rx.location
+        );
+    }
+    let distance = if rx.distance_km > 0.0 {
+        format!("{:.0}km ", rx.distance_km)
+    } else {
+        String::new()
+    };
+    let users = if rx.users >= rx.users_max {
+        format!("FULL {}/{}", rx.users, rx.users_max)
+    } else {
+        format!("{}/{}", rx.users, rx.users_max)
+    };
+    format!(
+        "{}:{} · {}{} · {}",
+        rx.host, rx.port, distance, users, rx.location
+    )
+}
+
+/// Whether this page can reach any of these receivers at all.
+///
+/// False means the list is there but every entry is a dead end, which needs
+/// saying once at the top rather than repeating on every row.
+pub fn any_reachable(list: &[KiwiReceiver], page_is_https: bool) -> bool {
+    list.iter()
+        .any(|rx| reachable_from_page(page_is_https, rx.tls))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -274,7 +354,7 @@ fn parse_receiver_list(body: &str) -> Result<Vec<KiwiReceiver>, String> {
         if users_max == 0 || users >= users_max {
             continue;
         }
-        let Some((host, port)) = parse_kiwi_url(&entry.url) else {
+        let Some((host, port, tls)) = parse_kiwi_url(&entry.url) else {
             continue;
         };
         let Some((lat, lon)) = parse_gps(&entry.gps) else {
@@ -296,6 +376,7 @@ fn parse_receiver_list(body: &str) -> Result<Vec<KiwiReceiver>, String> {
             users,
             users_max,
             snr,
+            tls,
             distance_km: 0.0,
         });
     }
@@ -321,20 +402,20 @@ fn trim_display_name(name: &str) -> String {
 /// https page can reach at all. Defaulting them to Kiwi's plain-http 8073 aimed
 /// the browser build at a closed port on exactly the receivers that could have
 /// worked.
-fn parse_kiwi_url(url: &str) -> Option<(String, u16)> {
-    let (rest, default_port) = url
+fn parse_kiwi_url(url: &str) -> Option<(String, u16, bool)> {
+    let (rest, default_port, tls) = url
         .strip_prefix("https://")
-        .map(|r| (r, 443u16))
-        .or_else(|| url.strip_prefix("http://").map(|r| (r, KIWI_DEFAULT_PORT)))?;
+        .map(|r| (r, 443u16, true))
+        .or_else(|| url.strip_prefix("http://").map(|r| (r, KIWI_DEFAULT_PORT, false)))?;
     let host_port = rest.split('/').next()?;
     if let Some((host, port_s)) = host_port.rsplit_once(':') {
         let port: u16 = port_s.parse().ok()?;
         if host.is_empty() {
             return None;
         }
-        Some((host.to_string(), port))
+        Some((host.to_string(), port, tls))
     } else if !host_port.is_empty() {
-        Some((host_port.to_string(), default_port))
+        Some((host_port.to_string(), default_port, tls))
     } else {
         None
     }
@@ -525,6 +606,35 @@ mod tests {
         assert_eq!(list[0].port, 8073);
     }
 
+    /// The scheme has to survive the whole parse, not just `parse_kiwi_url`:
+    /// the reachability check reads `KiwiReceiver::tls`, so a receiver that
+    /// lost its scheme on the way into the struct would be shown as
+    /// unreachable on every https page.
+    #[test]
+    fn parse_carries_the_scheme_onto_each_receiver() {
+        let body = r#"[
+            {"status":"active","offline":"no","name":"plain","loc":"a","gps":"(1,2)","users":"0","users_max":"4","snr":"10,10","url":"http://plain.example:8073"},
+            {"status":"active","offline":"no","name":"secure","loc":"b","gps":"(3,4)","users":"0","users_max":"4","snr":"10,10","url":"https://secure.example/"}
+        ]"#;
+        let list = parse_receiver_list(body).expect("parse");
+        assert_eq!(list.len(), 2);
+        let plain = list.iter().find(|r| r.host == "plain.example").expect("plain");
+        let secure = list.iter().find(|r| r.host == "secure.example").expect("secure");
+        assert!(!plain.tls);
+        assert!(secure.tls);
+    }
+
+    /// A cache written before `tls` existed must still load. It deserializes
+    /// as plain http, so those receivers are hidden on an https page until the
+    /// next refresh — wrong in the safe direction, unlike a parse error that
+    /// would blank the list entirely.
+    #[test]
+    fn cache_without_the_tls_field_still_loads() {
+        let old = r#"{"host":"rx.test","port":8073,"name":"n","location":"l","lat":1.0,"lon":2.0,"users":0,"users_max":4,"snr":10,"distance_km":0.0}"#;
+        let rx: KiwiReceiver = serde_json::from_str(old).expect("old cache entry");
+        assert!(!rx.tls);
+    }
+
     #[test]
     fn strips_trailing_commas() {
         let broken = r#"[{"status":"active","offline":"no","name":"x","loc":"a","gps":"(1,2)","users":"1","users_max":"4","snr":"10,10","url":"http://h:8073"},]"#;
@@ -583,24 +693,123 @@ mod tests {
     fn parse_kiwi_url_host_and_port() {
         assert_eq!(
             parse_kiwi_url("http://g3sdr.com:8073/"),
-            Some(("g3sdr.com".into(), 8073))
+            Some(("g3sdr.com".into(), 8073, false))
         );
         // https with no port means 443, not Kiwi's plain-http default: these
         // are the TLS receivers, and the only ones an https page can reach.
         assert_eq!(
             parse_kiwi_url("https://rx.test"),
-            Some(("rx.test".into(), 443))
+            Some(("rx.test".into(), 443, true))
         );
         assert_eq!(
             parse_kiwi_url("https://sk2hg.proxy.kiwisdr.com/"),
-            Some(("sk2hg.proxy.kiwisdr.com".into(), 443))
+            Some(("sk2hg.proxy.kiwisdr.com".into(), 443, true))
         );
         // An explicit port always wins over the scheme default.
         assert_eq!(
             parse_kiwi_url("https://rx.test:8073"),
-            Some(("rx.test".into(), 8073))
+            Some(("rx.test".into(), 8073, true))
         );
         assert!(parse_kiwi_url("ftp://bad").is_none());
+    }
+
+    /// The whole point of tracking TLS: on an https page a plain-http receiver
+    /// cannot be reached at all, and the app should say so rather than offer a
+    /// connection that the browser will refuse before it leaves the tab.
+    #[test]
+    fn reachability_follows_the_page_scheme() {
+        // An https page can only reach TLS receivers.
+        assert!(reachable_from_page(true, true));
+        assert!(!reachable_from_page(true, false));
+
+        // Served over http — or on the desktop — everything is reachable.
+        assert!(reachable_from_page(false, true));
+        assert!(reachable_from_page(false, false));
+    }
+
+    fn receiver(host: &str, tls: bool, users: u8, distance_km: f64) -> KiwiReceiver {
+        KiwiReceiver {
+            host: host.into(),
+            port: if tls { 443 } else { 8073 },
+            name: host.into(),
+            location: "Somewhere".into(),
+            lat: 0.0,
+            lon: 0.0,
+            users,
+            users_max: 4,
+            snr: 30,
+            distance_km,
+            tls,
+        }
+    }
+
+    /// Reachability outranks occupancy: a full receiver frees up, one this
+    /// page cannot reach never does. Within each group, nearest first.
+    #[test]
+    fn display_order_puts_unreachable_last_then_full() {
+        let mut list = vec![
+            receiver("plain-near", false, 0, 1.0),
+            receiver("tls-full", true, 4, 5.0),
+            receiver("tls-far", true, 0, 900.0),
+            receiver("tls-near", true, 0, 10.0),
+        ];
+        sort_for_display(&mut list, true);
+        let order: Vec<&str> = list.iter().map(|r| r.host.as_str()).collect();
+        assert_eq!(order, ["tls-near", "tls-far", "tls-full", "plain-near"]);
+
+        // Over http nothing is unreachable, so only occupancy and distance
+        // decide and the plain-http receiver comes first on distance.
+        sort_for_display(&mut list, false);
+        let order: Vec<&str> = list.iter().map(|r| r.host.as_str()).collect();
+        assert_eq!(order, ["plain-near", "tls-near", "tls-far", "tls-full"]);
+    }
+
+    /// An unreachable row spends its space on the reason rather than on a
+    /// distance and occupancy the user cannot act on.
+    #[test]
+    fn display_line_states_the_reason_when_unreachable() {
+        let unreachable = receiver_line(&receiver("plain.example", false, 1, 12.0), true);
+        assert_eq!(
+            unreachable,
+            "plain.example:8073 · no TLS — unreachable from https · Somewhere"
+        );
+        assert!(!unreachable.contains("12km"));
+        assert!(!unreachable.contains("1/4"));
+
+        // The same receiver is fine on an http page, and reads normally.
+        assert_eq!(
+            receiver_line(&receiver("plain.example", false, 1, 12.0), false),
+            "plain.example:8073 · 12km 1/4 · Somewhere"
+        );
+    }
+
+    /// Distance is omitted when unknown — geolocation is best-effort, and a
+    /// leading "0km" would claim the receiver is next door.
+    #[test]
+    fn display_line_omits_unknown_distance_and_marks_full() {
+        assert_eq!(
+            receiver_line(&receiver("rx.test", true, 0, 0.0), true),
+            "rx.test:443 · 0/4 · Somewhere"
+        );
+        assert_eq!(
+            receiver_line(&receiver("rx.test", true, 4, 0.0), true),
+            "rx.test:443 · FULL 4/4 · Somewhere"
+        );
+    }
+
+    /// The all-unreachable banner: worth saying once at the top, and only when
+    /// every entry really is a dead end.
+    #[test]
+    fn any_reachable_needs_only_one() {
+        let all_plain = vec![receiver("a", false, 0, 0.0), receiver("b", false, 0, 0.0)];
+        assert!(!any_reachable(&all_plain, true));
+        assert!(any_reachable(&all_plain, false));
+
+        let mixed = vec![receiver("a", false, 0, 0.0), receiver("b", true, 0, 0.0)];
+        assert!(any_reachable(&mixed, true));
+
+        // An empty list is not a page-wide failure; there is nothing to say.
+        assert!(!any_reachable(&[], true));
     }
 
     #[test]
@@ -663,6 +872,7 @@ mod tests {
                 users_max: 4,
                 snr: 50,
                 distance_km: 0.0,
+                tls: false,
             },
             KiwiReceiver {
                 host: "open.example".into(),
@@ -675,6 +885,7 @@ mod tests {
                 users_max: 4,
                 snr: 30,
                 distance_km: 0.0,
+                tls: false,
             },
         ];
         rank_by_proximity(&mut list, &geo);

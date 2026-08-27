@@ -51,6 +51,12 @@ pub(crate) fn page_requires_tls() -> bool {
         .unwrap_or(false)
 }
 
+/// There is no page outside the browser, so nothing constrains the scheme.
+#[cfg(not(all(target_arch = "wasm32", not(feature = "gui-core"))))]
+pub(crate) fn page_requires_tls() -> bool {
+    false
+}
+
 impl WaterfallApp {
     pub fn new(autoconnect: Option<ConnectRequest>) -> Self {
         Self::build(autoconnect, EngineHandle::spawn())
