@@ -32,8 +32,6 @@ mod status_icons;
 mod status_widgets;
 mod theme;
 mod widgets;
-#[cfg(not(feature = "gui-core"))]
-mod web_demo;
 mod waterfall_perf;
 
 #[cfg(test)]

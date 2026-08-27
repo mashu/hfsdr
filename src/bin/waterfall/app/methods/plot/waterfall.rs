@@ -11,13 +11,24 @@ impl WaterfallApp {
         self.plot.waterfall.gpu_available && self.display.waterfall_gpu
     }
 
+    /// Frequency span covered by the rows uploaded to the ring texture.
+    ///
+    /// Not the same as the CPU path's storage span. The CPU path *composes*
+    /// each row into a padded storage buffer, so its rows really do cover
+    /// `view_span_hz`; the shader path uploads rows raw, so they cover only the
+    /// rate they were transformed at. Using the padded span here stretches a
+    /// 12 kHz Kiwi row across the whole band-overview width, which puts every
+    /// carrier at the wrong frequency.
+    pub(crate) fn waterfall_gpu_row_span_hz(&self) -> f32 {
+        self.waterfall_storage_view().row_rate_hz
+    }
+
     /// Build this frame's shader payload, or `None` when the CPU path is active.
     ///
     /// The visible window becomes texture coordinates via `offset_hz_to_storage_u`,
     /// so pan and zoom are two floats rather than a 360-row recompose.
     pub(crate) fn build_waterfall_gpu_callback(
         &mut self,
-        storage_span_hz: f32,
         plot_px: f32,
     ) -> Option<crate::widgets::WaterfallCallback> {
         if !self.waterfall_gpu_active() {
@@ -27,10 +38,11 @@ impl WaterfallApp {
         if width == 0 {
             return None;
         }
+        let row_span_hz = self.waterfall_gpu_row_span_hz();
         let view = self.spectrum_view();
         let half = f64::from(view.view_span_hz) / 2.0;
-        let u0 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz - half, storage_span_hz);
-        let u1 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz + half, storage_span_hz);
+        let u0 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz - half, row_span_hz);
+        let u1 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz + half, row_span_hz);
         let uniforms = crate::widgets::waterfall_gpu_uniforms(
             u0,
             u1,

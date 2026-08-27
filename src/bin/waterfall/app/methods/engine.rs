@@ -10,14 +10,17 @@ impl WaterfallApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.connection.kiwi.fetch_rx = Some(rx);
 
-        // A browser tab cannot spawn threads, and the directory fetch needs
-        // sockets it does not have either — answer on the spot so the UI shows
-        // why rather than waiting on a worker that will never exist.
+        // Unlike the Kiwi stream itself, this is a plain cross-origin GET, so
+        // it is subject to CORS — and the directory host sends no CORS headers.
+        // Answer on the spot so the UI says why instead of waiting on a worker
+        // that a tab could not spawn anyway.
         #[cfg(not(feature = "gui-core"))]
         {
             let _ = force_refresh;
             let _ = tx.send(Err(
-                "receiver directory is not available in the browser build".to_string(),
+                "receiver list unavailable in the browser (the directory host blocks \
+                 cross-origin requests) — enter a receiver address directly"
+                    .to_string(),
             ));
         }
 

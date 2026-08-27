@@ -33,11 +33,22 @@ pub struct WaterfallApp {
     pub(crate) audio: AudioUiState,
     pub(crate) chrome: ChromeState,
     pub(crate) meter_display: MeterDisplayState,
-    /// Synthetic source for the browser build (no engine thread exists there).
-    #[cfg(not(feature = "gui-core"))]
-    web_demo: crate::web_demo::WebDemoSource,
     last_settings_snapshot: Option<AppSettings>,
     settings_dirty_at: Option<hfsdr::time::Instant>,
+}
+
+/// Whether the page is served over TLS, so sockets must be `wss://`.
+///
+/// The browser blocks a `ws://` connection from an https page as mixed
+/// content, and reports it as a generic connection failure — so the UI has to
+/// warn about it up front or the user has no way to tell that apart from a
+/// receiver being down.
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+pub(crate) fn page_requires_tls() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().protocol().ok())
+        .map(|p| p.eq_ignore_ascii_case("https:"))
+        .unwrap_or(false)
 }
 
 impl WaterfallApp {
@@ -45,44 +56,23 @@ impl WaterfallApp {
         Self::build(autoconnect, EngineHandle::spawn())
     }
 
-    /// Browser build: the real UI with no engine thread.
+    /// Browser build: the real UI over a real engine.
     ///
-    /// A tab cannot run the engine's blocking loop, and none of the sources are
-    /// reachable from one — native drivers are dlopen-only and the Kiwi client
-    /// needs a TcpStream. Panels, controls and the waterfall are the real ones;
-    /// what is missing is a live source, fed instead by [`Self::inject_engine_poll`].
-    #[cfg(not(feature = "gui-core"))]
+    /// The engine runs in-process rather than on a thread — see
+    /// [`EngineHandle::spawn_in_process`] — and is stepped once per frame. The
+    /// only source a tab can reach is a KiwiSDR, over the browser's WebSocket
+    /// API; there is no synthetic fallback, so the waterfall stays empty until
+    /// the user connects to a receiver.
+    #[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
     pub fn new_for_web() -> Self {
-        let mut app = Self::build(None, EngineHandle::spawn_detached());
+        let mut app = Self::build(None, EngineHandle::spawn_in_process());
         app.apply_settings(&AppSettings::default());
-        // Open on a filled waterfall rather than one that takes half a minute
-        // to scroll into existence.
-        let poll = app
-            .web_demo
-            .prefill(crate::engine::WATERFALL_ROWS, &app.engine_ui.stats);
-        app.inject_engine_poll(poll);
-
-        // Pin the display range to the synthetic source's known levels. Auto
-        // levelling targets a narrow window suited to real, averaged receiver
-        // noise; raw per-bin FFT noise swings far wider than that and saturates
-        // it to white, so let the source that knows its own statistics say.
-        app.display.ref_db = -40.0;
-        app.display.range_db = 45.0;
-        app.display.display_auto_track = false;
-        app.display.display_levels_initialized = true;
+        app.connection.form.kind = SourceKind::Kiwi;
+        app.connection.form.port = 8073;
+        // Nothing has connected yet, so open the drawer the user needs first.
+        app.connection.form.show_connection_drawer = true;
+        app.last_settings_snapshot = Some(app.current_settings());
         app
-    }
-
-    /// Drive one frame of the browser build's synthetic source.
-    ///
-    /// Without an engine thread nothing produces spectrum rows, so the app would
-    /// render a dead waterfall. This runs the real `SpectrumAnalyzer` over
-    /// generated IQ and injects the result through the same poll path a live
-    /// engine uses — the UI cannot tell the difference.
-    #[cfg(not(feature = "gui-core"))]
-    pub fn pump_web_demo(&mut self, dt: f32) {
-        let poll = self.web_demo.step(dt, &self.engine_ui.stats);
-        self.inject_engine_poll(poll);
     }
 
     /// Headless UI tests: no engine thread; feed [`EnginePoll`] via [`Self::inject_engine_poll`].
@@ -246,8 +236,6 @@ impl WaterfallApp {
                 themed: false,
             },
             meter_display: MeterDisplayState::default(),
-            #[cfg(not(feature = "gui-core"))]
-            web_demo: crate::web_demo::WebDemoSource::default(),
             last_settings_snapshot: None,
             settings_dirty_at: None,
         };
@@ -295,13 +283,10 @@ impl WaterfallApp {
 impl eframe::App for WaterfallApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // Browser builds have no engine thread, so the synthetic source is
-        // stepped here; on desktop the engine fills the same poll queue.
-        #[cfg(not(feature = "gui-core"))]
-        {
-            let dt = ctx.input(|i| i.stable_dt).clamp(0.001, 0.1);
-            self.pump_web_demo(dt);
-        }
+        // The browser engine has no thread of its own: this frame callback is
+        // what turns it. On desktop the engine thread does this itself.
+        #[cfg(target_arch = "wasm32")]
+        self.engine.step();
         if !self.chrome.themed {
             apply(&ctx);
             self.chrome.themed = true;

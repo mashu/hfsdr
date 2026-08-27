@@ -5,20 +5,31 @@ impl WaterfallApp {
 
     pub(crate) fn connection_form_section(&mut self, ui: &mut egui::Ui) {
         popup_section(ui, "Connect", None, |ui| {
-            // Every source needs either a dlopen'd driver or a TcpStream, and a
-            // browser tab has neither. Say so where the button is, rather than
-            // leaving a live-looking control that silently does nothing.
-            #[cfg(not(feature = "gui-core"))]
+            // A tab can reach a KiwiSDR (WebSocket) but no local device, and a
+            // page served over https cannot open a plain ws:// socket at all.
+            // Both are worth saying next to the button rather than leaving the
+            // user to guess at a connection that fails for invisible reasons.
+            #[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
             {
                 ui.label(
                     egui::RichText::new(
-                        "Browser build: live sources are unavailable — native drivers need \
-                         dlopen and KiwiSDR needs a TCP socket. The waterfall below is a \
-                         synthetic band so the receiver UI can be explored.",
+                        "Browser build: KiwiSDR only — local devices need drivers a tab \
+                         cannot load.",
                     )
                     .small()
                     .color(crate::theme::WARN),
                 );
+                if crate::app::page_requires_tls() {
+                    ui.label(
+                        egui::RichText::new(
+                            "This page is served over https, so it can only reach receivers \
+                             that accept wss:// (TLS). A plain http KiwiSDR is blocked by the \
+                             browser as mixed content — run this page over http to reach one.",
+                        )
+                        .small()
+                        .color(crate::theme::WARN),
+                    );
+                }
                 ui.add_space(6.0);
             }
             self.connection.form.kind = sanitize_source_kind(self.connection.form.kind);
