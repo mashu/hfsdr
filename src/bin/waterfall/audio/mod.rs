@@ -1,63 +1,24 @@
-//! Speaker output via cpal — plays demodulated baseband audio from the IQ stream.
+//! Speaker output — plays demodulated baseband audio from the IQ stream.
+//!
+//! Two backends behind one surface: cpal on the desktop, WebAudio in a tab.
+//! The clock-matching resampler both need lives in [`resample`], because
+//! getting it subtly different in one of them would be inaudible in tests and
+//! very audible after ten minutes of listening.
+
+mod resample;
 
 
-// The cpal implementation is desktop-only. A browser build keeps the same
-// public surface but drops the samples: WebAudio needs a user gesture and its
-// own worklet, so silence is the honest behaviour until that exists rather
-// than a half-working stream.
-#[cfg(not(feature = "gui-core"))]
-mod web_stub {
-    use std::sync::Mutex;
+// Browser builds play through WebAudio; non-browser builds without gui-core
+// (the test-only configuration) have no device at all and stay silent.
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+mod web;
+#[cfg(all(target_arch = "wasm32", not(feature = "gui-core")))]
+pub use web::*;
 
-    static TEST_OUTPUT_DEVICES: Mutex<Option<Vec<String>>> = Mutex::new(None);
-
-    /// Injection point used by UI tests; the browser has no device list.
-    pub fn set_test_output_devices(devices: Option<Vec<String>>) {
-        if let Ok(mut g) = TEST_OUTPUT_DEVICES.lock() {
-            *g = devices;
-        }
-    }
-
-    pub const OUTPUT_SAMPLE_RATE: u32 = 48_000;
-
-    /// Silent sink with the same shape as the cpal output.
-    pub struct AudioOutput {
-        device_name: String,
-    }
-
-    impl AudioOutput {
-        pub fn list_output_devices() -> Vec<String> {
-            TEST_OUTPUT_DEVICES
-                .lock()
-                .ok()
-                .and_then(|g| g.clone())
-                .unwrap_or_default()
-        }
-
-        pub fn try_open_default(_iq_rate: u32) -> Option<Self> {
-            None
-        }
-
-        pub fn try_open_named(_name: &str, _iq_rate: u32) -> Option<Self> {
-            None
-        }
-
-        pub fn skip_seconds(&self, _secs: f32) {}
-
-        pub fn output_rate(&self) -> u32 {
-            OUTPUT_SAMPLE_RATE
-        }
-
-        pub fn device_name(&self) -> &str {
-            &self.device_name
-        }
-
-        pub fn push(&mut self, _mono: &[f32], _source_rate: u32, _volume: f32) {}
-    }
-}
-
-#[cfg(not(feature = "gui-core"))]
-pub use web_stub::*;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "gui-core")))]
+mod silent;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "gui-core")))]
+pub use silent::*;
 
 #[cfg(feature = "gui-core")]
 mod cpal_impl {
@@ -70,6 +31,20 @@ use cpal::{Device, SampleRate, Stream, SupportedStreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::log;
+
+use super::resample::{resample_push, servo_step, smooth_fill, SampleSink, RING_CAPACITY};
+
+/// The cpal backend's ring, as a resampler destination.
+struct RingSink<'a>(&'a mut Producer<f32>);
+
+impl SampleSink for RingSink<'_> {
+    fn is_full(&self) -> bool {
+        self.0.is_full()
+    }
+    fn push_sample(&mut self, sample: f32) {
+        let _ = self.0.push(sample);
+    }
+}
 
 #[cfg(test)]
 use std::sync::Mutex;
@@ -87,9 +62,6 @@ pub fn set_test_output_devices(devices: Option<Vec<String>>) {
 
 /// Standard device rate — demod output is resampled in [`AudioOutput::push`].
 pub const OUTPUT_SAMPLE_RATE: u32 = 48_000;
-
-/// ~200 ms at 48 kHz — enough jitter headroom without desyncing from the waterfall.
-const RING_CAPACITY: usize = 9_600;
 
 pub struct AudioOutput {
     producer: Producer<f32>,
@@ -221,13 +193,12 @@ impl AudioOutput {
             return;
         }
 
-        let fill = 1.0 - self.producer.slots() as f32 / RING_CAPACITY as f32;
-        self.fill_avg += 0.02 * (fill - self.fill_avg);
-        let trim = ((self.fill_avg - 0.5) * 0.01).clamp(-0.003, 0.003);
-        let step = source_rate as f64 / self.output_rate as f64 * (1.0 + trim as f64);
+        let occupancy = 1.0 - self.producer.slots() as f32 / RING_CAPACITY as f32;
+        self.fill_avg = smooth_fill(self.fill_avg, occupancy);
+        let step = servo_step(source_rate, self.output_rate, self.fill_avg);
 
         let (pos, last) = resample_push(
-            &mut self.producer,
+            &mut RingSink(&mut self.producer),
             mono,
             step,
             self.resample_pos,
@@ -237,41 +208,6 @@ impl AudioOutput {
         self.resample_pos = pos;
         self.resample_last = last;
     }
-}
-
-/// Linear-interpolation resampler with phase carried across blocks.
-///
-/// `pos` is the fractional read position into `mono` (may sit in [-1, 0)
-/// pointing at `last`, the final sample of the previous block). Returns the
-/// carried `(pos, last)` for the next call.
-fn resample_push(
-    producer: &mut Producer<f32>,
-    mono: &[f32],
-    step: f64,
-    mut pos: f64,
-    last: f32,
-    volume: f32,
-) -> (f64, f32) {
-    let n = mono.len();
-    let limit = n as f64 - 1.0;
-    while pos < limit {
-        if producer.is_full() {
-            break;
-        }
-        let i = pos.floor();
-        let frac = (pos - i) as f32;
-        let (a, b) = if i < 0.0 {
-            (last, mono[0])
-        } else {
-            let idx = i as usize;
-            (mono[idx], mono[idx + 1])
-        };
-        let _ = producer.push((a + (b - a) * frac) * volume);
-        pos += step;
-    }
-    // Lands in [-1, 0) when the block was fully consumed; clamp after an
-    // overflow break (the dropped tail is a discontinuity either way).
-    ((pos - n as f64).max(-1.0), mono[n - 1])
 }
 
 fn fill_output(
@@ -409,7 +345,7 @@ mod tests {
         let (mut pos, mut last) = (0.0f64, 0.0f32);
         let blocks = 8;
         for _ in 0..blocks {
-            let (p, l) = resample_push(&mut prod, &block, 1.0, pos, last, 1.0);
+            let (p, l) = resample_push(&mut RingSink(&mut prod), &block, 1.0, pos, last, 1.0);
             pos = p;
             last = l;
         }
@@ -449,13 +385,13 @@ mod tests {
         let mut pos = 0.0;
         let mut last = 0.0;
         for chunk in [&src[..37], &src[37..300], &src[300..]] {
-            let (p, l) = resample_push(&mut prod_a, chunk, step, pos, last, 1.0);
+            let (p, l) = resample_push(&mut RingSink(&mut prod_a), chunk, step, pos, last, 1.0);
             pos = p;
             last = l;
         }
 
         let (mut prod_b, mut cons_b) = RingBuffer::<f32>::new(8192);
-        let _ = resample_push(&mut prod_b, &src, step, 0.0, 0.0, 1.0);
+        let _ = resample_push(&mut RingSink(&mut prod_b), &src, step, 0.0, 0.0, 1.0);
 
         let mut max_err = 0.0f32;
         loop {
