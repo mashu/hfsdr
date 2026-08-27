@@ -7,6 +7,9 @@ mod reconnect;
 mod spectrum;
 mod worker;
 
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) use worker::IdlePacing;
+
 #[cfg(test)]
 mod tests;
 

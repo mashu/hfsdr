@@ -10,6 +10,9 @@ use std::thread;
 use super::inner::Engine;
 use super::types::{EngineCommand, EngineParams, EnginePoll, EngineShared};
 
+#[cfg(target_arch = "wasm32")]
+use super::inner::IdlePacing;
+
 /// UI-side handle to the engine thread.
 pub struct EngineHandle {
     cmd_tx: Option<Sender<EngineCommand>>,
@@ -19,6 +22,10 @@ pub struct EngineHandle {
     join: Option<thread::JoinHandle<()>>,
     /// Headless UI tests inject polls here instead of running the engine thread.
     test_polls: Option<Arc<Mutex<VecDeque<EnginePoll>>>>,
+    /// Browser builds own the engine outright and step it from the frame
+    /// callback: a tab has no thread to run it on.
+    #[cfg(target_arch = "wasm32")]
+    engine: Option<Box<Engine>>,
 }
 
 impl EngineHandle {
@@ -45,6 +52,8 @@ impl EngineHandle {
             connect_cancel,
             join: Some(join),
             test_polls: None,
+            #[cfg(target_arch = "wasm32")]
+            engine: None,
         }
     }
 
@@ -63,6 +72,49 @@ impl EngineHandle {
             connect_cancel: Arc::new(AtomicBool::new(false)),
             join: None,
             test_polls: Some(Arc::new(Mutex::new(VecDeque::new()))),
+            #[cfg(target_arch = "wasm32")]
+            engine: None,
+        }
+    }
+
+    /// Engine running in-process, stepped by the caller.
+    ///
+    /// The browser has no thread to give the engine, so it lives here and the
+    /// app drives it with [`Self::step`] once per frame. Everything else — the
+    /// command channel, the shared snapshot, `try_poll` — is identical to the
+    /// threaded handle, because the engine does not know or care which driver
+    /// is turning it.
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn_in_process() -> Self {
+        let (cmd_tx, cmd_rx) = channel::<EngineCommand>();
+        let shared = Arc::new(Mutex::new(EngineShared::default()));
+        let params = Arc::new(Mutex::new(EngineParams::default()));
+        let connect_cancel = Arc::new(AtomicBool::new(false));
+        let engine = Engine::new(
+            cmd_rx,
+            Arc::clone(&shared),
+            Arc::clone(&params),
+            Arc::clone(&connect_cancel),
+        );
+        Self {
+            cmd_tx: Some(cmd_tx),
+            shared,
+            params,
+            connect_cancel,
+            join: None,
+            test_polls: None,
+            engine: Some(Box::new(engine)),
+        }
+    }
+
+    /// Advance an in-process engine by one iteration. No-op for other handles.
+    ///
+    /// Called once per repaint, so it must never block: a blocking wait here
+    /// stalls the whole tab, not just the engine.
+    #[cfg(target_arch = "wasm32")]
+    pub fn step(&mut self) {
+        if let Some(engine) = &mut self.engine {
+            engine.step(IdlePacing::Return);
         }
     }
 

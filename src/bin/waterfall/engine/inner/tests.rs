@@ -467,3 +467,124 @@ fn tune_without_connection_updates_request_only() {
         Some(14_050_000.0)
     );
 }
+
+/// The browser drives the engine with `step` instead of `run`, and that path
+/// cannot be exercised on any CI target — wasm32 has no threads and no live
+/// receiver. These tests run the same driver natively, which is the only place
+/// its behaviour can be checked at all.
+mod stepped_driver {
+    use super::*;
+    use crate::engine::inner::IdlePacing;
+    use std::sync::mpsc::Sender;
+
+    /// An engine plus a *live* command sender.
+    ///
+    /// `test_engine` drops its sender, which disconnects the channel and stops
+    /// the engine on the first step — every idle path then short-circuits and
+    /// a test built on it silently checks nothing.
+    fn stepped_engine() -> (Engine, Sender<EngineCommand>, Arc<Mutex<EngineShared>>) {
+        audio::set_test_output_devices(Some(vec!["Test Output".into()]));
+        let (tx, rx) = channel();
+        let shared = Arc::new(Mutex::new(EngineShared::default()));
+        let params = Arc::new(Mutex::new(EngineParams::default()));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let engine = Engine::new(rx, Arc::clone(&shared), params, cancel);
+        (engine, tx, shared)
+    }
+
+    /// `step` must never block: the browser calls it from the frame callback,
+    /// where a 20 ms wait per idle iteration is a visibly frozen tab.
+    ///
+    /// The sender is held for the whole test precisely so the channel stays
+    /// open — that is what forces the idle wait to be reached at all.
+    #[test]
+    fn step_never_blocks_while_idle() {
+        let (mut engine, tx, _shared) = stepped_engine();
+        const STEPS: usize = 50;
+
+        let t0 = Instant::now();
+        for _ in 0..STEPS {
+            engine.step(IdlePacing::Return);
+        }
+        let elapsed = t0.elapsed();
+
+        assert!(engine.running, "engine stopped early; the idle path never ran");
+        // The parking driver waits 20 ms per idle step, so it would need ~1 s.
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "{STEPS} idle steps took {elapsed:?} — the browser driver blocks and would stall the tab"
+        );
+        drop(tx);
+    }
+
+    /// An idle engine still publishes stats every step, so the UI keeps
+    /// updating instead of freezing on whatever it last saw.
+    ///
+    /// Asserting the state is `Disconnected` would prove nothing —
+    /// `EngineShared::default()` already is. The check has to be on a field the
+    /// step must overwrite.
+    #[test]
+    fn idle_steps_publish_stats() {
+        let (mut engine, tx, shared) = stepped_engine();
+        engine.latest = vec![-80.0; FFT_SIZE];
+        if let Ok(mut guard) = shared.lock() {
+            guard.stats.spectrum_fft = 1;
+        }
+
+        engine.step(IdlePacing::Return);
+
+        assert_eq!(
+            shared.lock().expect("shared lock").stats.spectrum_fft,
+            FFT_SIZE,
+            "an idle step published no stats"
+        );
+        drop(tx);
+    }
+
+    /// A command queued before the step must be acted on within that step.
+    #[test]
+    fn step_handles_queued_commands() {
+        let (mut engine, tx, _shared) = stepped_engine();
+        tx.send(EngineCommand::Shutdown).expect("send shutdown");
+        engine.step(IdlePacing::Return);
+        assert!(
+            !engine.running,
+            "stepped driver ignored a command that run() would have handled"
+        );
+    }
+
+    /// A command arriving *while streaming* is drained too. The idle branch and
+    /// the streaming branch take different paths to the command queue, and only
+    /// this one goes through `drain_commands` inside the pump loop.
+    #[test]
+    fn step_handles_commands_while_streaming() {
+        let (mut engine, tx, _shared) = stepped_engine();
+        engine.conn = Some(crate::source::Connection::mock_ring(
+            &tone_iq(4096, 12_000.0, 700.0, 0.2),
+            14_010_000.0,
+            true,
+        ));
+        engine.step(IdlePacing::Return);
+        assert!(engine.running);
+
+        tx.send(EngineCommand::Shutdown).expect("send shutdown");
+        engine.step(IdlePacing::Return);
+        assert!(
+            !engine.running,
+            "a command sent while streaming was never drained"
+        );
+    }
+
+    /// Dropping the last sender must stop the engine rather than leave the
+    /// browser stepping a dead engine forever.
+    #[test]
+    fn step_stops_when_the_command_channel_closes() {
+        let (mut engine, tx, _shared) = stepped_engine();
+        engine.step(IdlePacing::Return);
+        assert!(engine.running, "engine stopped while the channel was open");
+
+        drop(tx);
+        engine.step(IdlePacing::Return);
+        assert!(!engine.running, "a closed channel must end the engine");
+    }
+}

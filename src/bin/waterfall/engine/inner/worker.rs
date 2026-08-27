@@ -2,13 +2,21 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
-use hfsdr::time::{Duration, Instant};
+use hfsdr::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use hfsdr::time::Duration;
 
-use hfsdr::{DecimFilterKind, FirDecimator, IngressWorker, IqAudioDemod, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA};
+use hfsdr::{DecimFilterKind, FirDecimator, IqAudioDemod, PipelineMetrics, SpectrumAnalyzer, SpectrumFrontEnd, DEFAULT_FFT_WINDOW, DEFAULT_KAISER_BETA};
 
+
+#[cfg(not(target_arch = "wasm32"))]
+use hfsdr::IngressWorker;
 
 use crate::engine::audio::{AudioScopeRing, AudioWaveformRing};
 use super::Engine;
@@ -16,6 +24,61 @@ use crate::engine::policy::{catchup_pumps_max, MAX_DRAIN_WIDEBAND};
 use crate::engine::types::{EngineCommand, EngineParams, EngineShared};
 use crate::engine::policy::MIN_SPECTRUM_ROWS_WIDEBAND;
 use crate::engine::{FFT_HOP, FFT_SIZE};
+
+/// Why an idle engine iteration returned, when no command was waiting.
+enum IdleWait {
+    Empty,
+    Disconnected,
+}
+
+/// How the engine may spend an iteration with no work to do.
+///
+/// The two drivers need opposite behaviour here. A native engine owns its
+/// thread and should park rather than spin a core at 100%. A browser engine
+/// runs on the frame callback, where any blocking wait freezes the UI for
+/// exactly as long as it waits — there the repaint interval *is* the pacing.
+#[derive(Clone, Copy)]
+pub(crate) enum IdlePacing {
+    /// Block briefly; the caller has its own thread.
+    Park,
+    /// Return at once; the caller is driven by something else.
+    Return,
+}
+
+impl IdlePacing {
+    /// Wait out a pump that produced nothing, so an idle engine does not spin.
+    fn pause_briefly(self) {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Park => thread::sleep(Duration::from_millis(3)),
+            // Unreachable on wasm32 (nothing constructs `Park` there), but the
+            // variant still exists, and sleeping in a tab would be wrong anyway.
+            #[cfg(target_arch = "wasm32")]
+            Self::Park => {}
+            Self::Return => {}
+        }
+    }
+
+    /// Take the next command, blocking only when this driver is allowed to.
+    fn await_command(
+        self,
+        rx: &Receiver<EngineCommand>,
+    ) -> std::result::Result<EngineCommand, IdleWait> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Park => rx.recv_timeout(Duration::from_millis(20)).map_err(|e| match e {
+                RecvTimeoutError::Timeout => IdleWait::Empty,
+                RecvTimeoutError::Disconnected => IdleWait::Disconnected,
+            }),
+            #[cfg(target_arch = "wasm32")]
+            Self::Park => Self::Return.await_command(rx),
+            Self::Return => rx.try_recv().map_err(|e| match e {
+                TryRecvError::Empty => IdleWait::Empty,
+                TryRecvError::Disconnected => IdleWait::Disconnected,
+            }),
+        }
+    }
+}
 
 impl Engine {
     pub(crate) fn new(
@@ -42,7 +105,11 @@ impl Engine {
             spectrum_ingress_factor: 1,
             spectrum_ingress_rate: 384_000.0,
             spectrum_ingress_filter: DecimFilterKind::LinearFir,
+            // wasm32 has no threads; the pump decimates inline when this is None.
+            #[cfg(not(target_arch = "wasm32"))]
             ingress_worker: Some(IngressWorker::spawn()),
+            #[cfg(target_arch = "wasm32")]
+            ingress_worker: None,
             audio_scratch: Vec::new(),
             audio_scope: AudioScopeRing::new(),
             audio_waveform: AudioWaveformRing::new(),
@@ -96,9 +163,25 @@ impl Engine {
 
     pub(crate) fn run(&mut self) {
         while self.running {
+            self.step(IdlePacing::Park);
+        }
+        // Clean shutdown: stop source so the reader thread exits.
+        if let Some(conn) = &mut self.conn {
+            crate::log::warn_if_err("stop device on engine shutdown", conn.device.stop());
+        }
+    }
+
+    /// Run one iteration of the engine loop.
+    ///
+    /// Split out of [`Self::run`] because a browser tab has no thread to run
+    /// that loop on: there the frame callback calls this instead, once per
+    /// repaint. Everything the engine does per iteration is here; `run` is the
+    /// native driver around it.
+    pub(crate) fn step(&mut self, idle: IdlePacing) {
+        {
             self.drain_commands();
             if !self.running {
-                break;
+                return;
             }
 
             let streaming = self.conn.is_some() || self.playback.is_some();
@@ -127,7 +210,7 @@ impl Engine {
                 }
                 self.maybe_reconnect_on_stall();
                 if self.last_pump_got == 0 {
-                    thread::sleep(Duration::from_millis(3));
+                    idle.pause_briefly();
                 }
             } else {
                 self.maybe_retry_reconnect();
@@ -140,16 +223,12 @@ impl Engine {
                 self.update_ring_utilization(sample_rate, (0.0, 0.0), 0, dt);
                 self.last_pump_at = Instant::now();
                 self.publish_stats(0);
-                match self.cmd_rx.recv_timeout(Duration::from_millis(20)) {
+                match idle.await_command(&self.cmd_rx) {
                     Ok(cmd) => self.handle_command(cmd),
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => self.running = false,
+                    Err(IdleWait::Empty) => {}
+                    Err(IdleWait::Disconnected) => self.running = false,
                 }
             }
-        }
-        // Clean shutdown: stop source so the reader thread exits.
-        if let Some(conn) = &mut self.conn {
-            crate::log::warn_if_err("stop device on engine shutdown", conn.device.stop());
         }
     }
 
