@@ -88,6 +88,12 @@ class HfsdrSink extends AudioWorkletProcessor {
 registerProcessor('hfsdr-sink', HfsdrSink);
 "#;
 
+/// Gesture events that resume a suspended context.
+///
+/// Named once because the listeners must be removed with exactly the names they
+/// were added with; a mismatch leaves a listener pointing at freed memory.
+const GESTURE_EVENTS: [&str; 3] = ["pointerdown", "keydown", "touchstart"];
+
 /// Resampled samples destined for one `postMessage`.
 struct BlockSink<'a> {
     out: &'a mut Vec<f32>,
@@ -236,7 +242,7 @@ impl AudioOutput {
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
             let _ = ctx_cb.resume();
         });
-        for event in ["pointerdown", "keydown", "touchstart"] {
+        for event in GESTURE_EVENTS {
             let _ = document
                 .add_event_listener_with_callback(event, cb.as_ref().unchecked_ref());
         }
@@ -321,5 +327,44 @@ impl AudioOutput {
         if let Ok(port) = node.port() {
             let _ = port.post_message(&msg);
         }
+    }
+}
+
+impl Drop for AudioOutput {
+    /// Detach everything JS still holds before the closures behind it are freed.
+    ///
+    /// Without this, dropping an `AudioOutput` leaves two live references into
+    /// memory that is about to go away: the worklet's `MessagePort`, which
+    /// reports its queue depth every few milliseconds, and the document's
+    /// gesture listeners, which fire on the next click. Both then raise
+    /// "closure invoked recursively or after being dropped" — the worklet
+    /// continuously, which is thousands of errors a minute.
+    ///
+    /// This is reachable in ordinary use: the engine opens an output on every
+    /// connection attempt, so a receiver that refuses the connection orphans
+    /// one output per retry.
+    ///
+    /// Closing the context matters too. A browser allows only a handful of
+    /// `AudioContext`s per page, so leaking one per attempt eventually means no
+    /// audio at all, long after the retries have stopped.
+    fn drop(&mut self) {
+        if let Some(node) = self.node.borrow().as_ref() {
+            if let Ok(port) = node.port() {
+                port.set_onmessage(None);
+                port.close();
+            }
+            let _ = node.disconnect();
+        }
+        if let Some(cb) = &self._gesture {
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                for event in GESTURE_EVENTS {
+                    let _ = document.remove_event_listener_with_callback(
+                        event,
+                        cb.as_ref().unchecked_ref(),
+                    );
+                }
+            }
+        }
+        let _ = self.ctx.close();
     }
 }

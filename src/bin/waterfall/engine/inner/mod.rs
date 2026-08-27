@@ -1,7 +1,7 @@
 //! Engine worker: state + split `impl` blocks (same parent module → private field access).
 
 mod commands;
-mod connection;
+pub(crate) mod connection;
 mod pump;
 mod reconnect;
 mod spectrum;
