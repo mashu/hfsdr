@@ -519,6 +519,76 @@ fn write_cache(geo: &Option<GeoLocation>, receivers: &[KiwiReceiver]) -> Result<
 
 #[cfg(test)]
 mod tests {
+    /// The geo response is parsed from whichever provider answers, and the two
+    /// in use spell every field differently. Getting this wrong does not fail
+    /// loudly — it silently drops the sort order — so pin both shapes.
+    #[test]
+    fn geo_response_accepts_both_provider_shapes() {
+        // ip-api.com: explicit status, camelCase country code.
+        let ip_api: GeoResponse = serde_json::from_str(
+            r#"{"status":"success","country":"Sweden","countryCode":"SE","lat":59.3,"lon":18.1}"#,
+        )
+        .expect("ip-api shape");
+        let loc = ip_api.into_location().expect("location");
+        assert_eq!(loc.country, "Sweden");
+        assert_eq!(loc.country_code, "SE");
+        assert!((loc.lat - 59.3).abs() < 1e-9);
+        assert!((loc.lon - 18.1).abs() < 1e-9);
+
+        // ipapi.co: no status field at all, snake_case names.
+        let ipapi: GeoResponse = serde_json::from_str(
+            r#"{"country_name":"Sweden","country_code":"SE","latitude":59.3,"longitude":18.1}"#,
+        )
+        .expect("ipapi shape");
+        let loc = ipapi.into_location().expect("a missing status is not a failure");
+        assert_eq!(loc.country_code, "SE");
+        assert!((loc.lat - 59.3).abs() < 1e-9);
+    }
+
+    /// An explicit failure status must be honoured even when the response
+    /// otherwise looks complete.
+    ///
+    /// The coordinates here are deliberate: without them the conversion fails
+    /// on the missing latitude no matter what the status says, and the test
+    /// would pass with the status check deleted.
+    #[test]
+    fn geo_response_reports_an_explicit_failure() {
+        let failed: GeoResponse = serde_json::from_str(
+            r#"{"status":"fail","country":"Sweden","countryCode":"SE","lat":59.3,"lon":18.1}"#,
+        )
+        .expect("fail shape");
+        assert!(
+            failed.into_location().is_err(),
+            "a failed lookup was accepted because the rest of the fields parsed"
+        );
+    }
+
+    /// Coordinates are the whole point; without them there is nothing to sort
+    /// by, so a response missing them must not pass as a location.
+    #[test]
+    fn geo_response_without_coordinates_is_an_error() {
+        let no_lat: GeoResponse =
+            serde_json::from_str(r#"{"country_name":"Sweden","longitude":18.1}"#)
+                .expect("partial shape");
+        assert!(no_lat.into_location().is_err());
+
+        let no_lon: GeoResponse =
+            serde_json::from_str(r#"{"country_name":"Sweden","latitude":59.3}"#)
+                .expect("partial shape");
+        assert!(no_lon.into_location().is_err());
+    }
+
+    /// Names are optional and only ever displayed, so a response without them
+    /// still locates the user.
+    #[test]
+    fn geo_response_without_names_still_locates() {
+        let bare: GeoResponse =
+            serde_json::from_str(r#"{"latitude":59.3,"longitude":18.1}"#).expect("bare shape");
+        let loc = bare.into_location().expect("location");
+        assert_eq!(loc.country, "Unknown");
+        assert_eq!(loc.country_code, "??");
+    }
+
     use super::*;
 
     const SAMPLE: &str = r#"var kiwisdr_com =

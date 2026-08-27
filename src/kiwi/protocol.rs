@@ -335,6 +335,17 @@ mod url_tests {
             split_host_port("rx.example.com", 8074),
             ("rx.example.com".to_string(), 8074)
         );
+        // A colon that is not a port must not truncate the host: better to
+        // fail resolving a whole name than to silently connect somewhere else.
+        assert_eq!(
+            split_host_port("rx.example.com:notaport", 8073),
+            ("rx.example.com:notaport".to_string(), 8073)
+        );
+        assert_eq!(
+            split_host_port("https://rx.example.com:notaport", 8073),
+            ("rx.example.com:notaport".to_string(), 443)
+        );
+
         // IPv6 literals: the colons inside are not a port.
         assert_eq!(
             split_host_port("[2001:db8::1]:8073", 8074),
