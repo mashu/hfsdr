@@ -12,21 +12,43 @@ impl WaterfallApp {
                 });
             } else if !self.connection.kiwi.nearby.is_empty() {
                 let mut nearby = self.connection.kiwi.nearby.clone();
+                // An https page cannot open a plain-ws socket, so receivers
+                // without TLS are not merely unlikely to work — the browser
+                // refuses before the request leaves the tab. Sort them last and
+                // say why rather than offering a click that cannot succeed.
+                let page_https = crate::app::page_requires_tls();
+                let reachable = |rx: &crate::kiwi_directory::KiwiReceiver| {
+                    crate::kiwi_directory::reachable_from_page(page_https, rx.tls)
+                };
                 nearby.sort_by(|a, b| {
+                    let ar = !reachable(a);
+                    let br = !reachable(b);
                     let af = a.users >= a.users_max;
                     let bf = b.users >= b.users_max;
-                    af.cmp(&bf).then_with(|| {
-                        a.distance_km
-                            .partial_cmp(&b.distance_km)
-                            .unwrap_or(std::cmp::Ordering::Equal)
+                    ar.cmp(&br).then_with(|| {
+                        af.cmp(&bf).then_with(|| {
+                            a.distance_km
+                                .partial_cmp(&b.distance_km)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
                     })
                 });
+                if page_https && !nearby.iter().any(reachable) {
+                    alert_banner(
+                        ui,
+                        "None of these accept wss:// (TLS), so this page cannot reach any \
+                         of them. Run hfsdr locally over http, or use the desktop build, \
+                         to use them.",
+                        None,
+                    );
+                }
                 egui::ScrollArea::vertical()
                     .max_height(130.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for rx in nearby {
                             let full = rx.users >= rx.users_max;
+                            let ok = reachable(&rx);
                             let dist = if rx.distance_km > 0.0 {
                                 format!("{:.0}km ", rx.distance_km)
                             } else {
@@ -37,12 +59,19 @@ impl WaterfallApp {
                             } else {
                                 format!("{}/{}", rx.users, rx.users_max)
                             };
-                            let line = format!(
-                                "{}:{} · {}{} · {}",
-                                rx.host, rx.port, dist, users, rx.location
-                            );
-                            let resp = list_row(ui, &line, !full);
-                            if resp.clicked() {
+                            let line = if ok {
+                                format!(
+                                    "{}:{} · {}{} · {}",
+                                    rx.host, rx.port, dist, users, rx.location
+                                )
+                            } else {
+                                format!(
+                                    "{}:{} · no TLS — unreachable from https · {}",
+                                    rx.host, rx.port, rx.location
+                                )
+                            };
+                            let resp = list_row(ui, &line, !full && ok);
+                            if resp.clicked() && ok {
                                 self.connection.form.host = rx.host;
                                 self.connection.form.port = rx.port;
                                 self.connect_now();
