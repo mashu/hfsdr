@@ -116,6 +116,19 @@ pub fn rf_attn_db(text: &str) -> Option<f32> {
         .map(|db| db.clamp(0.0, KIWI_RF_ATTN_MAX_DB))
 }
 
+/// KiwiSDR stream URL: `<scheme>://host:port/<unix seconds>/SND`.
+///
+/// The timestamp is what kiwiclient sends; the Kiwi uses it to distinguish
+/// reconnects from duplicate sessions.
+///
+/// `secure` selects `wss://`. It is not a preference: a page served over https
+/// cannot open a `ws://` socket at all — browsers block it as mixed content
+/// with no user override — so the scheme has to follow the page's own.
+pub fn stream_url(secure: bool, host: &str, port: u16, timestamp_secs: u64) -> String {
+    let scheme = if secure { "wss" } else { "ws" };
+    format!("{scheme}://{host}:{port}/{timestamp_secs}/SND")
+}
+
 /// Commands sent after the server reports `sample_rate=…` (kiwiclient handshake).
 pub struct KiwiRxSetup {
     pub low_cut: i32,
@@ -214,6 +227,28 @@ mod tests {
     fn kiwi_full_passband_half_width() {
         assert_eq!(kiwi_iq_half_hz(12_000), 5_980);
         assert_eq!(kiwi_iq_half_hz(12_001), 5_980);
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::stream_url;
+
+    #[test]
+    fn stream_url_matches_kiwiclient_shape() {
+        assert_eq!(
+            stream_url(false, "rx.example.com", 8073, 1_700_000_000),
+            "ws://rx.example.com:8073/1700000000/SND"
+        );
+    }
+
+    /// A page served over https can only open `wss://`; getting this wrong is
+    /// a mixed-content block, not a connection error, so it must follow the
+    /// page rather than a preference.
+    #[test]
+    fn secure_page_selects_wss() {
+        assert!(stream_url(true, "rx.example.com", 8073, 1).starts_with("wss://"));
+        assert!(stream_url(false, "rx.example.com", 8073, 1).starts_with("ws://"));
     }
 }
 

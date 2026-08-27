@@ -3,24 +3,92 @@
 //! Wire format reverse-checked against the reference client (jks-prv/kiwiclient).
 
 pub mod protocol;
+#[cfg(not(target_arch = "wasm32"))]
 mod reader;
+pub mod session;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 use crate::source::controls::KiwiControls;
 use crate::source::{Complex32, Consumer, IqSource, Result, SourceError};
 use protocol::{kiwi_iq_half_hz, KIWI_IQ_RATE, KiwiRxSetup, KIWI_MAN_GAIN_DEFAULT, mod_iq_command};
+#[cfg(not(target_arch = "wasm32"))]
 use reader::{READ_TIMEOUT, reader_loop};
+use session::{KiwiLinkState, KiwiSession};
 use rtrb::RingBuffer;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
+use crate::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::net::{TcpStream, ToSocketAddrs};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc::{self, Sender};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::{self, JoinHandle};
-use crate::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
 use tungstenite::client::IntoClientRequest;
+#[cfg(not(target_arch = "wasm32"))]
 use tungstenite::stream::MaybeTlsStream;
+#[cfg(not(target_arch = "wasm32"))]
 use tungstenite::{Message, WebSocket};
 
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
+
+/// The live transport, whichever this target has.
+///
+/// Both variants answer the same three questions the rest of the code asks:
+/// is the link alive, take this command, and (on drop) shut down.
+#[cfg(not(target_arch = "wasm32"))]
+struct Link {
+    /// `None` for the mock source, which accepts no commands.
+    cmd_tx: Option<Sender<String>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Link {
+    fn alive(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
+    fn send_cmd(&self, cmd: String) {
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.send(cmd);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Link {
+    fn drop(&mut self) {
+        // Dropping the sender is what lets the reader loop notice the stop flag
+        // and return, so join only after it is gone.
+        self.cmd_tx = None;
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct Link {
+    socket: web::WebKiwiLink,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Link {
+    fn alive(&self) -> bool {
+        self.socket.alive()
+    }
+
+    fn send_cmd(&self, cmd: String) {
+        self.socket.send_command(cmd);
+    }
+}
 
 /// A KiwiSDR IQ front end.
 pub struct KiwiSource {
@@ -44,8 +112,7 @@ pub struct KiwiSource {
     rssi_cdbm: Arc<AtomicI32>,
     iq_streaming: Arc<AtomicBool>,
     link_error: Arc<Mutex<Option<String>>>,
-    cmd_tx: Option<Sender<String>>,
-    handle: Option<JoinHandle<()>>,
+    link: Option<Link>,
 }
 
 impl KiwiSource {
@@ -54,9 +121,17 @@ impl KiwiSource {
         self.iq_streaming.load(Ordering::Relaxed)
     }
 
-    /// Reader thread is still running.
+    /// The transport is still running: the reader thread natively, the socket
+    /// in the browser.
     pub fn link_alive(&self) -> bool {
-        self.handle.as_ref().is_some_and(|h| !h.is_finished())
+        self.link.as_ref().is_some_and(Link::alive)
+    }
+
+    /// Forward a control command to the transport, if one is connected.
+    fn send_cmd(&self, cmd: String) {
+        if let Some(link) = &self.link {
+            link.send_cmd(cmd);
+        }
     }
 
     pub fn link_error(&self) -> Option<String> {
@@ -87,8 +162,7 @@ impl KiwiSource {
             rssi_cdbm: Arc::new(AtomicI32::new(0)),
             iq_streaming: Arc::new(AtomicBool::new(false)),
             link_error: Arc::new(Mutex::new(None)),
-            cmd_tx: None,
-            handle: None,
+            link: None,
         }
     }
 
@@ -153,6 +227,87 @@ impl KiwiSource {
         )
     }
 
+    /// Opening handshake, sent as soon as the socket is writable.
+    ///
+    /// Order follows kiwiclient: authenticate, identify, then request the mode
+    /// and rates. The Kiwi answers with `sample_rate=…`, which is what drives
+    /// [`session::KiwiSession`] into IQ setup.
+    fn auth_lines(&self) -> Vec<String> {
+        vec![
+            "SET auth t=kiwi p=".to_string(),
+            "SET ident_user=hfsdr".to_string(),
+            self.mod_cmd(),
+            format!("SET AR OK in={} out={}", KIWI_IQ_RATE, self.ar_out_hz),
+            protocol::agc_command(self.agc_on, self.man_gain),
+            "SET squelch=0 max=0".to_string(),
+            "SET keepalive".to_string(),
+        ]
+    }
+
+    /// Unix seconds, which the Kiwi uses to tell reconnects from duplicates.
+    fn stream_timestamp(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Browser transport: open the socket and return at once.
+    ///
+    /// There is nothing to cancel yet and nothing to wait for — `WebSocket` is
+    /// asynchronous by construction, so `cancel` is only checked up front. The
+    /// caller already polls [`Self::link_error`] and [`Self::iq_ready`] while
+    /// the handshake completes, which is exactly what the native path needs
+    /// too once it has spawned its reader.
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_cancellable(&mut self, cancel: &AtomicBool) -> Result<Consumer<Complex32>> {
+        if self.streaming {
+            return Err(SourceError::InvalidState("already streaming"));
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(SourceError::Backend {
+                op: "kiwi connect cancelled",
+                code: -6,
+            });
+        }
+
+        let (prod, cons) = RingBuffer::<Complex32>::new(1 << 16);
+        let session = KiwiSession::new(self.rx_setup(), self.link_state());
+        let socket = web::WebKiwiLink::open(
+            &self.host,
+            self.port,
+            self.stream_timestamp(),
+            session,
+            prod,
+            self.auth_lines(),
+        )
+        .map_err(|detail| {
+            if let Ok(mut slot) = self.link_error.lock() {
+                *slot = Some(detail);
+            }
+            SourceError::Backend {
+                op: "kiwi connect",
+                code: -2,
+            }
+        })?;
+
+        self.link = Some(Link { socket });
+        self.streaming = true;
+        Ok(cons)
+    }
+
+    /// Shared handles the reader reports link status through.
+    fn link_state(&self) -> KiwiLinkState {
+        KiwiLinkState {
+            dropped: Arc::clone(&self.dropped),
+            rssi_cdbm: Arc::clone(&self.rssi_cdbm),
+            iq_streaming: Arc::clone(&self.iq_streaming),
+            link_error: Arc::clone(&self.link_error),
+            has_rf_attn: Arc::clone(&self.has_rf_attn),
+            rf_attn_cdb: Arc::clone(&self.rf_attn_cdb),
+        }
+    }
+
     fn rx_setup(&self) -> KiwiRxSetup {
         KiwiRxSetup {
             low_cut: self.low_cut,
@@ -167,12 +322,9 @@ impl KiwiSource {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn connect_ws(&self, cancel: &AtomicBool) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let url = format!("ws://{}:{}/{}/SND", self.host, self.port, ts);
+        let url = protocol::stream_url(false, &self.host, self.port, self.stream_timestamp());
         let addr = (self.host.as_str(), self.port)
             .to_socket_addrs()
             .map_err(|_| SourceError::Backend {
@@ -212,6 +364,7 @@ impl KiwiSource {
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn start_cancellable(&mut self, cancel: &AtomicBool) -> Result<Consumer<Complex32>> {
         if self.streaming {
             return Err(SourceError::InvalidState("already streaming"));
@@ -228,15 +381,7 @@ impl KiwiSource {
             let _ = tcp.set_read_timeout(Some(READ_TIMEOUT));
         }
 
-        for line in [
-            "SET auth t=kiwi p=",
-            "SET ident_user=hfsdr",
-            &self.mod_cmd(),
-            &format!("SET AR OK in={} out={}", KIWI_IQ_RATE, self.ar_out_hz),
-            &protocol::agc_command(self.agc_on, self.man_gain),
-            "SET squelch=0 max=0",
-            "SET keepalive",
-        ] {
+        for line in self.auth_lines() {
             if cancel.load(Ordering::Relaxed) {
                 let _ = ws.close(None);
                 return Err(SourceError::Backend {
@@ -244,7 +389,7 @@ impl KiwiSource {
                     code: -6,
                 });
             }
-            ws.send(Message::Text(line.into()))
+            ws.send(Message::Text(line.as_str().into()))
                 .map_err(|_| SourceError::Backend {
                     op: "kiwi auth",
                     code: -5,
@@ -255,33 +400,14 @@ impl KiwiSource {
         let (cmd_tx, cmd_rx) = mpsc::channel::<String>();
         let stop = Arc::new(AtomicBool::new(false));
 
-        let dropped = Arc::clone(&self.dropped);
-        let rssi = Arc::clone(&self.rssi_cdbm);
-        let iq_streaming = Arc::clone(&self.iq_streaming);
-        let link_error = Arc::clone(&self.link_error);
-        let has_rf_attn = Arc::clone(&self.has_rf_attn);
-        let rf_attn_cdb = Arc::clone(&self.rf_attn_cdb);
         let stop_thread = Arc::clone(&stop);
-        let rx_setup = self.rx_setup();
+        let session = KiwiSession::new(self.rx_setup(), self.link_state());
         let handle = thread::spawn(move || {
-            reader_loop(
-                ws,
-                prod,
-                cmd_rx,
-                stop_thread,
-                dropped,
-                rssi,
-                iq_streaming,
-                link_error,
-                has_rf_attn,
-                rf_attn_cdb,
-                rx_setup,
-            );
+            reader_loop(ws, prod, cmd_rx, stop_thread, session);
         });
 
         self.stop = stop;
-        self.cmd_tx = Some(cmd_tx);
-        self.handle = Some(handle);
+        self.link = Some(Link { cmd_tx: Some(cmd_tx), handle: Some(handle) });
         self.streaming = true;
         Ok(cons)
     }
@@ -316,8 +442,7 @@ impl KiwiSource {
             }
         });
         self.stop = stop_flag;
-        self.cmd_tx = None;
-        self.handle = Some(handle);
+        self.link = Some(Link { cmd_tx: None, handle: Some(handle) });
         self.streaming = true;
         self.iq_streaming.store(true, Ordering::Relaxed);
         Ok(cons)
@@ -345,9 +470,7 @@ impl IqSource for KiwiSource {
 
     fn tune(&mut self, hz: f64) -> Result<()> {
         self.freq_hz = hz;
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(self.mod_cmd());
-        }
+        self.send_cmd(self.mod_cmd());
         Ok(())
     }
 
@@ -365,10 +488,7 @@ impl IqSource for KiwiSource {
             return Ok(());
         }
         self.stop.store(true, Ordering::Relaxed);
-        self.cmd_tx = None;
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
+        self.link = None;
         self.streaming = false;
         Ok(())
     }
@@ -386,27 +506,19 @@ impl KiwiSource {
     pub fn set_passband(&mut self, low_hz: i32, high_hz: i32) -> Result<()> {
         self.low_cut = low_hz;
         self.high_cut = high_hz;
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(self.mod_cmd());
-        }
+        self.send_cmd(self.mod_cmd());
         Ok(())
     }
 
     pub fn set_agc(&mut self, on: bool) -> Result<()> {
         self.agc_on = on;
-        if let Some(tx) = &self.cmd_tx {
-            let cmd = protocol::agc_command(on, self.man_gain);
-            let _ = tx.send(cmd);
-        }
+        self.send_cmd(protocol::agc_command(on, self.man_gain));
         Ok(())
     }
 
     pub fn set_man_gain(&mut self, gain: u8) -> Result<()> {
         self.man_gain = gain.clamp(0, 100);
-        if let Some(tx) = &self.cmd_tx {
-            let cmd = protocol::agc_command(self.agc_on, self.man_gain);
-            let _ = tx.send(cmd);
-        }
+        self.send_cmd(protocol::agc_command(self.agc_on, self.man_gain));
         Ok(())
     }
 
@@ -415,9 +527,7 @@ impl KiwiSource {
         self.rf_attn_db = db;
         self.rf_attn_cdb
             .store((db * 10.0).round() as i32, Ordering::Relaxed);
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(protocol::rf_attn_command(db));
-        }
+        self.send_cmd(protocol::rf_attn_command(db));
         Ok(())
     }
 }
