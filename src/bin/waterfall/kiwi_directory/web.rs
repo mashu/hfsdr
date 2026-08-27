@@ -74,9 +74,40 @@ fn describe(url: &str, err: &wasm_bindgen::JsValue) -> String {
     format!("could not reach {url}{}{hint}", if detail.is_empty() { String::new() } else { format!(": {detail}") })
 }
 
-async fn fetch_directory() -> Result<Directory, String> {
+/// Same-origin copy of the directory, baked in at build time.
+///
+/// The live host is third-party, and whether it allows cross-origin requests
+/// is not ours to control — a page whose receiver list depends on someone
+/// else's CORS policy is a page that shows an empty list. This copy is fetched
+/// by CI and served from our own origin, where neither CORS nor mixed content
+/// applies.
+const BUNDLED_LIST: &str = "./receivers.js";
+
+/// The bundled list first, then the live one.
+///
+/// Bundled wins on first load because it always works. The live URL is still
+/// tried when the bundle is missing, and preferred on an explicit refresh, so
+/// a deployment does not pin the list forever.
+async fn fetch_list(force_refresh: bool) -> Result<String, String> {
+    if force_refresh {
+        match get_text(LIST_URL).await {
+            Ok(live) => return Ok(live),
+            Err(e) => crate::log::warn(format!(
+                "kiwi directory: live refresh failed ({e}), using the bundled list"
+            )),
+        }
+    }
+    match get_text(BUNDLED_LIST).await {
+        Ok(list) => Ok(list),
+        Err(bundled_err) => get_text(LIST_URL)
+            .await
+            .map_err(|live_err| format!("{bundled_err}; live list also failed: {live_err}")),
+    }
+}
+
+async fn fetch_directory(force_refresh: bool) -> Result<Directory, String> {
     // The list is the point; geo only sorts it.
-    let list = get_text(LIST_URL).await?;
+    let list = fetch_list(force_refresh).await?;
     let mut receivers = parse_receiver_list(&list)?;
 
     let geo = match get_text(GEO_URL).await {
@@ -104,7 +135,7 @@ pub fn start(tx: std::sync::mpsc::Sender<Result<Directory, String>>, force_refre
         }
     }
     wasm_bindgen_futures::spawn_local(async move {
-        let result = fetch_directory().await;
+        let result = fetch_directory(force_refresh).await;
         if let Ok(dir) = &result {
             write_cache(dir);
         }

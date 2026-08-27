@@ -2,3 +2,5 @@
 /docs/book
 # Browser build output (produced by scripts/build-web.sh in CI)
 web/pkg/
+# Fetched by scripts/build-web.sh at build time, not committed.
+web/receivers.js

@@ -39,4 +39,34 @@ if command -v wasm-opt >/dev/null 2>&1; then
   fi
 fi
 
+# Point index.html at this exact build.
+#
+# GitHub Pages caches assets, so without a changing URL a returning visitor
+# keeps the module they already have and a fresh deploy appears to have changed
+# nothing. Substitution is idempotent: it rewrites whatever version is there.
+build_id=$(sha256sum web/pkg/hfsdr_bg.wasm | cut -c1-12)
+sed -i -E "s|(\./pkg/hfsdr\.js\?v=)[^\"]*|\1${build_id}|" web/index.html
+echo "build id: ${build_id}"
+
+# Bake the public receiver list into the deployment.
+#
+# The browser cannot be relied on to fetch it live: the directory is a
+# third-party host, and whether it sends CORS headers is not ours to control.
+# CI has ordinary network access, so fetch it here and serve it from our own
+# origin, where neither CORS nor mixed content applies. The app still tries the
+# live URL when the user asks to refresh; this is what makes the list work on
+# first load.
+#
+# A failure here is not fatal — the app falls back to the live fetch and says so
+# — because a directory outage must not break the build.
+LIST_URL="https://rx.linkfanel.net/kiwisdr_com.js"
+echo "fetching receiver list from $LIST_URL"
+if curl -fsS --max-time 60 "$LIST_URL" -o web/receivers.js.tmp; then
+  mv web/receivers.js.tmp web/receivers.js
+  echo "receiver list: $(wc -c < web/receivers.js) bytes"
+else
+  rm -f web/receivers.js.tmp
+  echo "WARNING: could not fetch the receiver list; the app will try the live URL instead"
+fi
+
 ls -la web/pkg/
