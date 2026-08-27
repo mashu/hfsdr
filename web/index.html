@@ -41,7 +41,10 @@
     </div>
   </div>
   <script type="module">
-    import init from "./pkg/hfsdr.js";
+    // The query is rewritten to the wasm's content hash at build time. Without
+    // it a returning visitor keeps the cached module and sees no change after a
+    // deploy, which looks exactly like a deploy that never happened.
+    import init from "./pkg/hfsdr.js?v=dev";
     init().catch((e) => {
       const el = document.getElementById("loading");
       if (el) {
