@@ -21,10 +21,38 @@
 //! Commands stay on an `mpsc` channel: unbounded, so `send` never blocks, and
 //! discrete actions must not be coalesced the way a latest-value slot would.
 //!
-//! The same shape serves every target. A native build puts the engine on a
-//! thread; a browser build with cross-origin isolation puts it on a worker;
-//! neither changes anything here, because nothing here assumes which side runs
-//! where — only that there is exactly one of each.
+//! The same shape serves every target: nothing here assumes which side runs
+//! where, only that there is exactly one of each. Natively the engine gets a
+//! thread. In the browser it gets a timer instead, and the reason is worth
+//! recording, because "put it on a worker" is the obvious fix and it does not
+//! currently work.
+//!
+//! A Web Worker needs shared memory, which needs the wasm `atomics` target
+//! feature. Everything in this project builds with it — rayon, rustfft, rtrb,
+//! tungstenite, a std rebuilt via `-Z build-std`, and `wasm_thread` to back
+//! `std::thread::spawn` with a worker. What does not build is the renderer:
+//!
+//! ```text
+//! wgpu-types/src/send_sync.rs:
+//!     #[cfg(any(not(target_arch = "wasm32"),
+//!               all(feature = "fragile-send-sync-non-atomic-wasm",
+//!                   not(target_feature = "atomics"))))]
+//!     pub trait WasmNotSend: Send {}
+//! ```
+//!
+//! wgpu drops `Send`/`Sync` on wasm the moment atomics are on — correctly, as
+//! its handles wrap JS objects that cannot cross a thread — and egui stores the
+//! renderer in a `TypeMap` that requires `Send + Sync`. So egui-on-wgpu and
+//! wasm threads are mutually exclusive today, upstream of anything here.
+//!
+//! Which leaves the browser sharing one thread between engine and renderer.
+//! That is exactly why this boundary is wait-free rather than merely
+//! fine-grained: on the one target where the two cannot be given separate
+//! threads, a lock between them would be a stall the UI could not avoid.
+//!
+//! The way out, when it is worth the build complexity, is a second wasm module
+//! in a worker talking over `postMessage` — no shared memory, so the render
+//! module never needs atomics. The channels below map onto that unchanged.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{channel, Receiver, Sender};
