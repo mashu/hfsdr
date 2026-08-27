@@ -213,8 +213,13 @@ impl WebKiwiLink {
     }
 
     pub fn close(&self) {
-        // Detach first: onclose would otherwise record a link error for a
-        // shutdown the caller asked for.
+        // Detach every handler before closing, not just the ones that report
+        // errors. The socket outlives this struct — the browser keeps it until
+        // the close handshake finishes — while the closures are freed with it,
+        // so any handler left attached can be invoked after being dropped. A
+        // reconnect loop hits this on the very next attempt: `onopen` fires on
+        // the abandoned socket and takes the whole app down.
+        self.ws.set_onopen(None);
         self.ws.set_onclose(None);
         self.ws.set_onerror(None);
         self.ws.set_onmessage(None);
