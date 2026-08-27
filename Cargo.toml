@@ -37,9 +37,18 @@ libc = "0.2"
 # wasm32 needs an explicit getrandom backend (transitively via tungstenite).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
-wasm-bindgen = { version = "0.2", optional = true }
+# Not optional: the library's KiwiSDR transport is the browser WebSocket API on
+# this target, so the bindings are needed even without the GUI feature.
+wasm-bindgen = "0.2"
+js-sys = "0.3"
 wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys = { version = "0.3", optional = true, features = ["Document", "Window", "Element", "HtmlCanvasElement", "console"] }
+web-sys = { version = "0.3", features = [
+    "Document", "Window", "Element", "HtmlCanvasElement", "console",
+    "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "ErrorEvent", "Event", "Location",
+    "EventTarget", "Blob", "BlobPropertyBag", "Url", "Performance",
+    "AudioContext", "BaseAudioContext", "AudioContextState", "AudioDestinationNode",
+    "AudioNode", "AudioWorklet", "AudioWorkletNode", "MessagePort",
+] }
 # std::time::Instant panics on wasm32-unknown-unknown ("time not implemented");
 # web-time is a drop-in backed by performance.now().
 web-time = "1"
@@ -64,7 +73,7 @@ gui = ["gui-core", "rtlsdr", "soapy"]
 # no native drivers. KiwiSDR over the browser WebSocket API is the only source.
 # Browser build of the real UI. Excludes cpal, rfd, ureq and serialport (qmx):
 # none of them work on wasm32, and the browser has its own equivalents.
-gui-web = ["gui-base", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+gui-web = ["gui-base", "dep:wasm-bindgen-futures"]
 
 [[bin]]
 name = "hfsdr"

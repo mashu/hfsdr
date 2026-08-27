@@ -21,7 +21,8 @@ impl Engine {
 /// Drain and process available IQ; returns sample count processed.
     pub(crate) fn pump_stream(&mut self) -> usize {
         self.last_iq_dropped = 0;
-        let params = self.params.lock().map(|g| g.clone()).unwrap_or_default();
+        self.params.fetch();
+        let params = self.params.slot().clone();
         let perf = perf_enabled(&params);
         let mut metrics = PipelineMetrics::default();
         let t_pump = Instant::now();
@@ -252,13 +253,16 @@ impl Engine {
                 } else {
                     batch.as_slice()
                 };
-                let fft_base = self.spectrum_fft_slice(
+                let (fft_base, skipped) = self.spectrum_fft_slice(
                     ingress_base,
                     batch.len(),
                     device_rate,
                     ingress_decim,
                     params.full_drain_spectrum,
                 );
+                if skipped {
+                    self.analyzer.reset();
+                }
                 let batch_demod = Arc::clone(&batch);
                 let demod_input = self.demod_input(batch_demod.as_slice(), device_rate, cw.full_demod);
                 let (demod, spectrum_front) = (&mut self.demod, &mut self.spectrum_front);
@@ -293,13 +297,17 @@ impl Engine {
         }
 
         let t_spec_front = Instant::now();
-        let fft_base = self.spectrum_fft_slice(
+        let (fft_base, skipped) = self.spectrum_fft_slice(
             ingress_base,
             batch.len(),
             device_rate,
             ingress_decim,
             params.full_drain_spectrum,
         );
+        if skipped {
+            // Samples were discarded to stay live; do not splice across the gap.
+            self.analyzer.reset();
+        }
         if self.spectrum_decim > 1 {
             if !(wideband && self.spectrum_decim > 1) {
                 self.spectrum_front
@@ -408,12 +416,7 @@ impl Engine {
         if perf {
             metrics.publish_ns = t_publish.elapsed().as_nanos() as u64;
         }
-        let slow = self
-            .shared
-            .lock()
-            .map(|g| g.stats.slow)
-            .unwrap_or(false);
-        self.finish_pipeline_metrics(perf, &metrics, slow);
+        self.finish_pipeline_metrics(perf, &metrics, self.last_slow);
         let _ = t_pump;
         got
     }
@@ -517,6 +520,7 @@ impl Engine {
         let (iq_recording, iq_playback, iq_capture_samples, iq_capture_path) = self.capture_ui();
         let effective = self.effective_rate(sample_rate);
         let slow = self.update_slow_flag(sample_rate, effective);
+        self.last_slow = slow;
         let (audio_device, audio_rate) = self
             .audio
             .as_ref()
@@ -526,64 +530,90 @@ impl Engine {
         let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
         let hw_rf_gain = self.hw_rf_gain();
 
-        if let Ok(mut guard) = self.shared.lock() {
-            if guard.latest.len() == self.latest.len() {
-                guard.latest.copy_from_slice(&self.latest);
-            } else {
-                guard.latest = self.latest.clone();
+        // Rows first: they are a stream and must not be coalesced. A buffer
+        // the UI has finished with comes back on `spent_rows`, so a warm
+        // pipeline moves rows across without allocating.
+        for row in rows {
+            if self.rows_tx.is_full() {
+                self.rows_dropped += 1;
+                continue;
             }
-            for row in rows {
-                if guard.new_rows.len() >= WATERFALL_ROWS {
-                    guard.new_rows.pop_front();
-                }
-                guard.new_rows.push_back(row);
-                guard.rows_seq = guard.rows_seq.wrapping_add(1);
-            }
-            let mut stats = EngineStats {
-                sample_rate: self
-                    .conn
-                    .as_ref()
-                    .map(|c| c.sample_rate)
-                    .unwrap_or(sample_rate),
-                iq_passband_hz: self.iq_passband_hz(),
-                effective_sps: effective,
-                last_drain: got,
-                dropped,
-                rssi_dbm: rssi,
-                snr_db: snr,
-                audio_device,
-                audio_rate,
-                slow,
-                is_kiwi,
-                spectrum_rate: self.spectrum_rate,
-                spectrum_fft: self.fft_size,
-                spectrum_decim: self.spectrum_decim,
-                spectrum_zoomed: self.spectrum_decim > 1,
-                spectrum_rows_per_pump: self.last_spectrum_rows,
-                iq_recording,
-                iq_playback,
-                iq_capture_samples,
-                iq_capture_path,
-                iq_buffer_fill,
-                iq_buffer_secs,
-                audio_peak: self.level_audio_peak,
-                audio_rms: self.level_audio_rms,
-                agc_gain: self.level_agc_gain,
-                agc_envelope: self.level_agc_envelope,
-                iq_rf_level: self.level_iq_rf,
-                estimated_wpm: self.level_estimated_wpm,
-                keying_confident: self.level_keying_confident,
-                kiwi_has_rf_attn,
-                kiwi_rf_attn_db,
-                hw_rf_gain,
-                pipeline: PipelineMetrics::default(),
-                pipeline_avg: PipelineMetrics::default(),
-            };
-            self.attach_pipeline_stats(&mut stats);
-            guard.stats = stats;
-            guard.audio_scope = self.level_audio_scope.clone();
-            guard.audio_waveform = self.level_audio_waveform.clone();
+            let _ = self.rows_tx.push(row);
         }
+        while let Ok(spent) = self.spent_rows.pop() {
+            if self.row_pool.len() < 8 {
+                self.row_pool.push(spent);
+            }
+        }
+        self.last_snr = snr;
+
+        // Build everything that needs `&self` before taking the slot: the slot
+        // borrow is exclusive and the stats read half the engine.
+        let mut stats = EngineStats {
+            sample_rate: self
+                .conn
+                .as_ref()
+                .map(|c| c.sample_rate)
+                .unwrap_or(sample_rate),
+            iq_passband_hz: self.iq_passband_hz(),
+            effective_sps: effective,
+            last_drain: got,
+            dropped,
+            rssi_dbm: rssi,
+            snr_db: snr,
+            audio_device,
+            audio_rate,
+            slow,
+            is_kiwi,
+            spectrum_rate: self.spectrum_rate,
+            spectrum_fft: self.fft_size,
+            spectrum_decim: self.spectrum_decim,
+            spectrum_zoomed: self.spectrum_decim > 1,
+            spectrum_rows_per_pump: self.last_spectrum_rows,
+            iq_recording,
+            iq_playback,
+            iq_capture_samples,
+            iq_capture_path,
+            iq_buffer_fill,
+            iq_buffer_secs,
+            audio_peak: self.level_audio_peak,
+            audio_rms: self.level_audio_rms,
+            agc_gain: self.level_agc_gain,
+            agc_envelope: self.level_agc_envelope,
+            iq_rf_level: self.level_iq_rf,
+            estimated_wpm: self.level_estimated_wpm,
+            keying_confident: self.level_keying_confident,
+            kiwi_has_rf_attn,
+            kiwi_rf_attn_db,
+            hw_rf_gain,
+            pipeline: PipelineMetrics::default(),
+            pipeline_avg: PipelineMetrics::default(),
+        };
+        self.attach_pipeline_stats(&mut stats);
+
+        let Self {
+            snapshot,
+            latest,
+            state,
+            last_error,
+            level_audio_scope,
+            level_audio_waveform,
+            ..
+        } = self;
+        let slot = snapshot.slot();
+        if slot.latest.len() == latest.len() {
+            slot.latest.copy_from_slice(latest);
+        } else {
+            slot.latest = latest.clone();
+        }
+        slot.state = state.clone();
+        slot.last_error = last_error.clone();
+        slot.stats = stats;
+        slot.audio_scope.clear();
+        slot.audio_scope.extend_from_slice(level_audio_scope);
+        slot.audio_waveform.clear();
+        slot.audio_waveform.extend_from_slice(level_audio_waveform);
+        snapshot.publish();
     }
 
     pub(super) fn capture_ui(&self) -> (bool, bool, u64, Option<String>) {
@@ -597,65 +627,13 @@ impl Engine {
         )
     }
 
+    /// Publish state with no new rows.
+    ///
+    /// Same path as [`Self::publish_rows`] — there is only one publisher, so
+    /// the two cannot drift into reporting different things.
     pub(super) fn publish_stats(&mut self, got: usize) {
-        let dropped = self.conn.as_ref().map(|c| c.device.dropped_samples()).unwrap_or(0);
-        let rssi = self.conn.as_ref().and_then(|c| c.device.rssi_dbm());
-        let (sample_rate, _, is_kiwi) = self.link_meta();
-        let (iq_recording, iq_playback, iq_capture_samples, iq_capture_path) = self.capture_ui();
-        let effective = self.effective_rate(sample_rate);
-        let slow = self.update_slow_flag(sample_rate, effective);
-        let (audio_device, audio_rate) = self
-            .audio
-            .as_ref()
-            .map(|a| (Some(a.device_name().to_string()), a.output_rate()))
-            .unwrap_or((None, 0));
-        let (iq_buffer_fill, iq_buffer_secs) = self.iq_buffer_stats();
-        let (kiwi_has_rf_attn, kiwi_rf_attn_db) = self.kiwi_rf_stats();
-        let hw_rf_gain = self.hw_rf_gain();
-        if let Ok(mut guard) = self.shared.lock() {
-            let mut stats = EngineStats {
-                sample_rate: self
-                    .conn
-                    .as_ref()
-                    .map(|c| c.sample_rate)
-                    .unwrap_or(sample_rate),
-                iq_passband_hz: self.iq_passband_hz(),
-                effective_sps: effective,
-                last_drain: got,
-                dropped,
-                rssi_dbm: rssi,
-                snr_db: guard.stats.snr_db,
-                audio_device,
-                audio_rate,
-                slow,
-                is_kiwi,
-                spectrum_rate: self.spectrum_rate,
-                spectrum_fft: self.fft_size,
-                spectrum_decim: self.spectrum_decim,
-                spectrum_zoomed: self.spectrum_decim > 1,
-                spectrum_rows_per_pump: self.last_spectrum_rows,
-                iq_recording,
-                iq_playback,
-                iq_capture_samples,
-                iq_capture_path,
-                iq_buffer_fill,
-                iq_buffer_secs,
-                audio_peak: self.level_audio_peak,
-                audio_rms: self.level_audio_rms,
-                agc_gain: self.level_agc_gain,
-                agc_envelope: self.level_agc_envelope,
-                iq_rf_level: self.level_iq_rf,
-                estimated_wpm: self.level_estimated_wpm,
-                keying_confident: self.level_keying_confident,
-                kiwi_has_rf_attn,
-                kiwi_rf_attn_db,
-                hw_rf_gain,
-                pipeline: PipelineMetrics::default(),
-                pipeline_avg: PipelineMetrics::default(),
-            };
-            self.attach_pipeline_stats(&mut stats);
-            guard.stats = stats;
-        }
+        let snr = self.last_snr;
+        self.publish_rows(Vec::new(), snr, got);
     }
 
     pub(super) fn iq_buffer_stats(&self) -> (f32, f32) {

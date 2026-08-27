@@ -765,3 +765,106 @@ fn start_kiwi_directory_fetch_sets_receiver() {
     app.start_kiwi_directory_fetch(false);
     assert!(app.connection.kiwi.fetch_rx.is_some());
 }
+
+/// The shader waterfall and the spectrum trace must place a carrier at the
+/// same screen position.
+///
+/// They reach it by different routes: the trace maps Hz to x directly, while
+/// the shader is handed texture coordinates `u0..u1` and samples the raw row.
+/// The two agree only if the span the shader is told the row covers really is
+/// the span it covers.
+///
+/// It was not. Kiwi sources pad the *CPU* path's storage span out to the band
+/// overview width, because that path composes each row into a padded buffer.
+/// The shader path uploads rows raw and was still handed the padded span, so a
+/// 12 kHz row was stretched across ~25 kHz and every carrier landed at roughly
+/// half its true offset.
+#[cfg(test)]
+mod waterfall_gpu_span {
+    use super::*;
+    use crate::engine::{ConnState, EnginePoll, FFT_SIZE};
+    use crate::ui_smoke::streaming_stats;
+
+    /// Screen fraction the shader gives a row bin, from the uniforms' window.
+    fn shader_fraction(bin: usize, width: usize, u0: f64, u1: f64) -> f64 {
+        let u = bin as f64 / width as f64;
+        (u - u0) / (u1 - u0)
+    }
+
+    /// Screen fraction the spectrum trace gives the same bin.
+    fn trace_fraction(bin: usize, width: usize, row_span_hz: f64, view_span_hz: f64, pan_hz: f64) -> f64 {
+        let offset_hz = (bin as f64 / width as f64 - 0.5) * row_span_hz;
+        (offset_hz - (pan_hz - view_span_hz / 2.0)) / view_span_hz
+    }
+
+    fn kiwi_app() -> WaterfallApp {
+        let mut app = WaterfallApp::new_for_test(None);
+        app.radio.is_kiwi = true;
+        let mut stats = streaming_stats();
+        // A Kiwi delivers a 12 kHz IQ slice, and the spectrum is transformed at
+        // that rate — this is the case where storage padding applies.
+        stats.sample_rate = 12_000.0;
+        stats.iq_passband_hz = 12_000.0;
+        stats.spectrum_rate = 12_000.0;
+        stats.spectrum_fft = FFT_SIZE;
+        app.inject_engine_poll(EnginePoll {
+            state: ConnState::Streaming,
+            stats,
+            rows: vec![vec![-110.0; FFT_SIZE]],
+            latest: vec![-110.0; FFT_SIZE],
+            last_error: None,
+            audio_scope: Vec::new(),
+            audio_waveform: Vec::new(),
+        });
+        app
+    }
+
+    /// The span handed to the shader must be the rate the rows were transformed
+    /// at, not the padded storage span the CPU compositor uses.
+    #[test]
+    fn gpu_row_span_is_the_row_rate_not_the_padded_storage_span() {
+        let app = kiwi_app();
+        let storage = app.waterfall_storage_view();
+        assert_eq!(
+            app.waterfall_gpu_row_span_hz(),
+            storage.row_rate_hz,
+            "shader span must follow the row rate"
+        );
+        // Guard the premise: if padding ever stops applying to Kiwi, this test
+        // would pass for a reason that has nothing to do with the bug.
+        assert!(
+            storage.view_span_hz > storage.row_rate_hz,
+            "expected Kiwi storage padding ({} vs {}) — premise no longer holds",
+            storage.view_span_hz,
+            storage.row_rate_hz
+        );
+    }
+
+    /// End to end: an off-centre bin lands at the same screen fraction in both.
+    #[test]
+    fn shader_and_trace_agree_on_an_off_centre_carrier() {
+        let app = kiwi_app();
+        let row_span = f64::from(app.waterfall_gpu_row_span_hz());
+        let view = app.spectrum_view();
+        let half = f64::from(view.view_span_hz) / 2.0;
+        let u0 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz - half, row_span as f32);
+        let u1 = hfsdr::offset_hz_to_storage_u(view.pan_offset_hz + half, row_span as f32);
+
+        // Quarter-span off centre: a mirror, an off-by-half, or a wrong span
+        // each land somewhere clearly different.
+        let bin = FFT_SIZE / 4;
+        let shader = shader_fraction(bin, FFT_SIZE, u0, u1);
+        let trace = trace_fraction(
+            bin,
+            FFT_SIZE,
+            row_span,
+            f64::from(view.view_span_hz),
+            view.pan_offset_hz,
+        );
+        assert!(
+            (shader - trace).abs() < 1e-6,
+            "shader puts bin {bin} at {shader:.4} of the plot, trace at {trace:.4} — \
+             clicking a waterfall carrier would tune the wrong frequency"
+        );
+    }
+}

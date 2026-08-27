@@ -70,6 +70,11 @@ impl SampleRing {
     fn len(&self) -> usize {
         self.count
     }
+
+    fn clear(&mut self) {
+        self.head = 0;
+        self.count = 0;
+    }
 }
 
 /// Streaming spectrum analyzer. Feed IQ with [`SpectrumAnalyzer::process`];
@@ -157,6 +162,21 @@ impl SpectrumAnalyzer {
         emitted
     }
 
+    /// Discard buffered samples because the incoming stream jumped.
+    ///
+    /// Call this whenever the caller skipped input rather than feeding it —
+    /// catching up by dropping old IQ, retuning, reconnecting. The analyzer
+    /// accumulates across calls and its windows overlap, so without this the
+    /// samples either side of the gap end up inside one FFT window. That window
+    /// transforms a step discontinuity, not a signal: its noise floor rises by
+    /// tens of dB and the row paints as a bright band across the waterfall.
+    ///
+    /// The cost is one dropped row's worth of latency at the jump, which is the
+    /// correct trade — the alternative is a row of pure artifact.
+    pub fn reset(&mut self) {
+        self.acc.clear();
+    }
+
     /// Total IQ samples lost to the backlog bound since construction.
     pub fn dropped_samples(&self) -> u64 {
         self.acc.dropped
@@ -194,6 +214,172 @@ impl SpectrumAnalyzer {
         }
         emit(&self.row);
         self.acc.advance(self.hop);
+    }
+}
+
+/// Skipping input must not corrupt the rows either side of the skip.
+///
+/// The engine deliberately drops old IQ from the spectrum path to keep the
+/// waterfall showing what is being heard. That is fine; splicing across the
+/// gap is not. The analyzer's windows overlap, so a window spanning the seam
+/// transforms a step rather than the signal, and paints as a bright band.
+#[cfg(test)]
+mod discontinuity_tests {
+    use super::*;
+    use std::f32::consts::TAU;
+
+    fn tone(n: usize, rate: f32, hz: f32, phase0: usize) -> Vec<Complex32> {
+        (0..n)
+            .map(|i| {
+                let ph = TAU * hz * (i + phase0) as f32 / rate;
+                Complex32::new(ph.cos() * 0.5, ph.sin() * 0.5)
+            })
+            .collect()
+    }
+
+    /// Median bin of every row, which is the noise floor a splice inflates.
+    fn row_floors(reset_at_gap: bool) -> Vec<f32> {
+        let mut analyzer = SpectrumAnalyzer::new(2048, 1024);
+        let mut floors = Vec::new();
+        let mut emit = |row: &[f32], floors: &mut Vec<f32>| {
+            let mut v: Vec<f32> = row.to_vec();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            floors.push(v[v.len() / 2]);
+        };
+
+        let mut phase = 0usize;
+        for block in 0..12 {
+            // Every third block, skip 3000 samples of input — the engine
+            // discarding backlog to stay live.
+            if block % 3 == 2 {
+                // Not a whole number of tone periods: a skip that is one would
+                // be phase-continuous and leave nothing to detect.
+                phase += 3001;
+                if reset_at_gap {
+                    analyzer.reset();
+                }
+            }
+            let chunk = tone(2048, 12_000.0, 1533.0, phase);
+            phase += 2048;
+            analyzer.process(&chunk, |row| emit(row, &mut floors));
+        }
+        floors
+    }
+
+    /// Largest jump between consecutive rows — banding is the jump, and the
+    /// floor drifts slowly on its own as f32 phase precision accumulates.
+    fn worst_jump(floors: &[f32]) -> f32 {
+        floors
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max)
+    }
+
+    #[test]
+    fn splicing_across_a_skip_wrecks_the_noise_floor() {
+        let spliced = row_floors(false);
+        assert!(
+            worst_jump(&spliced) > 40.0,
+            "expected splice damage to be visible (worst jump {:.1} dB) — if this no \
+             longer holds, the premise behind `reset` has changed",
+            worst_jump(&spliced)
+        );
+    }
+
+    #[test]
+    fn resetting_at_the_skip_keeps_every_row_clean() {
+        let clean = row_floors(true);
+        assert!(clean.len() > 6, "only {} rows", clean.len());
+        let jump = worst_jump(&clean);
+        assert!(
+            jump < 15.0,
+            "rows still jump {jump:.1} dB after resetting at the gap — the waterfall \
+             would band"
+        );
+    }
+}
+
+/// A stationary input must produce stationary rows.
+///
+/// The browser waterfall showed heavy horizontal banding on a constant
+/// multi-tone signal — consecutive rows alternating between saturated and
+/// near-black. Banding is either the analyzer producing rows that really do
+/// swing like that, or something further down inventing it, and the row data
+/// is where that gets decided.
+#[cfg(test)]
+mod stationarity_tests {
+    use super::*;
+    use std::f32::consts::TAU;
+
+    /// Several strong carriers summed, near full scale.
+    fn multitone(n: usize, rate: f32, phase0: usize) -> Vec<Complex32> {
+        (0..n)
+            .map(|i| {
+                let t = (i + phase0) as f32 / rate;
+                let mut re = 0.0;
+                let mut im = 0.0;
+                for (hz, amp) in [(-2200.0f32, 0.25f32), (-800.0, 0.35), (-50.0, 0.30)] {
+                    let ph = TAU * hz * t;
+                    re += ph.cos() * amp;
+                    im += ph.sin() * amp;
+                }
+                Complex32::new(re, im)
+            })
+            .collect()
+    }
+
+    /// Peak dB of every row produced, feeding the analyzer in realistic chunks.
+    fn row_peaks(chunk: usize, chunks: usize) -> Vec<f32> {
+        let mut analyzer = SpectrumAnalyzer::new(2048, 1024);
+        let mut peaks = Vec::new();
+        for c in 0..chunks {
+            let block = multitone(chunk, 12_000.0, c * chunk);
+            analyzer.process(&block, |row| {
+                peaks.push(row.iter().copied().fold(f32::NEG_INFINITY, f32::max));
+            });
+        }
+        peaks
+    }
+
+    #[test]
+    fn constant_signal_gives_rows_of_constant_level() {
+        // 512 samples is roughly one KiwiSDR SND frame.
+        let peaks = row_peaks(512, 200);
+        assert!(peaks.len() > 40, "only {} rows", peaks.len());
+
+        let settled = &peaks[4..];
+        let max = settled.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let min = settled.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(
+            max - min < 1.0,
+            "row peaks span {:.2} dB on a constant signal (min {min:.2}, max {max:.2})",
+            max - min
+        );
+
+        // Banding is the row-to-row alternation, not the overall spread.
+        let worst = settled
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.5, "consecutive rows differ by {worst:.2} dB");
+    }
+
+    /// Chunk size must not change the result: the same signal delivered in
+    /// different-sized blocks has to produce the same rows, or the display
+    /// depends on network packet boundaries rather than on the signal.
+    #[test]
+    fn row_levels_do_not_depend_on_chunk_size() {
+        let level = |chunk: usize| {
+            let peaks = row_peaks(chunk, 200 * 512 / chunk);
+            let settled = &peaks[4..];
+            settled.iter().sum::<f32>() / settled.len() as f32
+        };
+        let small = level(256);
+        let large = level(2048);
+        assert!(
+            (small - large).abs() < 0.5,
+            "mean row level depends on chunk size: {small:.2} dB at 256, {large:.2} at 2048"
+        );
     }
 }
 

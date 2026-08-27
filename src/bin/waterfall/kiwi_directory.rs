@@ -96,12 +96,12 @@ pub fn refresh_nearby_receivers() -> Result<(Option<GeoLocation>, Vec<KiwiReceiv
 // until that exists, say so rather than pretending the lookup failed.
 #[cfg(not(feature = "gui-core"))]
 fn fetch_geo() -> Result<GeoLocation, String> {
-    Err("receiver directory is not available in the browser build".into())
+    Err("receiver list unavailable in the browser (the directory host blocks cross-origin requests)".into())
 }
 
 #[cfg(not(feature = "gui-core"))]
 fn fetch_list_body() -> Result<String, String> {
-    Err("receiver directory is not available in the browser build".into())
+    Err("receiver list unavailable in the browser (the directory host blocks cross-origin requests)".into())
 }
 
 #[cfg(feature = "gui-core")]

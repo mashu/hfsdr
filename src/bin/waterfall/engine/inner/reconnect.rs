@@ -110,10 +110,8 @@ pub(super) fn poll_handshake(&mut self) {
     pub(super) fn schedule_reconnect(&mut self) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
         let busy = self
-            .shared
-            .lock()
-            .ok()
-            .and_then(|g| g.last_error.clone())
+            .last_error
+            .as_deref()
             .is_some_and(|e| e.to_ascii_lowercase().contains("busy"));
         let secs = if busy {
             RECONNECT_BUSY_DELAY_SECS
@@ -127,15 +125,18 @@ pub(super) fn poll_handshake(&mut self) {
         reconnect_retry_secs(self.is_kiwi_request(), self.reconnect_attempt)
     }
 
-    pub(crate) fn set_state(&self, state: ConnState) {
-        if let Ok(mut guard) = self.shared.lock() {
-            guard.state = state;
-        }
+    /// Set the connection state and publish it immediately.
+    ///
+    /// Publishing here rather than waiting for the next pump matters: a state
+    /// change is exactly what the UI is waiting to see, and a disconnected
+    /// engine may not pump again for seconds.
+    pub(crate) fn set_state(&mut self, state: ConnState) {
+        self.state = state;
+        self.publish_stats(0);
     }
 
-    pub(super) fn set_error(&self, error: Option<String>) {
-        if let Ok(mut guard) = self.shared.lock() {
-            guard.last_error = error;
-        }
+    pub(super) fn set_error(&mut self, error: Option<String>) {
+        self.last_error = error;
+        self.publish_stats(0);
     }
 }

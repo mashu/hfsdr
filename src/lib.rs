@@ -22,6 +22,7 @@
 pub mod log;
 /// Clock types that also work on wasm32 (see module docs).
 pub mod time;
+pub mod sync;
 // Native driver loading is dlopen-based and cannot exist on wasm32, where the
 // only reachable source is a network one (KiwiSDR over WebSocket).
 #[cfg(not(target_arch = "wasm32"))]

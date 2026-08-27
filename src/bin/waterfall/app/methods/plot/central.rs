@@ -94,7 +94,7 @@ impl WaterfallApp {
             view.pan_offset_hz,
             storage_span,
         );
-        let gpu_callback = self.build_waterfall_gpu_callback(storage_span, plot_width as f32);
+        let gpu_callback = self.build_waterfall_gpu_callback(plot_width as f32);
         let mut params = crate::widgets::PlotParams {
             view_bandwidth_hz: plot_full_span,
             max_zoom,
