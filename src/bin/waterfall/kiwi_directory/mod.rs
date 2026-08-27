@@ -12,10 +12,18 @@ use serde::{Deserialize, Serialize};
 
 /// Community mirror of the KiwiSDR directory.
 ///
-/// https, not http: the browser build is served over TLS on GitHub Pages, and a
-/// plain-http request from an https page is blocked as mixed content before
-/// CORS is even considered. Desktop does not care either way.
-const LIST_URL: &str = "https://rx.linkfanel.net/kiwisdr_com.js";
+/// Plain http, and it has to be: the host answers on port 80 only. A build
+/// fetching it over TLS gets `Failed to connect to rx.linkfanel.net port 443`,
+/// which is how this was established — an earlier change to https on
+/// mixed-content reasoning broke the desktop directory, which had been working,
+/// and could never have fixed the browser one.
+///
+/// A browser on an https page therefore cannot reach this at all: http is
+/// blocked as mixed content and https does not exist. That is not a gap to work
+/// around at runtime, it is why the list is fetched at build time by CI (which
+/// has no such restriction) and served from our own origin. See
+/// `scripts/build-web.sh` and [`web::BUNDLED_LIST`].
+const LIST_URL: &str = "http://rx.linkfanel.net/kiwisdr_com.js";
 /// Coarse geolocation, used only to sort receivers by distance.
 ///
 /// Best-effort: when this fails the list is still shown, just unsorted, so it

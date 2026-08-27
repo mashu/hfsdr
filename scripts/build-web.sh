@@ -50,23 +50,33 @@ echo "build id: ${build_id}"
 
 # Bake the public receiver list into the deployment.
 #
-# The browser cannot be relied on to fetch it live: the directory is a
-# third-party host, and whether it sends CORS headers is not ours to control.
-# CI has ordinary network access, so fetch it here and serve it from our own
-# origin, where neither CORS nor mixed content applies. The app still tries the
-# live URL when the user asks to refresh; this is what makes the list work on
-# first load.
+# The browser cannot fetch this itself. The directory host answers on port 80
+# only — a TLS attempt gets "Failed to connect ... port 443" — and an https
+# page may not request plain http, so from GitHub Pages there is no reachable
+# URL at all. curl here is not a browser and has no such restriction, so the
+# list is captured at build time and served from our own origin.
 #
-# A failure here is not fatal — the app falls back to the live fetch and says so
-# — because a directory outage must not break the build.
-LIST_URL="https://rx.linkfanel.net/kiwisdr_com.js"
-echo "fetching receiver list from $LIST_URL"
-if curl -fsS --max-time 60 "$LIST_URL" -o web/receivers.js.tmp; then
-  mv web/receivers.js.tmp web/receivers.js
-  echo "receiver list: $(wc -c < web/receivers.js) bytes"
-else
-  rm -f web/receivers.js.tmp
-  echo "WARNING: could not fetch the receiver list; the app will try the live URL instead"
+# https is tried second in case the host ever gains TLS; if it does, this keeps
+# working and the note above becomes stale rather than the build breaking.
+fetch_receiver_list() {
+  for url in "http://rx.linkfanel.net/kiwisdr_com.js" \
+             "https://rx.linkfanel.net/kiwisdr_com.js"; do
+    echo "fetching receiver list from $url"
+    if curl -fsS --max-time 60 "$url" -o web/receivers.js.tmp; then
+      mv web/receivers.js.tmp web/receivers.js
+      echo "receiver list: $(wc -c < web/receivers.js) bytes from $url"
+      return 0
+    fi
+    rm -f web/receivers.js.tmp
+  done
+  return 1
+}
+
+if ! fetch_receiver_list; then
+  # An annotation rather than a log line: a silently empty receiver panel is
+  # exactly the failure that went unnoticed before, and the build still
+  # succeeds so a directory outage cannot block a deploy.
+  echo "::warning title=Receiver list missing::Could not fetch the KiwiSDR directory. The deployed app will show no receivers: a browser on an https page cannot reach that host itself, which is why it is fetched here."
 fi
 
 ls -la web/pkg/

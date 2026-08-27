@@ -83,13 +83,24 @@ fn describe(url: &str, err: &wasm_bindgen::JsValue) -> String {
 /// applies.
 const BUNDLED_LIST: &str = "./receivers.js";
 
-/// The bundled list first, then the live one.
+/// Whether the live directory URL is reachable from this page at all.
 ///
-/// Bundled wins on first load because it always works. The live URL is still
-/// tried when the bundle is missing, and preferred on an explicit refresh, so
-/// a deployment does not pin the list forever.
+/// It is plain http, so an https page cannot request it — the browser blocks
+/// it as mixed content before anything else happens. Trying anyway produces a
+/// misleading "failed to fetch" that reads like the host is down, so don't.
+/// Served over http (local development), it works normally.
+fn live_list_is_reachable() -> bool {
+    !super::web_page_is_https()
+}
+
+/// The bundled list, falling back to the live one only where that can work.
+///
+/// Bundled wins on first load because it always works. On an http page the
+/// live URL is also tried, and preferred on an explicit refresh, so local
+/// development is not pinned to whatever the last deployment captured.
 async fn fetch_list(force_refresh: bool) -> Result<String, String> {
-    if force_refresh {
+    let live_ok = live_list_is_reachable();
+    if force_refresh && live_ok {
         match get_text(LIST_URL).await {
             Ok(live) => return Ok(live),
             Err(e) => crate::log::warn(format!(
@@ -99,9 +110,14 @@ async fn fetch_list(force_refresh: bool) -> Result<String, String> {
     }
     match get_text(BUNDLED_LIST).await {
         Ok(list) => Ok(list),
-        Err(bundled_err) => get_text(LIST_URL)
+        Err(bundled_err) if live_ok => get_text(LIST_URL)
             .await
             .map_err(|live_err| format!("{bundled_err}; live list also failed: {live_err}")),
+        Err(bundled_err) => Err(format!(
+            "{bundled_err}. The list is normally built into this deployment; \
+             the directory host serves plain http only, so this page cannot \
+             fetch it directly over https."
+        )),
     }
 }
 
