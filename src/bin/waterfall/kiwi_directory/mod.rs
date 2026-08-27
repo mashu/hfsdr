@@ -79,6 +79,64 @@ pub fn reachable_from_page(page_is_https: bool, receiver_is_tls: bool) -> bool {
     !page_is_https || receiver_is_tls
 }
 
+/// Order the browser's receiver list: reachable first, then not full, then
+/// nearest.
+///
+/// A receiver this page cannot reach is worse than one that is merely full —
+/// the full one will free up, the unreachable one never will — so
+/// reachability outranks occupancy.
+pub fn sort_for_display(list: &mut [KiwiReceiver], page_is_https: bool) {
+    list.sort_by(|a, b| {
+        let unreachable = |rx: &KiwiReceiver| !reachable_from_page(page_is_https, rx.tls);
+        let full = |rx: &KiwiReceiver| rx.users >= rx.users_max;
+        unreachable(a)
+            .cmp(&unreachable(b))
+            .then_with(|| full(a).cmp(&full(b)))
+            .then_with(|| {
+                a.distance_km
+                    .partial_cmp(&b.distance_km)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+}
+
+/// The single line shown for a receiver in the browser list.
+///
+/// An unreachable receiver drops the distance and occupancy: neither tells the
+/// user anything they can act on, and the reason it cannot be clicked is the
+/// only thing worth the space.
+pub fn receiver_line(rx: &KiwiReceiver, page_is_https: bool) -> String {
+    if !reachable_from_page(page_is_https, rx.tls) {
+        return format!(
+            "{}:{} · no TLS — unreachable from https · {}",
+            rx.host, rx.port, rx.location
+        );
+    }
+    let distance = if rx.distance_km > 0.0 {
+        format!("{:.0}km ", rx.distance_km)
+    } else {
+        String::new()
+    };
+    let users = if rx.users >= rx.users_max {
+        format!("FULL {}/{}", rx.users, rx.users_max)
+    } else {
+        format!("{}/{}", rx.users, rx.users_max)
+    };
+    format!(
+        "{}:{} · {}{} · {}",
+        rx.host, rx.port, distance, users, rx.location
+    )
+}
+
+/// Whether this page can reach any of these receivers at all.
+///
+/// False means the list is there but every entry is a dead end, which needs
+/// saying once at the top rather than repeating on every row.
+pub fn any_reachable(list: &[KiwiReceiver], page_is_https: bool) -> bool {
+    list.iter()
+        .any(|rx| reachable_from_page(page_is_https, rx.tls))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CachedDirectory {
     fetched_at_secs: u64,
@@ -667,6 +725,91 @@ mod tests {
         // Served over http — or on the desktop — everything is reachable.
         assert!(reachable_from_page(false, true));
         assert!(reachable_from_page(false, false));
+    }
+
+    fn receiver(host: &str, tls: bool, users: u8, distance_km: f64) -> KiwiReceiver {
+        KiwiReceiver {
+            host: host.into(),
+            port: if tls { 443 } else { 8073 },
+            name: host.into(),
+            location: "Somewhere".into(),
+            lat: 0.0,
+            lon: 0.0,
+            users,
+            users_max: 4,
+            snr: 30,
+            distance_km,
+            tls,
+        }
+    }
+
+    /// Reachability outranks occupancy: a full receiver frees up, one this
+    /// page cannot reach never does. Within each group, nearest first.
+    #[test]
+    fn display_order_puts_unreachable_last_then_full() {
+        let mut list = vec![
+            receiver("plain-near", false, 0, 1.0),
+            receiver("tls-full", true, 4, 5.0),
+            receiver("tls-far", true, 0, 900.0),
+            receiver("tls-near", true, 0, 10.0),
+        ];
+        sort_for_display(&mut list, true);
+        let order: Vec<&str> = list.iter().map(|r| r.host.as_str()).collect();
+        assert_eq!(order, ["tls-near", "tls-far", "tls-full", "plain-near"]);
+
+        // Over http nothing is unreachable, so only occupancy and distance
+        // decide and the plain-http receiver comes first on distance.
+        sort_for_display(&mut list, false);
+        let order: Vec<&str> = list.iter().map(|r| r.host.as_str()).collect();
+        assert_eq!(order, ["plain-near", "tls-near", "tls-far", "tls-full"]);
+    }
+
+    /// An unreachable row spends its space on the reason rather than on a
+    /// distance and occupancy the user cannot act on.
+    #[test]
+    fn display_line_states_the_reason_when_unreachable() {
+        let unreachable = receiver_line(&receiver("plain.example", false, 1, 12.0), true);
+        assert_eq!(
+            unreachable,
+            "plain.example:8073 · no TLS — unreachable from https · Somewhere"
+        );
+        assert!(!unreachable.contains("12km"));
+        assert!(!unreachable.contains("1/4"));
+
+        // The same receiver is fine on an http page, and reads normally.
+        assert_eq!(
+            receiver_line(&receiver("plain.example", false, 1, 12.0), false),
+            "plain.example:8073 · 12km 1/4 · Somewhere"
+        );
+    }
+
+    /// Distance is omitted when unknown — geolocation is best-effort, and a
+    /// leading "0km" would claim the receiver is next door.
+    #[test]
+    fn display_line_omits_unknown_distance_and_marks_full() {
+        assert_eq!(
+            receiver_line(&receiver("rx.test", true, 0, 0.0), true),
+            "rx.test:443 · 0/4 · Somewhere"
+        );
+        assert_eq!(
+            receiver_line(&receiver("rx.test", true, 4, 0.0), true),
+            "rx.test:443 · FULL 4/4 · Somewhere"
+        );
+    }
+
+    /// The all-unreachable banner: worth saying once at the top, and only when
+    /// every entry really is a dead end.
+    #[test]
+    fn any_reachable_needs_only_one() {
+        let all_plain = vec![receiver("a", false, 0, 0.0), receiver("b", false, 0, 0.0)];
+        assert!(!any_reachable(&all_plain, true));
+        assert!(any_reachable(&all_plain, false));
+
+        let mixed = vec![receiver("a", false, 0, 0.0), receiver("b", true, 0, 0.0)];
+        assert!(any_reachable(&mixed, true));
+
+        // An empty list is not a page-wide failure; there is nothing to say.
+        assert!(!any_reachable(&[], true));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::app::WaterfallApp;
 use crate::audio;
 use crate::engine::{ConnState, EnginePoll, EngineStats, FFT_SIZE};
 use crate::pipeline_flow::PipelineStage;
+use crate::kiwi_directory::KiwiReceiver;
 use crate::source::SourceKind;
 use crate::theme;
 use crate::ui_smoke::{inject_and_step, streaming_stats, synthetic_streaming_poll};
@@ -261,6 +262,65 @@ fn connection_form_kiwi_browser_renders() {
     harness.state_mut().connection.form.kind = SourceKind::Kiwi;
     harness.state_mut().connection.form.show_connection_drawer = true;
     harness.run_steps(8);
+}
+
+fn directory_entry(host: &str, tls: bool, users: u8) -> KiwiReceiver {
+    KiwiReceiver {
+        host: host.into(),
+        port: if tls { 443 } else { 8073 },
+        name: host.into(),
+        location: "Testville".into(),
+        lat: 0.0,
+        lon: 0.0,
+        users,
+        users_max: 4,
+        snr: 30,
+        distance_km: 12.0,
+        tls,
+    }
+}
+
+/// The empty-list case above renders a Refresh button and nothing else, so the
+/// rows — the reachability labelling, the disabled styling, the ordering — are
+/// never drawn. Populate the list so the branch that does the work runs, on
+/// both page schemes and with the all-unreachable banner showing.
+///
+/// A smoke test, deliberately: `list_row` paints its text rather than emitting
+/// a widget, so the strings never reach the accessibility tree and cannot be
+/// queried back. What the rows say is pinned by the `receiver_line` and
+/// `sort_for_display` tests; what this adds is that the section drives them
+/// over a real list without panicking, which the empty-list case cannot show.
+#[test]
+fn connection_form_kiwi_browser_renders_receiver_rows() {
+    let lists = [
+        // Mixed: reachable, unreachable, and full rows in one pass.
+        vec![
+            directory_entry("plain.example", false, 0),
+            directory_entry("secure.example", true, 0),
+            directory_entry("busy.example", true, 4),
+        ],
+        // All plain http, which on an https page shows the banner instead.
+        vec![
+            directory_entry("a.example", false, 0),
+            directory_entry("b.example", false, 0),
+        ],
+    ];
+    for nearby in lists {
+        let mut harness = panel_harness();
+        harness.run_steps(1);
+        harness.state_mut().connection.form.kind = SourceKind::Kiwi;
+        harness.state_mut().connection.form.show_connection_drawer = true;
+        harness.state_mut().connection.kiwi.nearby = nearby;
+        harness.run_steps(8);
+
+        // Drawing the list must not connect to anything: the rows act on a
+        // click, and a section that connects merely by being shown would take
+        // the user somewhere they never asked to go.
+        assert!(
+            harness.state().connection.form.host.is_empty(),
+            "rendering the receiver list must not start a connection"
+        );
+    }
 }
 
 fn poll_with_stats(stats: EngineStats) -> EnginePoll {
