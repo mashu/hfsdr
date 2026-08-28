@@ -79,6 +79,56 @@ pub fn reachable_from_page(page_is_https: bool, receiver_is_tls: bool) -> bool {
     !page_is_https || receiver_is_tls
 }
 
+/// Move the receivers this page can reach to the front, keeping the order
+/// within each group.
+///
+/// Reachability has to be part of *selection*, not just presentation. The list
+/// is cut to [`NEARBY_LIMIT`] before the UI ever sees it, so ranking by
+/// distance alone hands the browser twelve receivers chosen without regard for
+/// whether it can open a socket to any of them. Most KiwiSDRs are plain http,
+/// so on an https page that reliably produced twelve unusable entries while
+/// the TLS receivers sat below the cut.
+///
+/// The sort is stable, so whatever ordering [`rank_by_proximity`] established
+/// survives inside each group.
+pub fn prefer_reachable(receivers: &mut [KiwiReceiver], page_is_https: bool) {
+    receivers.sort_by_key(|rx| !reachable_from_page(page_is_https, rx.tls));
+}
+
+/// Keep one entry per host, the first — which after ranking is the best.
+///
+/// A KiwiSDR publishes one directory entry per channel, so a four-channel
+/// receiver appears four times on consecutive ports. They are the same radio
+/// on the same antenna; as choices they are one choice, and spending four of
+/// twelve slots on them crowds out four other receivers.
+///
+/// Keeping the first occurrence keeps the best one, because ranking has
+/// already put a channel with a free slot ahead of a full one.
+pub fn dedupe_by_host(receivers: &mut Vec<KiwiReceiver>) {
+    let mut seen = std::collections::HashSet::new();
+    receivers.retain(|rx| seen.insert(rx.host.clone()));
+}
+
+/// Choose the receivers to offer: nearest first, reachable first, one per
+/// host, capped at [`NEARBY_LIMIT`].
+///
+/// Ordering matters. Ranking comes first so "first per host" means "best per
+/// host"; reachability comes after deduplication so the cap counts receivers
+/// this page can actually use; truncation comes last, once the list is in the
+/// order the cut should respect.
+pub fn select_nearby(
+    receivers: &mut Vec<KiwiReceiver>,
+    geo: Option<&GeoLocation>,
+    page_is_https: bool,
+) {
+    if let Some(g) = geo {
+        rank_by_proximity(receivers, g);
+    }
+    dedupe_by_host(receivers);
+    prefer_reachable(receivers, page_is_https);
+    receivers.truncate(NEARBY_LIMIT);
+}
+
 /// Order the browser's receiver list: reachable first, then not full, then
 /// nearest.
 ///
@@ -201,10 +251,9 @@ pub fn load_cached_receivers() -> Option<(Option<GeoLocation>, Vec<KiwiReceiver>
 pub fn refresh_nearby_receivers() -> Result<(Option<GeoLocation>, Vec<KiwiReceiver>), String> {
     let geo = fetch_geo().ok();
     let mut receivers = parse_receiver_list(&fetch_list_body()?)?;
-    if let Some(ref g) = geo {
-        rank_by_proximity(&mut receivers, g);
-    }
-    receivers.truncate(NEARBY_LIMIT);
+    // Nothing constrains the scheme outside a browser, so every receiver is
+    // reachable here and the selection differs only in deduplication.
+    select_nearby(&mut receivers, geo.as_ref(), false);
     write_cache(&geo, &receivers)?;
     Ok((geo, receivers))
 }
@@ -741,6 +790,75 @@ mod tests {
             distance_km,
             tls,
         }
+    }
+
+    /// The bug behind a deployed page that offered twelve receivers and could
+    /// reach none of them: the list is cut to NEARBY_LIMIT before the UI sees
+    /// it, so a cut that ignores reachability can discard every usable
+    /// receiver while keeping unusable ones.
+    #[test]
+    fn selection_keeps_reachable_receivers_over_nearer_unreachable_ones() {
+        let mut list: Vec<KiwiReceiver> = (0..NEARBY_LIMIT)
+            .map(|i| receiver(&format!("plain{i}.example"), false, 0, i as f64))
+            .collect();
+        // Further away than all of them, and the only one an https page can use.
+        list.push(receiver("secure.example", true, 0, 9_000.0));
+
+        let mut https = list.clone();
+        select_nearby(&mut https, None, true);
+        assert_eq!(https.len(), NEARBY_LIMIT);
+        assert_eq!(
+            https[0].host, "secure.example",
+            "the only reachable receiver must survive the cut, and lead"
+        );
+
+        // Over http nothing is unreachable, so distance alone decides and the
+        // far-away receiver is correctly the one that falls off.
+        let mut http = list.clone();
+        select_nearby(&mut http, None, false);
+        assert_eq!(http.len(), NEARBY_LIMIT);
+        assert!(
+            !http.iter().any(|r| r.host == "secure.example"),
+            "nothing promotes it when every receiver is reachable"
+        );
+    }
+
+    /// A four-channel KiwiSDR publishes four entries on consecutive ports. They
+    /// are one radio and one choice; four of twelve slots is too much of the
+    /// list to spend on them.
+    #[test]
+    fn selection_offers_each_host_once() {
+        let mut list = vec![
+            receiver("multi.example", true, 0, 5.0),
+            receiver("multi.example", true, 0, 5.0),
+            receiver("multi.example", true, 0, 5.0),
+            receiver("other.example", true, 0, 50.0),
+        ];
+        list[1].port = 8074;
+        list[2].port = 8075;
+
+        select_nearby(&mut list, None, true);
+        assert_eq!(list.len(), 2, "one entry per host");
+        assert_eq!(list[0].host, "multi.example");
+        assert_eq!(list[0].port, 443, "the first, which ranking made the best");
+        assert_eq!(list[1].host, "other.example");
+    }
+
+    /// Deduplication must keep a channel with a free slot rather than whichever
+    /// came first in the file — ranking puts full ones last, and that ordering
+    /// is what makes "first" mean "best".
+    #[test]
+    fn dedupe_keeps_the_channel_with_a_free_slot() {
+        let geo = GeoLocation { lat: 0.0, lon: 0.0, country: String::new(), country_code: String::new() };
+        let mut full = receiver("busy.example", true, 4, 1.0);
+        full.port = 8073;
+        let mut free = receiver("busy.example", true, 0, 1.0);
+        free.port = 8074;
+        let mut list = vec![full, free];
+
+        select_nearby(&mut list, Some(&geo), true);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].port, 8074, "kept the one that can be connected to");
     }
 
     /// Reachability outranks occupancy: a full receiver frees up, one this

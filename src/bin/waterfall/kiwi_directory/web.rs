@@ -8,8 +8,7 @@
 //! the x86 target the coverage job builds, so llvm-cov cannot instrument a
 //! line of it and it would read as permanently uncovered.
 use super::{
-    parse_receiver_list, rank_by_proximity, GeoLocation, GeoResponse, KiwiReceiver,
-    GEO_URL, LIST_URL, NEARBY_LIMIT,
+    parse_receiver_list, GeoLocation, GeoResponse, KiwiReceiver, GEO_URL, LIST_URL,
 };
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -135,10 +134,9 @@ async fn fetch_directory(force_refresh: bool) -> Result<Directory, String> {
             None
         }
     };
-    if let Some(g) = &geo {
-        rank_by_proximity(&mut receivers, g);
-    }
-    receivers.truncate(NEARBY_LIMIT);
+    // The page's scheme decides which receivers are worth a slot at all, so it
+    // has to be known before the list is cut to size.
+    super::select_nearby(&mut receivers, geo.as_ref(), super::web_page_is_https());
     Ok((geo, receivers))
 }
 
