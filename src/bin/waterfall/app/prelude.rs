@@ -25,7 +25,6 @@ pub(crate) use crate::meters::{
 };
 pub(crate) use crate::app::state::BottomPanelView;
 pub(crate) use crate::audio::AudioOutput;
-pub(crate) use crate::colormap::db_to_colour;
 pub(crate) use crate::controls::{
     preset_combo_f64, preset_combo_u32, filter_shift_control, rit_control, scroll_slider_f32,
     scroll_slider_f32_step,

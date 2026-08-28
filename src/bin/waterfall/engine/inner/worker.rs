@@ -1,11 +1,8 @@
 //! Main engine loop.
 
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, TryRecvError};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use hfsdr::time::Instant;
@@ -22,7 +19,7 @@ use crate::engine::audio::{AudioScopeRing, AudioWaveformRing};
 use super::Engine;
 use crate::engine::policy::{catchup_pumps_max, MAX_DRAIN_WIDEBAND};
 use crate::engine::link::EngineLink;
-use crate::engine::types::{EngineCommand, EngineParams};
+use crate::engine::types::EngineCommand;
 use crate::engine::policy::MIN_SPECTRUM_ROWS_WIDEBAND;
 use crate::engine::{FFT_HOP, FFT_SIZE};
 
@@ -41,8 +38,17 @@ enum IdleWait {
 #[derive(Clone, Copy)]
 pub(crate) enum IdlePacing {
     /// Block briefly; the caller has its own thread.
+    ///
+    /// The mirror of `Return`: a tab has no thread of its own, so nothing on
+    /// wasm32 constructs this and that target reports it dead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Park,
     /// Return at once; the caller is driven by something else.
+    ///
+    /// Constructed by the browser pump and by tests, so a native build sees
+    /// nothing construct it and reports it dead. It is not: deleting it would
+    /// break the wasm32 target, which no native build compiles.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Return,
 }
 

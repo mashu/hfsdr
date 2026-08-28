@@ -2,9 +2,7 @@
 
 use std::f32::consts::TAU;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{Complex32, IqRecorder};
@@ -30,16 +28,6 @@ impl Published {
     pub(super) fn lock(&self) -> Result<std::cell::Ref<'_, EngineSnapshot>, ()> {
         self.0.borrow_mut().snapshot.fetch();
         Ok(std::cell::Ref::map(self.0.borrow(), |l| l.snapshot.slot()))
-    }
-
-    /// Rows published since the last call.
-    pub(super) fn drain_rows(&self) -> Vec<Vec<f32>> {
-        let mut link = self.0.borrow_mut();
-        let mut out = Vec::new();
-        while let Ok(row) = link.rows_rx.pop() {
-            out.push(row);
-        }
-        out
     }
 
     pub(super) fn set_params(&self, params: EngineParams) {
@@ -442,10 +430,7 @@ fn maybe_retry_reconnect_when_due() {
 }
 
 #[test]
-
-#[test]
 fn engine_run_loop_playback_and_shutdown() {
-    use std::sync::mpsc::channel;
     use std::thread;
 
     audio::set_test_output_devices(Some(vec!["Test Output".into()]));

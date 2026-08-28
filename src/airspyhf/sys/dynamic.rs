@@ -36,8 +36,13 @@ type SetHfAttFn = unsafe extern "C" fn(*mut airspyhf_device_t, u8) -> c_int;
 type SetHfLnaFn = unsafe extern "C" fn(*mut airspyhf_device_t, u8) -> c_int;
 type VersionStringReadFn =
     unsafe extern "C" fn(*mut airspyhf_device_t, *mut c_char, u8) -> c_int;
+// Only present in libairspyhf >= 1.8; the fields that use these are behind the
+// same cfg, so without it the aliases would read as dead.
+#[cfg(airspyhf_extended_api)]
 type GetFrontendOptionsFn = unsafe extern "C" fn(*mut airspyhf_device_t, *mut u32) -> c_int;
+#[cfg(airspyhf_extended_api)]
 type SetFrontendOptionsFn = unsafe extern "C" fn(*mut airspyhf_device_t, u32) -> c_int;
+#[cfg(airspyhf_extended_api)]
 type SetBiasTeeFn = unsafe extern "C" fn(*mut airspyhf_device_t, i8) -> c_int;
 
 struct Api {

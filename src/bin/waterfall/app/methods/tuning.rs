@@ -189,6 +189,9 @@ impl WaterfallApp {
 
 
 
+    /// Only the logic tests drive tuning through this entry point; the UI
+    /// tunes through the plot and the frequency field instead.
+    #[cfg(test)]
     pub(crate) fn tune_to_hz(&mut self, frequency_hz: f64) {
         if (frequency_hz / 1000.0 - self.radio.center_khz).abs() > f64::EPSILON {
             self.invalidate_waterfall_history();

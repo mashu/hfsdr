@@ -181,6 +181,12 @@ impl WaterfallApp {
                 }
                 stored.copy_from_slice(&row);
                 self.plot.rows.push_front(stored);
+                // The row's storage is finished with the moment it is copied.
+                // Handing it back lets the engine refill it instead of
+                // allocating a fresh one per row — the other half of the
+                // `spent_rows` path, which until now drained a queue nobody
+                // filled.
+                self.engine.recycle_row(row);
             }
             self.display.waterfall_rows = self.plot.rows.len();
             // Raw dB rows go straight to the shader's ring; the CPU compose path

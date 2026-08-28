@@ -213,40 +213,77 @@ mod tests {
         assert!(fetches > 0, "reader never observed a publish");
     }
 
-    /// Neither side may be delayed by the other. Hammer the writer while
-    /// timing the reader's worst single fetch.
+    /// The reader must stay correct while the writer publishes as fast as it
+    /// can — a different shape from [`concurrent_handoff_never_tears`], where
+    /// the writer is bounded and the reader chases it. Here the writer never
+    /// stops, so every fetch lands in the middle of a publish.
     ///
-    /// A wall-clock budget, so it means nothing under Miri's interpreter.
+    /// This deliberately asserts nothing about *how long* a fetch takes. It
+    /// used to: it timed the worst single fetch and required it under 5 ms, on
+    /// the theory that a lock would show millisecond stalls under this
+    /// contention. That was not a test of this code. A preemptively scheduled
+    /// OS can take the reader thread off-CPU for longer than any budget worth
+    /// setting, so the assertion measured the scheduler and the runner's load,
+    /// not the triple buffer — and it duly failed in CI at 5.02 ms while the
+    /// implementation was perfectly correct.
+    ///
+    /// Wait-freedom is established by construction instead, and better: a
+    /// handoff is a single `swap`, with no lock to contend on and no retry
+    /// loop to spin in, and Miri checks the orderings that make that sound.
+    /// What a test can add is that the invariants hold under maximum write
+    /// pressure, which is what this one does.
     #[test]
     #[cfg_attr(miri, ignore)]
-    fn fetch_is_not_delayed_by_a_busy_writer() {
-        use std::sync::atomic::AtomicBool;
+    fn stays_consistent_under_maximum_write_pressure() {
+        use std::sync::atomic::{AtomicBool, AtomicU32};
 
-        let (mut w, mut r) = latest_cell(vec![0u8; 8192], vec![0u8; 8192], vec![0u8; 8192]);
+        const LEN: usize = 8192;
+        let (mut w, mut r) = latest_cell(vec![0u8; LEN], vec![0u8; LEN], vec![0u8; LEN]);
         let stop = Arc::new(AtomicBool::new(false));
+        let published = Arc::new(AtomicU32::new(0));
         let stop_w = Arc::clone(&stop);
+        let published_w = Arc::clone(&published);
         let writer = std::thread::spawn(move || {
             let mut v = 0u8;
             while !stop_w.load(Ordering::Relaxed) {
                 v = v.wrapping_add(1);
                 w.slot().fill(v);
                 w.publish();
+                published_w.fetch_add(1, Ordering::Release);
             }
         });
 
-        let mut worst = std::time::Duration::ZERO;
-        for _ in 0..if cfg!(miri) { 200 } else { 20_000 } {
-            let t0 = std::time::Instant::now();
-            r.fetch();
-            worst = worst.max(t0.elapsed());
+        // Wait for the writer to actually be running before measuring. A fetch
+        // is a single atomic swap, so 20,000 of them can finish in well under
+        // the time it takes to start a thread — without this the reader can
+        // legitimately observe nothing, and asserting otherwise would be
+        // another assertion about the scheduler rather than about this code.
+        while published.load(Ordering::Acquire) == 0 {
+            std::hint::spin_loop();
+        }
+
+        let mut observed = 0u32;
+        for _ in 0..20_000 {
+            if r.fetch() {
+                observed += 1;
+                // Every element of a published slot is the same counter, so a
+                // slot holding two values means the reader saw a write in
+                // progress — the failure this buffer exists to prevent.
+                let slot = r.slot();
+                let first = slot[0];
+                assert!(
+                    slot.iter().all(|&e| e == first),
+                    "torn read under contention: slot holds more than one generation"
+                );
+            }
         }
         stop.store(true, Ordering::Relaxed);
         writer.join().expect("writer panicked");
 
-        // A lock here would show millisecond stalls under this contention.
-        assert!(
-            worst < std::time::Duration::from_millis(5),
-            "worst fetch took {worst:?} — the reader is being delayed by the writer"
-        );
+        // Now genuinely scheduler-independent: a publish is known to have
+        // completed before the loop began, so the first fetch must return it.
+        // How many *more* the reader sees depends on scheduling, so that is
+        // not asserted.
+        assert!(observed > 0, "a completed publish was not visible to fetch()");
     }
 }

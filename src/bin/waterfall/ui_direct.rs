@@ -1,6 +1,5 @@
 //! Direct UI method tests — render panel bodies without full-window layout.
 
-use hfsdr::time::Instant;
 
 use eframe::egui::Vec2;
 use egui_kittest::Harness;

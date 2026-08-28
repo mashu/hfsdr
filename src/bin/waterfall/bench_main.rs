@@ -19,9 +19,6 @@ mod log;
 mod source;
 
 use std::f32::consts::TAU;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
 use hfsdr::time::{Duration, Instant};
 
 use hfsdr::{

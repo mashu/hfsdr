@@ -7,7 +7,7 @@ use hfsdr::{Complex32, spectrum_hop, spectrum_plan, SpectrumAnalyzer, MIN_KAISER
 use super::Engine;
 use crate::engine::policy::{
     adaptive_spectrum_rows as policy_adaptive_rows, demod_input_len, max_drain_for, slow_link,
-    spectrum_aligned_len, wideband_tail_len,
+    spectrum_aligned_len,
 };
 use crate::engine::types::EngineParams;
 
@@ -73,20 +73,6 @@ impl Engine {
 
     pub(super) fn max_drain(&self) -> usize {
         max_drain_for(self.link_meta().0)
-    }
-
-    pub(super) fn wideband_tail<'a>(
-        &self,
-        samples: &'a [Complex32],
-        rate: f32,
-        max: usize,
-    ) -> &'a [Complex32] {
-        let len = wideband_tail_len(samples.len(), rate, max);
-        if len == samples.len() {
-            samples
-        } else {
-            &samples[samples.len() - len..]
-        }
     }
 
     pub(super) fn demod_input<'a>(

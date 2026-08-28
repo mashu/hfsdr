@@ -11,6 +11,11 @@ pub use hfsdr::WaterfallPalette;
 /// Exact evaluation — fine for one-off UI elements such as the legend. The
 /// per-pixel waterfall path uses [`palette_colour`] with a cached palette
 /// instead, because this costs a `powf` per call.
+///
+/// Only tests call it now — the legend and the waterfall both went to the
+/// cached palette — so it is gated rather than kept warm for a caller that
+/// does not exist. Ungate it if a one-off UI element needs exact evaluation.
+#[cfg(test)]
 pub fn db_to_colour(db: f32, ref_db: f32, range_db: f32) -> Color32 {
     let [r, g, b, _] = hfsdr::db_to_rgba(db, ref_db, range_db);
     Color32::from_rgb(r, g, b)

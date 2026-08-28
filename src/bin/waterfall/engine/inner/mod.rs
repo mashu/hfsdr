@@ -16,7 +16,6 @@ mod tests;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
-use std::sync::Mutex;
 use hfsdr::time::Instant;
 
 use hfsdr::{
@@ -28,7 +27,6 @@ use crate::audio::AudioOutput;
 use crate::source::{Connection, ConnectRequest};
 
 use super::audio::{AudioScopeRing, AudioWaveformRing};
-use super::link::EngineLink;
 use super::types::{ConnState, EngineCommand, EngineParams, EngineSnapshot};
 
 /// Owned entirely by the engine thread.
