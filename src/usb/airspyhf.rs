@@ -518,6 +518,63 @@ mod tests {
         assert_eq!(set_attenuation(200).value, 8, "clamped, not wrapped or sent");
     }
 
+    /// Same shape as `set_receiver_mode`: the flag rides in `value` and
+    /// `index` stays zero. Swapping them is silent — the device ignores the
+    /// command and the AGC simply never comes on.
+    #[test]
+    fn gain_flags_ride_in_value() {
+        for (req, name) in [(set_agc(true), "agc"), (set_lna(true), "lna")] {
+            assert_eq!(req.direction, Direction::Out, "{name}");
+            assert_eq!(req.value, 1, "{name} flag belongs in value");
+            assert_eq!(req.index, 0, "{name} must not use index");
+            assert!(req.data.is_empty(), "{name} carries no payload");
+        }
+        assert_eq!(set_agc(false).value, 0);
+        assert_eq!(set_lna(false).value, 0);
+        assert_eq!(set_agc(true).request, Request::SetAgc as u8);
+        assert_eq!(set_lna(true).request, Request::SetLna as u8);
+    }
+
+    /// The request's length and the parser's expectation are one fact stored
+    /// twice. If they drift apart the read comes back short and every attempt
+    /// to identify the device fails, with nothing pointing at the cause.
+    #[test]
+    fn serial_read_asks_for_exactly_what_the_parser_needs() {
+        let req = read_serial_and_board_id();
+        assert_eq!(req.direction, Direction::In);
+        assert_eq!(req.request, Request::GetSerialNoBoardId as u8);
+
+        let reply = vec![0u8; usize::from(req.length)];
+        assert!(
+            parse_serial_and_board_id(&reply).is_ok(),
+            "a full-length reply must parse"
+        );
+        assert!(
+            parse_serial_and_board_id(&reply[..reply.len() - 1]).is_err(),
+            "and it must be asking for the minimum, not more"
+        );
+    }
+
+    /// These strings are what a user sees when a radio will not start, so they
+    /// have to name the thing that is wrong.
+    #[test]
+    fn errors_describe_what_went_wrong() {
+        let short = DecodeError::Short { need: 16, got: 3 };
+        let text = short.to_string();
+        assert!(text.contains("16") && text.contains('3'), "{text}");
+
+        assert!(DecodeError::ZeroSampleRate.to_string().contains("zero"));
+
+        let transport: OpenError<&str> = OpenError::Transport("pipe stalled");
+        assert!(transport.to_string().contains("pipe stalled"));
+
+        let decode: OpenError<&str> = OpenError::Decode(short);
+        assert!(decode.to_string().contains("16"), "the cause is not swallowed");
+
+        let count: OpenError<&str> = OpenError::ImplausibleRateCount(4_000_000);
+        assert!(count.to_string().contains("4000000"));
+    }
+
     /// The geometry has to agree with itself: a transfer is a whole number of
     /// samples, or every transfer boundary leaves a partial pair.
     #[test]
