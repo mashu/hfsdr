@@ -21,6 +21,13 @@ jobs:
           - os: ubuntu-latest
             features: airspy,rtlsdr
             install: |
+              # GitHub's runner images preinstall Microsoft's apt repositories, which
+              # intermittently answer 403 and fail the whole update. Nothing this
+              # project installs comes from them, so drop them first.
+              sudo rm -f /etc/apt/sources.list.d/*microsoft*.list \
+                         /etc/apt/sources.list.d/*microsoft*.sources \
+                         /etc/apt/sources.list.d/*azure*.list \
+                         /etc/apt/sources.list.d/*azure*.sources
               sudo apt-get update
               sudo apt-get install -y \
                 libairspyhf-dev \
@@ -98,6 +105,13 @@ jobs:
 
       - name: Install native dependencies
         run: |
+          # GitHub's runner images preinstall Microsoft's apt repositories, which
+          # intermittently answer 403 and fail the whole update. Nothing this
+          # project installs comes from them, so drop them first.
+          sudo rm -f /etc/apt/sources.list.d/*microsoft*.list \
+                     /etc/apt/sources.list.d/*microsoft*.sources \
+                     /etc/apt/sources.list.d/*azure*.list \
+                     /etc/apt/sources.list.d/*azure*.sources
           sudo apt-get update
           sudo apt-get install -y \
             libairspyhf-dev \
@@ -136,6 +150,13 @@ jobs:
             label: linux-x86_64
             features: gui
             install: |
+              # GitHub's runner images preinstall Microsoft's apt repositories, which
+              # intermittently answer 403 and fail the whole update. Nothing this
+              # project installs comes from them, so drop them first.
+              sudo rm -f /etc/apt/sources.list.d/*microsoft*.list \
+                         /etc/apt/sources.list.d/*microsoft*.sources \
+                         /etc/apt/sources.list.d/*azure*.list \
+                         /etc/apt/sources.list.d/*azure*.sources
               sudo apt-get update
               sudo apt-get install -y \
                 libairspyhf-dev \
@@ -195,6 +216,13 @@ jobs:
 
       - name: Install GUI dependencies only
         run: |
+          # GitHub's runner images preinstall Microsoft's apt repositories, which
+          # intermittently answer 403 and fail the whole update. Nothing this
+          # project installs comes from them, so drop them first.
+          sudo rm -f /etc/apt/sources.list.d/*microsoft*.list \
+                     /etc/apt/sources.list.d/*microsoft*.sources \
+                     /etc/apt/sources.list.d/*azure*.list \
+                     /etc/apt/sources.list.d/*azure*.sources
           sudo apt-get update
           sudo apt-get install -y \
             libasound2-dev \
@@ -229,6 +257,13 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # GitHub's runner images preinstall Microsoft's apt repositories, which
+          # intermittently answer 403 and fail the whole update. Nothing this
+          # project installs comes from them, so drop them first.
+          sudo rm -f /etc/apt/sources.list.d/*microsoft*.list \
+                     /etc/apt/sources.list.d/*microsoft*.sources \
+                     /etc/apt/sources.list.d/*azure*.list \
+                     /etc/apt/sources.list.d/*azure*.sources
           sudo apt-get update
           sudo apt-get install -y \
             libairspyhf-dev \
