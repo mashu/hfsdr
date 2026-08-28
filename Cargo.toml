@@ -34,6 +34,12 @@ ureq = { version = "2.12", optional = true, default-features = false, features =
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Pure-Rust USB, statically linked: no dlopen, no libusb, no vendor library.
+# Native only — the browser transport for the same protocol is WebUSB via
+# web-sys, and nusb has no wasm32 backend.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nusb = { version = "0.2", optional = true }
+
 # wasm32 needs an explicit getrandom backend (transitively via tungstenite).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
@@ -64,6 +70,10 @@ rtlsdr = []
 qmx = ["dep:serialport", "dep:cpal"]
 # Runtime-loaded libSoapySDR on Windows, Linux, and macOS.
 soapy = []
+# Airspy HF+ over a statically linked, pure-Rust USB stack (nusb): no dlopen,
+# no libusb, no libairspyhf. The protocol itself is always compiled — see
+# `usb::airspyhf` — and this only adds the native transport that executes it.
+airspyhf-usb = ["dep:nusb"]
 # UI dependencies shared by the desktop and browser builds. The hfsdr binary
 # needs only these; everything platform-specific hangs off gui-core.
 gui-base = ["dep:eframe", "dep:egui_extras", "dep:serde", "dep:serde_json"]
@@ -95,6 +105,12 @@ required-features = ["airspy"]
 name = "engine-bench"
 path = "src/bin/waterfall/bench_main.rs"
 required-features = ["gui-core"]
+
+# Only built when the native USB transport is enabled; without it there is no
+# nusb and nothing for the example to open.
+[[example]]
+name = "usb_probe"
+required-features = ["airspyhf-usb"]
 
 [profile.release]
 opt-level = 3

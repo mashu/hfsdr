@@ -23,6 +23,10 @@ pub mod log;
 /// Clock types that also work on wasm32 (see module docs).
 pub mod time;
 pub mod sync;
+// Transport-agnostic USB protocol: pure request/response values, no device and
+// no USB API, so it compiles everywhere including wasm32 where the transport is
+// WebUSB rather than nusb.
+pub mod usb;
 // Native driver loading is dlopen-based and cannot exist on wasm32, where the
 // only reachable source is a network one (KiwiSDR over WebSocket).
 #[cfg(not(target_arch = "wasm32"))]
