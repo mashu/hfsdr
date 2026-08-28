@@ -12,6 +12,15 @@ ignore:
   - "src/kiwi/web.rs"                          # WebSocket transport (wasm32 only)
   - "src/bin/waterfall/audio/web.rs"           # WebAudio output (wasm32 only)
   - "src/bin/waterfall/kiwi_directory/web.rs"  # fetch() directory (wasm32 only)
+  # Native USB transport. Not wasm-gated but feature-gated, and the coverage
+  # job builds `--features gui`, so llvm-cov never compiles it either. It is
+  # excluded on the same terms as the files above and for the same reason it
+  # is safe to: it holds no decisions. Everything that could be wrong about
+  # driving the radio — command numbers, byte order, the open sequence — lives
+  # in `src/usb/airspyhf.rs`, which is compiled and tested normally and is not
+  # excluded. What remains here is "hand these bytes to nusb", which needs a
+  # radio rather than a test.
+  - "src/usb/nusb_transport.rs"
 
 coverage:
   status:
