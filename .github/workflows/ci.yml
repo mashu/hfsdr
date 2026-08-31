@@ -311,12 +311,8 @@ jobs:
       # must keep building for wasm even if the app above changes.
       - name: Check library on wasm32
         run: cargo check --lib --no-default-features --target wasm32-unknown-unknown
-        env:
-          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
 
       - name: Check browser app on wasm32
         run: |
           cargo check --bin hfsdr --no-default-features \
             --features gui-web --target wasm32-unknown-unknown
-        env:
-          RUSTFLAGS: --cfg getrandom_backend="wasm_js"

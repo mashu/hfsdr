@@ -232,33 +232,106 @@ pub fn decode_samples(bytes: &[u8], out: &mut Vec<f32>) -> usize {
     samples
 }
 
-/// Bring an opened device up to a known state and report what it can do.
+/// Bringing an opened device up, one transfer at a time.
 ///
-/// Sequenced deliberately. The stream is stopped first because a device left
-/// streaming by a previous process ignores configuration and keeps sending;
-/// the rate list is read before anything selects a rate, because the selection
-/// is an index into that list and there is no way to validate it otherwise.
+/// A stepper rather than a loop because the two transports cannot share a
+/// loop: `nusb` blocks and WebUSB awaits a promise, and an async trait would
+/// force one of them to pretend. Both drive *this*, so the ordering — the part
+/// with the bug potential — exists once and is tested once.
 ///
-/// Generic over the transport so this exact sequence — the part with the
-/// ordering bug potential — is tested against a recording fake, on a machine
-/// with no radio attached.
-pub fn open_sequence<T: super::UsbControl>(usb: &T) -> Result<Vec<u32>, OpenError<T::Error>> {
-    usb.control(&set_receiver_mode(false)).map_err(OpenError::Transport)?;
+/// The order is deliberate. The stream is stopped first, because a device left
+/// streaming by a previous process ignores configuration and keeps sending.
+/// The rate list is read before anything selects a rate, because selection is
+/// an index into that list and there is no other way to validate it.
+#[derive(Debug, Default)]
+pub struct OpenSequence {
+    step: OpenStep,
+}
 
-    let count = usb
-        .control(&read_sample_rate_count())
-        .map_err(OpenError::Transport)
-        .and_then(|b| parse_sample_rate_count(&b).map_err(OpenError::Decode))?;
-    let count = u16::try_from(count).map_err(|_| OpenError::ImplausibleRateCount(count))?;
-    if count == 0 {
-        return Err(OpenError::ImplausibleRateCount(0));
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OpenStep {
+    #[default]
+    StopStream,
+    ReadRateCount,
+    ReadRates(u16),
+    Done,
+}
+
+impl OpenSequence {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    let rates = usb
-        .control(&read_sample_rates(count))
-        .map_err(OpenError::Transport)
-        .and_then(|b| parse_sample_rates(&b, count).map_err(OpenError::Decode))?;
-    Ok(rates)
+    /// The next transfer to perform, or `None` when the sequence is finished.
+    pub fn next_request(&self) -> Option<ControlRequest> {
+        match self.step {
+            OpenStep::StopStream => Some(set_receiver_mode(false)),
+            OpenStep::ReadRateCount => Some(read_sample_rate_count()),
+            OpenStep::ReadRates(count) => Some(read_sample_rates(count)),
+            OpenStep::Done => None,
+        }
+    }
+
+    /// Feed back what [`OpenSequence::next_request`] returned.
+    ///
+    /// Returns the sample rates once the last reply has been accepted.
+    pub fn accept(&mut self, reply: &[u8]) -> Result<Option<Vec<u32>>, OpenFault> {
+        match self.step {
+            OpenStep::StopStream => {
+                self.step = OpenStep::ReadRateCount;
+                Ok(None)
+            }
+            OpenStep::ReadRateCount => {
+                let count = parse_sample_rate_count(reply).map_err(OpenFault::Decode)?;
+                // A garbage count would otherwise become a read of gigabytes
+                // over a control endpoint, and zero leaves nothing to select.
+                let count =
+                    u16::try_from(count).map_err(|_| OpenFault::ImplausibleRateCount(count))?;
+                if count == 0 {
+                    return Err(OpenFault::ImplausibleRateCount(0));
+                }
+                self.step = OpenStep::ReadRates(count);
+                Ok(None)
+            }
+            OpenStep::ReadRates(count) => {
+                let rates = parse_sample_rates(reply, count).map_err(OpenFault::Decode)?;
+                self.step = OpenStep::Done;
+                Ok(Some(rates))
+            }
+            OpenStep::Done => Ok(None),
+        }
+    }
+}
+
+/// A failure that does not involve the transport.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenFault {
+    Decode(DecodeError),
+    /// The firmware claimed a rate count that cannot be right.
+    ImplausibleRateCount(u32),
+}
+
+impl std::fmt::Display for OpenFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Decode(e) => write!(f, "{e}"),
+            Self::ImplausibleRateCount(n) => {
+                write!(f, "firmware reported {n} sample rates, which cannot be right")
+            }
+        }
+    }
+}
+
+/// Drive [`OpenSequence`] over a blocking transport.
+pub fn open_sequence<T: super::UsbControl>(usb: &T) -> Result<Vec<u32>, OpenError<T::Error>> {
+    let mut seq = OpenSequence::new();
+    while let Some(request) = seq.next_request() {
+        let reply = usb.control(&request).map_err(OpenError::Transport)?;
+        if let Some(rates) = seq.accept(&reply).map_err(OpenError::from)? {
+            return Ok(rates);
+        }
+    }
+    Err(OpenError::Decode(DecodeError::Short { need: 4, got: 0 }))
 }
 
 /// Why bringing a device up failed.
@@ -272,6 +345,15 @@ pub enum OpenError<E> {
     /// many rates would be a multi-gigabyte control transfer, so this is
     /// rejected rather than attempted.
     ImplausibleRateCount(u32),
+}
+
+impl<E> From<OpenFault> for OpenError<E> {
+    fn from(fault: OpenFault) -> Self {
+        match fault {
+            OpenFault::Decode(e) => Self::Decode(e),
+            OpenFault::ImplausibleRateCount(n) => Self::ImplausibleRateCount(n),
+        }
+    }
 }
 
 impl<E: std::fmt::Display> std::fmt::Display for OpenError<E> {
@@ -484,6 +566,41 @@ mod tests {
         assert_eq!(seen[1].index, 0, "the count");
         assert_eq!(seen[2].request, Request::GetSamplerates as u8);
         assert_eq!(seen[2].index, 4, "then that many rates");
+    }
+
+    /// The browser drives `OpenSequence` directly because WebUSB is async and
+    /// cannot implement the blocking trait. That is only safe if both paths
+    /// issue the same transfers in the same order, so this drives the stepper
+    /// by hand — as `web_transport::identify` does — and compares it against
+    /// what the blocking driver sends.
+    #[test]
+    fn both_transports_issue_the_same_sequence() {
+        let replies = vec![
+            Ok(Vec::new()),
+            Ok(4u32.to_le_bytes().to_vec()),
+            Ok(rates_reply(&[912_000, 768_000, 384_000, 256_000])),
+        ];
+
+        // The blocking driver, recording what it sent.
+        let blocking = FakeUsb::new(replies.clone());
+        let from_blocking = open_sequence(&blocking).expect("blocking open");
+
+        // The same sequence stepped manually, the way an async caller must.
+        let mut stepped = Vec::new();
+        let mut seq = OpenSequence::new();
+        let mut feed = replies.into_iter();
+        let mut from_stepper = None;
+        while let Some(request) = seq.next_request() {
+            stepped.push(request.clone());
+            let reply = feed.next().expect("scripted reply").expect("ok");
+            if let Some(rates) = seq.accept(&reply).expect("accept") {
+                from_stepper = Some(rates);
+                break;
+            }
+        }
+
+        assert_eq!(stepped, blocking.requests(), "the transfers must match exactly");
+        assert_eq!(from_stepper.expect("rates"), from_blocking);
     }
 
     /// A failed transfer must stop the sequence, not carry on and decode

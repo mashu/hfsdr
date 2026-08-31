@@ -1,0 +1,16 @@
+# Flags the wasm32 build cannot work without, in one place.
+#
+# Both were previously repeated in scripts/build-web.sh and in two CI steps,
+# which is how a target-specific flag gets forgotten: nothing fails loudly when
+# it is missing. `getrandom` fails to link; WebUSB is worse, because its
+# bindings simply compile out and the browser quietly loses the ability to
+# reach a local radio.
+#
+# Note these apply only to wasm32, and that an explicit RUSTFLAGS in the
+# environment replaces this list rather than adding to it.
+[target.wasm32-unknown-unknown]
+rustflags = [
+    '--cfg', 'getrandom_backend="wasm_js"',
+    # WebUSB is still an unstable API in web-sys.
+    '--cfg', 'web_sys_unstable_apis',
+]

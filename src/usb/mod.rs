@@ -24,6 +24,12 @@ pub mod airspyhf;
 #[cfg(all(feature = "airspyhf-usb", not(target_arch = "wasm32")))]
 pub mod nusb_transport;
 
+// The browser transport. WebUSB is async and Chromium-only, so it neither
+// implements [`UsbControl`] nor exists off wasm32 — but it executes the same
+// [`ControlRequest`] values and drives the same [`airspyhf::OpenSequence`].
+#[cfg(target_arch = "wasm32")]
+pub mod web_transport;
+
 /// Which way the data of a control transfer flows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {

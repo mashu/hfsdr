@@ -8,7 +8,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-export RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"wasm_js\""
+# The wasm32 rustflags live in .cargo/config.toml so this script, CI and a
+# plain `cargo build` all get them. Setting RUSTFLAGS here would replace that
+# list rather than extend it.
 
 cargo build --release \
   --bin hfsdr \

@@ -55,6 +55,11 @@ web-sys = { version = "0.3", features = [
     "Request", "RequestInit", "RequestMode", "Response", "Headers", "Storage",
     "AudioContext", "BaseAudioContext", "AudioContextState", "AudioDestinationNode",
     "AudioNode", "AudioWorklet", "AudioWorkletNode", "MessagePort",
+    # WebUSB: how a tab reaches a local radio without a driver. Chromium only.
+    "Navigator", "Usb", "UsbDevice", "UsbDeviceFilter", "UsbDeviceRequestOptions",
+    "UsbControlTransferParameters", "UsbRecipient", "UsbRequestType",
+    "UsbInTransferResult", "UsbOutTransferResult", "UsbTransferStatus",
+    "UsbConfiguration",
 ] }
 # std::time::Instant panics on wasm32-unknown-unknown ("time not implemented");
 # web-time is a drop-in backed by performance.now().
