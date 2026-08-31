@@ -15,15 +15,24 @@ phone/AM/FM modes or unrelated clutter.
 
 ### Platform support
 
-| | **Linux** | **macOS** | **Windows** |
-|---|:---:|:---:|:---:|
-| **KiwiSDR** | ✓ | ✓ | ✓ |
-| **Airspy HF+** | ✓ | ✓ | ✓ |
-| **RTL-SDR** | ✓ | ✓ | ✓ |
-| **QMX / QMX+** | ✓ | ✓ | ✓ |
+| | **Linux** | **macOS** | **Windows** | **Browser** |
+|---|:---:|:---:|:---:|:---:|
+| **KiwiSDR** | ✓ | ✓ | ✓ | ✓ |
+| **Airspy HF+** | ✓ | ✓ | ✓ | — |
+| **RTL-SDR** | ✓ | ✓ | ✓ | — |
+| **QMX / QMX+** | ✓ | ✓ | ✓ | — |
 
-Try the pipeline in your browser: **[mashu.github.io/hfsdr](https://mashu.github.io/hfsdr/)** — the real
-spectrum analyzer and waterfall shader running as WebAssembly on synthetic IQ.
+KiwiSDR is a network receiver, so a tab can reach it over a WebSocket. The
+others are local USB or serial devices: a browser cannot load their drivers,
+and nothing in the browser build offers them.
+
+Try it in your browser: **[mashu.github.io/hfsdr](https://mashu.github.io/hfsdr/)** — the real
+receiver UI as WebAssembly, connected to a live public KiwiSDR, with audio. Not a
+demo signal: the page lists public receivers and streams from the one you pick.
+
+The page is served over https, which browsers only let open `wss://` sockets, so
+it offers the KiwiSDRs that accept TLS. Local USB devices need drivers a tab
+cannot load — use the desktop build for those.
 
 Build and install: see [`docs/src/building.md`](docs/src/building.md).
 
