@@ -1,10 +1,14 @@
 //! UI-side handle to the engine thread.
 
+// Only the headless-test poll injection below uses these; the shipping handle
+// holds no lock at all, which is the point of the wait-free boundary.
+#[cfg(test)]
 use std::collections::VecDeque;
+#[cfg(test)]
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Sender};
+#[cfg(test)]
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 use std::thread;
 
 use super::inner::Engine;

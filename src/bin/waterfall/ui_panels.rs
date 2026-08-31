@@ -1,6 +1,5 @@
 //! Headless panel / drawer smoke tests — exercise egui chrome not covered by ui_smoke.
 
-use hfsdr::time::Instant;
 
 use eframe::egui::Vec2;
 use egui_kittest::{Harness, kittest::Queryable as _};
@@ -42,20 +41,6 @@ fn right_panel_harness() -> Harness<'static, WaterfallApp> {
     let mut harness = streaming_harness();
     harness.state_mut().chrome.show_right = true;
     harness
-}
-
-
-fn poll_with_spots() -> EnginePoll {
-    let latest = vec![-90.0; FFT_SIZE];
-    EnginePoll {
-        state: ConnState::Streaming,
-        stats: streaming_stats(),
-        rows: vec![latest.clone()],
-        latest,
-        last_error: None,
-        audio_scope: vec![0.0; 128],
-        audio_waveform: Vec::new(),
-    }
 }
 
 

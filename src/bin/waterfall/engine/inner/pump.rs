@@ -13,7 +13,6 @@ use crate::engine::policy::{
     is_wideband_rate, ring_catchup_target_slots, SKIMMER_PEAK_HOLD_DECAY_DB,
 };
 use crate::engine::types::{ConnState, EngineStats};
-use crate::engine::{WATERFALL_ROWS};
 use crate::source::Connection;
 
 

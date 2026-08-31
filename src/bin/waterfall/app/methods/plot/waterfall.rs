@@ -157,18 +157,4 @@ impl WaterfallApp {
         }
     }
 
-    /// Allocating form of [`Self::waterfall_row_db_into`], for tests and callers
-    /// that are not on the per-frame path.
-    #[cfg(test)]
-    pub(crate) fn waterfall_row_db_for_viewport(
-        &self,
-        row_index: usize,
-        view: &hfsdr::SpectrumViewMapping,
-        width: usize,
-        avg: usize,
-    ) -> Vec<f32> {
-        let mut scratch = RowComposeScratch::default();
-        self.waterfall_row_db_into(row_index, view, width, avg, &mut scratch);
-        scratch.acc
-    }
 }

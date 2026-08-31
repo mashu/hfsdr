@@ -1,14 +1,12 @@
 //! Stress and perturbation tests — rapid state changes, corrupt engine polls, layout extremes.
 
-use hfsdr::time::Instant;
 
 use eframe::egui::{Key, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
 
-use crate::app::{BottomPanelView, WaterfallApp};
+use crate::app::WaterfallApp;
 use crate::audio;
 use crate::engine::{ConnState, EnginePoll, FFT_SIZE};
-use crate::pipeline_flow::PipelineStage;
 use crate::source::SourceKind;
 use crate::theme;
 use crate::ui_smoke::{inject_and_step, streaming_stats, synthetic_streaming_poll};
