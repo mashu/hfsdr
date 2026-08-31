@@ -30,6 +30,12 @@ pub mod nusb_transport;
 #[cfg(target_arch = "wasm32")]
 pub mod web_transport;
 
+// The granted radio as an IqSource. Separate from the transport because
+// holding the device between the user's click and the engine's connect is a
+// concern of its own.
+#[cfg(all(target_arch = "wasm32", feature = "gui-web"))]
+pub mod web_airspy;
+
 /// Which way the data of a control transfer flows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
