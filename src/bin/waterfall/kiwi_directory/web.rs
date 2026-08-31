@@ -14,7 +14,13 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
 /// Cached list, so reopening the drawer does not refetch.
-const CACHE_KEY: &str = "hfsdr.kiwi_directory.v2";
+/// Bumped when the *selection* changes, not only the shape of the data.
+///
+/// A cache written before `select_nearby` existed holds twelve receivers
+/// chosen by distance alone and already truncated, so re-selecting it cannot
+/// bring back the reachable receivers that were discarded. Only a refetch can,
+/// and only a new key forces one.
+const CACHE_KEY: &str = "hfsdr.kiwi_directory.v3";
 
 type Directory = (Option<GeoLocation>, Vec<KiwiReceiver>);
 
@@ -22,17 +28,27 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
 }
 
+fn now_secs() -> u64 {
+    (js_sys::Date::now() / 1000.0) as u64
+}
+
 fn read_cache() -> Option<Directory> {
     let raw = storage()?.get_item(CACHE_KEY).ok().flatten()?;
-    serde_json::from_str::<super::CachedDirectory>(&raw)
-        .ok()
-        .map(|c| (c.geo, c.receivers))
+    let cached = serde_json::from_str::<super::CachedDirectory>(&raw).ok()?;
+    // Previously this cache had no timestamp and no expiry, so a list survived
+    // in localStorage indefinitely — across deploys, across fixes to the
+    // selection, until the user happened to press Refresh. Occupancy alone
+    // makes a day-old list wrong.
+    if now_secs().saturating_sub(cached.fetched_at_secs) > super::CACHE_MAX_AGE.as_secs() {
+        return None;
+    }
+    Some((cached.geo, cached.receivers))
 }
 
 fn write_cache(dir: &Directory) {
     let Some(store) = storage() else { return };
     let cached = super::CachedDirectory {
-        fetched_at_secs: 0,
+        fetched_at_secs: now_secs(),
         geo: dir.0.clone(),
         receivers: dir.1.clone(),
     };
@@ -143,8 +159,13 @@ async fn fetch_directory(force_refresh: bool) -> Result<Directory, String> {
 /// Fetch the directory and deliver it on `tx`, cache first unless forced.
 pub fn start(tx: std::sync::mpsc::Sender<Result<Directory, String>>, force_refresh: bool) {
     if !force_refresh {
-        if let Some(cached) = read_cache() {
-            let _ = tx.send(Ok(cached));
+        if let Some((geo, mut receivers)) = read_cache() {
+            // Re-select rather than replaying the cache verbatim. Which
+            // receivers are reachable depends on the scheme of the page doing
+            // the asking, and the same browser profile can load this app over
+            // http locally and https from Pages.
+            super::select_nearby(&mut receivers, geo.as_ref(), super::web_page_is_https());
+            let _ = tx.send(Ok((geo, receivers)));
             return;
         }
     }
