@@ -29,8 +29,11 @@ const LIST_URL: &str = "http://rx.linkfanel.net/kiwisdr_com.js";
 /// Best-effort: when this fails the list is still shown, just unsorted, so it
 /// must never be the reason the directory appears empty.
 const GEO_URL: &str = "https://ipapi.co/json/";
-const CACHE_FILE: &str = "kiwi_directory_v2.json";
-const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 60);
+// Bumped with the selection, not only the data shape — a cache written before
+// `select_nearby` is already truncated by the old rule and cannot be repaired
+// by re-selecting it.
+const CACHE_FILE: &str = "kiwi_directory_v3.json";
+pub(crate) const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 60);
 const NEARBY_LIMIT: usize = 12;
 /// Kiwi's own default, used when a plain-http URL omits the port.
 const KIWI_DEFAULT_PORT: u16 = 8073;
@@ -245,7 +248,13 @@ pub fn load_nearby_receivers() -> Result<(Option<GeoLocation>, Vec<KiwiReceiver>
 
 /// Instant list from on-disk cache (no network). Used to populate the UI before refresh.
 pub fn load_cached_receivers() -> Option<(Option<GeoLocation>, Vec<KiwiReceiver>)> {
-    read_cache().map(|c| (c.geo, c.receivers))
+    let cached = read_cache()?;
+    let mut receivers = cached.receivers;
+    // Same reasoning as the browser path: selection is applied when the list is
+    // used, not only when it is fetched, so a cache never replays a choice made
+    // under different conditions. Off-browser nothing constrains the scheme.
+    select_nearby(&mut receivers, cached.geo.as_ref(), false);
+    Some((cached.geo, receivers))
 }
 
 pub fn refresh_nearby_receivers() -> Result<(Option<GeoLocation>, Vec<KiwiReceiver>), String> {
@@ -790,6 +799,34 @@ mod tests {
             distance_km,
             tls,
         }
+    }
+
+    /// The deployed page kept showing a pre-fix list long after the fix
+    /// shipped, because the cache was replayed verbatim: selection ran only on
+    /// a fetch, and the browser cache never expired, so the old twelve
+    /// survived every deploy until someone pressed Refresh.
+    ///
+    /// Selection therefore has to be applied when the list is *used*. This
+    /// pins that a cached list still gets deduplicated and reordered.
+    #[test]
+    fn a_cached_list_is_re_selected_not_replayed() {
+        // Shaped like the cache that was actually stuck: several ports of one
+        // plain-http host, and a TLS receiver behind them.
+        let mut cached = vec![
+            receiver("g8ure.example", false, 0, 5.0),
+            receiver("g8ure.example", false, 0, 5.0),
+            receiver("g8ure.example", false, 0, 5.0),
+            receiver("secure.example", true, 0, 900.0),
+        ];
+        cached[1].port = 8074;
+        cached[2].port = 8075;
+
+        select_nearby(&mut cached, None, true);
+        assert_eq!(cached.len(), 2, "the duplicate ports collapse");
+        assert_eq!(
+            cached[0].host, "secure.example",
+            "and the reachable receiver leads, as on a fresh fetch"
+        );
     }
 
     /// The bug behind a deployed page that offered twelve receivers and could
